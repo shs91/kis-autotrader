@@ -12,6 +12,8 @@
 - **스케줄링** — 장 시작 전 토큰 갱신 → 장중 주기적 매매 → 장 마감 후 결산 자동 실행
 - **Google Calendar 연동** — 일일 매매 결과를 캘린더 이벤트로 자동 등록
 - **DB 영속성** — PostgreSQL + SQLAlchemy ORM + Alembic 마이그레이션
+- **종목 스크리닝** — 거래량 상위 종목 자동 발굴, 매매 후보 동적 추가
+- **자동 개선 파이프라인** — Cowork(분석/제안) + Claude Code(구현) 스케줄 자동화
 
 ## 기술 스택
 
@@ -40,6 +42,7 @@ kis-autotrader/
 │   └── versions/                  # 마이그레이션 스크립트
 ├── src/
 │   ├── config.py                  # 환경변수/설정 통합 관리
+│   ├── engine.py                  # 매매 엔진 (시세→전략→리스크→주문→DB)
 │   ├── api/
 │   │   ├── rate_limiter.py        # Token Bucket Rate Limiter
 │   │   ├── auth.py                # OAuth 토큰 발급/자동갱신
@@ -65,6 +68,14 @@ kis-autotrader/
 │   └── utils/
 │       ├── logger.py              # 로깅 설정
 │       └── exceptions.py          # 커스텀 예외 클래스
+├── scripts/
+│   ├── run_auto_implement.sh      # Claude Code 자동 구현 cron 스크립트
+│   └── auto_implement_prompt.txt  # 자동 구현 프롬프트
+├── docs/
+│   ├── BRIDGE_SPEC.md             # Cowork ↔ Claude Code 브릿지 규격
+│   ├── CHANGELOG.md               # 자동 구현 변경 이력
+│   ├── proposals/                 # Cowork가 작성하는 개선 제안서
+│   └── reports/                   # 일일/주간 매매 리포트
 └── tests/
     ├── test_api/                   # API 모듈 테스트 (5개)
     ├── test_strategy/              # 전략 모듈 테스트 (4개)
@@ -453,6 +464,8 @@ DISCONNECTED → CONNECTING → CONNECTED → SUBSCRIBING → ACTIVE
 
 ## 스케줄러
 
+### 매매 스케줄러 (APScheduler — 프로세스 내장)
+
 | 시간 | 작업 | 설명 |
 |------|------|------|
 | 08:30 | `pre_market_job` | OAuth 토큰 갱신, 관심종목 로딩 |
@@ -460,6 +473,27 @@ DISCONNECTED → CONNECTING → CONNECTED → SUBSCRIBING → ACTIVE
 | 15:40 | `post_market_job` | 일일 결산, DailyPerformance 저장, Calendar 이벤트 등록 |
 
 장중 시세 조회 간격은 종목 수에 따라 API 호출 제한(초당 3건)을 준수하도록 자동 계산됩니다.
+
+### 자동화 파이프라인 (Cowork + Claude Code — 외부 스케줄)
+
+매매 데이터 분석 → 개선 제안 → 자동 구현까지 사람 개입 없이 동작하는 파이프라인입니다.
+`docs/BRIDGE_SPEC.md`에 정의된 안전 게이트가 사람의 승인을 대체합니다.
+
+| 시간 | 도구 | 역할 |
+|------|------|------|
+| 평일 16:00 | Cowork (스케줄) | 로그 분석 → 일일 리포트(`docs/reports/`) + 개선 제안서(`docs/proposals/`) |
+| 금 16:30 | Cowork (스케줄) | 주간 전략 리뷰 → 주간 리포트 + 중기 제안서 |
+| 평일 17:00 | Claude Code (로컬 cron) | `docs/proposals/`에서 ready 제안서 → 안전 게이트 검증 → 코드 수정 → 테스트 → 서비스 재시작 |
+
+```
+장 마감 (15:20)
+  ↓
+post_market (15:40) — 결산, Calendar 등록
+  ↓
+Cowork 분석 (16:00) — 로그 → 리포트 + 제안서(ready)
+  ↓
+Claude Code 구현 (17:00) — ready 제안서 → 코드 수정 → 테스트 → deploy
+```
 
 ## DB 스키마
 
