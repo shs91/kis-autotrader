@@ -1,0 +1,18 @@
+docs/BRIDGE_SPEC.md를 읽고, 그 안의 "Claude Code 자동 구현 흐름"을
+정확히 따라서 실행해.
+
+1. docs/proposals/ 에서 "상태: ready" 인 제안서를 날짜순으로 수집
+2. 각 제안서를 BRIDGE_SPEC의 안전 게이트로 검증
+3. 통과한 제안서를 순서대로 구현:
+   - 상태 → implementing
+   - 변경 스펙대로 코드 수정
+   - pytest tests/ -q && python -m mypy src/ && ruff check src/
+   - 전부 pass → implemented + CHANGELOG 기록
+   - fail → git restore로 원복 + failed + 실패 사유 기록
+4. implemented 건이 1개 이상이면:
+   - launchctl stop com.kis.autotrader && sleep 5
+   - launchctl start com.kis.autotrader
+   - sleep 10 && launchctl list | grep com.kis.autotrader
+5. ready 제안서가 없으면 "대기 — 새 제안서 없음" 출력 후 종료
+
+작업 폴더: ~/IdeaProjects/kis-autotrader
