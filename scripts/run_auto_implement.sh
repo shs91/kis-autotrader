@@ -21,3 +21,9 @@ cd "$PROJECT_DIR"
   >> "$LOG_FILE" 2>&1
 
 echo "=== Auto-implement finished at $(date) ===" >> "$LOG_FILE"
+
+# 패치노트 Google Calendar 등록
+echo "=== Patch note event started at $(date) ===" >> "$LOG_FILE"
+"$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/create_patch_note_event.py" \
+  >> "$LOG_FILE" 2>&1 || true
+echo "=== Patch note event finished at $(date) ===" >> "$LOG_FILE"
