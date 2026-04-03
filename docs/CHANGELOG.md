@@ -5,6 +5,13 @@
 
 ---
 
+## [2026-04-03] T2-4 Telegram 원격 명령
+- 신규 파일: src/notify/bot.py, tests/test_notify/test_bot.py
+- 변경 파일: main.py
+- 명령: /status (시스템 상태), /balance (잔고), /today (당일 현황), /help
+- getUpdates 롱 폴링, chat_id 검증, 명령 핸들러 패턴
+- 테스트: 188 passed (신규 5건)
+
 ## [2026-04-03] T2-3 알림 레벨 분류
 - 변경 파일: src/notify/telegram.py, tests/test_notify/test_telegram.py
 - 긴급(손절, 에러) → 소리/진동 알림, 일반(체결, 결산) → 무음 전송

@@ -5,16 +5,82 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from datetime import date
 
 from src.api.health import HealthServer
 from src.config import settings
 from src.db.session import init_db
 from src.engine import TradingEngine
+from src.notify.bot import TelegramBot
 from src.notify.telegram import TelegramNotifier
 from src.scheduler.jobs import TradingScheduler
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+def _register_bot_commands(
+    bot: TelegramBot,
+    engine: TradingEngine,
+    scheduler: TradingScheduler,
+) -> None:
+    """Telegram 봇 명령을 등록한다."""
+
+    async def cmd_status(_args: str) -> str:
+        """시스템 상태를 반환한다."""
+        limiter = engine._client._limiter
+        running = scheduler.scheduler.running
+        return (
+            f"<b>[상태]</b>\n"
+            f"환경: {settings.kis.env}\n"
+            f"스케줄러: {'가동중' if running else '중지'}\n"
+            f"사이클: #{engine._cycle_count}\n"
+            f"API 호출: {limiter.daily_count:,}/{limiter.daily_limit:,}\n"
+            f"당일 매매: {engine._today_trade_count}건"
+        )
+
+    async def cmd_balance(_args: str) -> str:
+        """잔고를 조회한다."""
+        try:
+            balance = await engine._get_balance()
+            lines = [
+                f"<b>[잔고]</b>",
+                f"예수금: {balance.deposit:,}원",
+                f"평가손익: {balance.total_profit_loss:,}원 ({balance.total_profit_rate:.2f}%)",
+            ]
+            for h in balance.holdings[:10]:
+                lines.append(
+                    f"  {h.stock_name}({h.stock_code}) {h.quantity}주 {h.profit_rate:+.2f}%"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"잔고 조회 실패: {e!s:.100}"
+
+    async def cmd_today(_args: str) -> str:
+        """당일 매매 요약을 반환한다."""
+        return (
+            f"<b>[당일 현황]</b> {date.today()}\n"
+            f"사이클: #{engine._cycle_count}\n"
+            f"매매: {engine._today_trade_count}건\n"
+            f"관심종목: {len(engine._fixed_watchlist)}개\n"
+            f"발굴종목: {len(engine._screened_codes)}개\n"
+            f"한도 초과: {'예' if engine._daily_limit_reached else '아니오'}"
+        )
+
+    async def cmd_help(_args: str) -> str:
+        """사용 가능한 명령을 반환한다."""
+        return (
+            "<b>[명령어]</b>\n"
+            "/status — 시스템 상태\n"
+            "/balance — 잔고 조회\n"
+            "/today — 당일 현황\n"
+            "/help — 명령어 목록"
+        )
+
+    bot.register("status", cmd_status)
+    bot.register("balance", cmd_balance)
+    bot.register("today", cmd_today)
+    bot.register("help", cmd_help)
 
 
 async def main() -> None:
@@ -54,6 +120,11 @@ async def main() -> None:
         )
         await health_server.start()
 
+    # Telegram Bot 시작
+    bot = TelegramBot()
+    _register_bot_commands(bot, engine, scheduler)
+    await bot.start()
+
     await notifier.notify_system(f"자동매매 시스템 가동 ({settings.kis.env})")
 
     # 종료 시그널 핸들러
@@ -72,6 +143,7 @@ async def main() -> None:
         await stop_event.wait()
     finally:
         logger.info("시스템 종료 중...")
+        await bot.stop()
         if health_server:
             await health_server.stop()
         await notifier.notify_system("자동매매 시스템 종료")
