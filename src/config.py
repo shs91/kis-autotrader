@@ -119,6 +119,18 @@ class TradingConfig:
 
 
 @dataclass(frozen=True)
+class HealthConfig:
+    """헬스체크 서버 설정."""
+
+    port: int = field(
+        default_factory=lambda: _env_int("HEALTH_PORT", 8080)
+    )
+    enabled: bool = field(
+        default_factory=lambda: _env("HEALTH_ENABLED", "true").lower() == "true"
+    )
+
+
+@dataclass(frozen=True)
 class TelegramConfig:
     """Telegram 알림 설정."""
 
@@ -138,6 +150,7 @@ class Settings:
     calendar: CalendarConfig = field(default_factory=CalendarConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
+    health: HealthConfig = field(default_factory=HealthConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
 
 

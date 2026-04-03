@@ -5,6 +5,14 @@
 
 ---
 
+## [2026-04-03] T1-2 헬스체크 API 구현
+- 로드맵: docs/plans/feature-roadmap.md (T1-2)
+- 신규 파일: src/api/health.py
+- 변경 파일: src/config.py, main.py
+- 기능: asyncio 기반 경량 HTTP 서버, GET /health 엔드포인트 (DB, 스케줄러, API 호출량 상태)
+- 외부 패키지 추가 없음 (표준 라이브러리만 사용)
+- 테스트: 181 passed (신규 4건)
+
 ## [2026-04-03] T1-1 Telegram 알림 기능 구현
 - 로드맵: docs/plans/feature-roadmap.md (T1-1)
 - 신규 파일: src/notify/__init__.py, src/notify/telegram.py, src/notify/formatter.py

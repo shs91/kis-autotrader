@@ -6,6 +6,7 @@ import asyncio
 import signal
 import sys
 
+from src.api.health import HealthServer
 from src.config import settings
 from src.db.session import init_db
 from src.engine import TradingEngine
@@ -40,6 +41,19 @@ async def main() -> None:
     scheduler.start()
     logger.info("스케줄러 시작 완료")
 
+    # 헬스체크 서버 시작
+    health_server: HealthServer | None = None
+    if settings.health.enabled:
+        health_server = HealthServer(port=settings.health.port)
+        health_server.set_status_provider(
+            lambda: {
+                "scheduler_running": scheduler.scheduler.running,
+                "cycle_count": engine._cycle_count,
+                "daily_api_count": engine._client._limiter.daily_count,
+            }
+        )
+        await health_server.start()
+
     await notifier.notify_system(f"자동매매 시스템 가동 ({settings.kis.env})")
 
     # 종료 시그널 핸들러
@@ -58,6 +72,8 @@ async def main() -> None:
         await stop_event.wait()
     finally:
         logger.info("시스템 종료 중...")
+        if health_server:
+            await health_server.stop()
         await notifier.notify_system("자동매매 시스템 종료")
         scheduler.shutdown()
         logger.info("=== KIS 주식 자동매매 시스템 종료 ===")
