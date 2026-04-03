@@ -11,6 +11,7 @@ from apscheduler.events import EVENT_JOB_MAX_INSTANCES, JobSubmissionEvent
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src.config import settings
+from src.scheduler.holidays import is_market_closed
 from src.utils.logger import setup_logger
 
 if TYPE_CHECKING:
@@ -126,6 +127,9 @@ class TradingScheduler:
 
     def pre_market_job(self) -> None:
         """장 시작 전 작업 (08:30)."""
+        if is_market_closed():
+            logger.info("휴장일이므로 장 시작 전 작업 스킵")
+            return
         if self._engine is None:
             logger.warning("매매 엔진이 설정되지 않음, 스킵")
             return
@@ -140,6 +144,9 @@ class TradingScheduler:
 
     def post_market_job(self) -> None:
         """장 마감 후 작업 (15:40)."""
+        if is_market_closed():
+            logger.info("휴장일이므로 장 마감 후 작업 스킵")
+            return
         if self._engine is None:
             logger.warning("매매 엔진이 설정되지 않음, 스킵")
             return
@@ -171,8 +178,8 @@ class TradingScheduler:
         def _start_trading_job() -> None:
             """장 시작 시 당일 trading_job을 등록한다."""
             today = date.today()
-            if today.weekday() > 4:
-                logger.info("주말이므로 장중 매매 작업 스킵")
+            if is_market_closed(today):
+                logger.info("휴장일이므로 장중 매매 작업 스킵 (%s)", today)
                 return
 
             start = datetime.combine(today, time(MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE))
@@ -216,7 +223,7 @@ class TradingScheduler:
         # 오늘이 평일이고 아직 장중 시간이면 즉시 등록
         now = datetime.now()
         market_close_today = datetime.combine(date.today(), time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE))
-        if date.today().weekday() <= 4 and now < market_close_today:
+        if not is_market_closed() and now < market_close_today:
             _start_trading_job()
         else:
             logger.info(

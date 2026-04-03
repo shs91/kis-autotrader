@@ -5,6 +5,13 @@
 
 ---
 
+## [2026-04-03] T3-1 공휴일 자동 감지
+- 신규 파일: src/scheduler/holidays.py, holidays.json, tests/test_scheduler/test_holidays.py
+- 변경 파일: src/scheduler/jobs.py
+- 기능: holidays.json 기반 휴장일 판단, pre_market/trading/post_market 모두 적용
+- 2026년 한국 증시 휴장일 15일 등록 (설날, 추석, 공휴일 등)
+- 테스트: 195 passed (신규 7건)
+
 ## [2026-04-03] T2-2 성과 시각화
 - 신규 파일: dashboard/pages/performance.py
 - 기능: 일별 수익률 추이, 주간별 집계 차트, 종목별 매매 통계, 기간 통계 요약
