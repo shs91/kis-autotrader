@@ -25,7 +25,9 @@ from src.db.repository import (
 from src.db.session import get_session
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.moving_average import MovingAverageStrategy
+from src.strategy.registry import StrategyRegistry
 from src.strategy.risk import RiskManager
+from src.strategy.selector import StrategySelector
 from src.db.event_logger import log_error, log_trade, log_warning
 from src.notify.telegram import TelegramNotifier
 from src.utils.logger import setup_logger
@@ -51,18 +53,31 @@ class TradingEngine:
         self,
         watchlist: list[str] | None = None,
         strategy: BaseStrategy | None = None,
+        selector: StrategySelector | None = None,
     ) -> None:
         """매매 엔진을 초기화한다.
 
         Args:
             watchlist: 고정 관심종목코드 목록 (None이면 설정에서 로드)
-            strategy: 매매 전략 (None이면 이동평균 교차 전략)
+            strategy: 매매 전략 (단일 전략 모드, 하위 호환용)
+            selector: 전략 셀렉터 (다중 전략 모드)
         """
         self._client = KISClient()
         self._quote = QuoteAPI(client=self._client)
         self._order = OrderAPI(client=self._client)
         self._account = AccountAPI(client=self._client)
-        self._strategy = strategy or MovingAverageStrategy()
+
+        # 전략 셀렉터 초기화: selector > strategy > 설정 파일
+        if selector is not None:
+            self._selector = selector
+        elif strategy is not None:
+            registry = StrategyRegistry()
+            registry.register("custom", strategy)
+            self._selector = StrategySelector(registry, default_strategy="custom")
+        else:
+            registry = StrategyRegistry.create_default()
+            self._selector = StrategySelector.from_config(registry)
+
         self._risk = RiskManager()
         self._notifier = TelegramNotifier()
 
@@ -81,8 +96,8 @@ class TradingEngine:
         self._balance_cache: tuple[float, Balance] | None = None
 
         logger.info(
-            "매매 엔진 초기화: 전략=%s, 고정 관심종목=%s",
-            self._strategy.name,
+            "매매 엔진 초기화: 기본전략=%s, 고정 관심종목=%s",
+            self._selector.default_strategy_name,
             self._fixed_watchlist,
         )
 
@@ -368,14 +383,16 @@ class TradingEngine:
                 if df is None:
                     continue
 
-                signal = self._strategy.analyze(df)
+                strategy = self._selector.get_strategy(item.stock_code)
+                signal = strategy.analyze(df)
 
                 if signal.signal_type == SignalType.BUY and signal.confidence >= 0.3:
                     new_candidates.append(item.stock_code)
                     logger.info(
-                        "[스크리닝 발굴] %s(%s) — %s, 신뢰도=%.2f",
+                        "[스크리닝 발굴] %s(%s) 전략=%s — %s, 신뢰도=%.2f",
                         item.stock_name,
                         item.stock_code,
+                        strategy.name,
                         signal.reason,
                         signal.confidence,
                     )
@@ -419,11 +436,13 @@ class TradingEngine:
         current = await self._quote.get_current_price(stock_code)
 
         # 3. 전략 분석 (보유/미보유 모두 실행)
-        signal = self._strategy.analyze(df)
+        strategy = self._selector.get_strategy(stock_code)
+        signal = strategy.analyze(df)
         logger.info(
-            "[%s %s] 보유=%s, 시그널=%s, 신뢰도=%.2f, 현재가=%s",
+            "[%s %s] 전략=%s, 보유=%s, 시그널=%s, 신뢰도=%.2f, 현재가=%s",
             stock_code,
             current.stock_name,
+            strategy.name,
             "Y" if is_held else "N",
             signal.signal_type.value,
             signal.confidence,

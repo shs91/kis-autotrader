@@ -126,6 +126,36 @@ class TradingConfig:
 
 
 @dataclass(frozen=True)
+class StrategyConfig:
+    """전략 관련 설정."""
+
+    default: str = field(
+        default_factory=lambda: _env("STRATEGY_DEFAULT", "moving_average")
+    )
+    mappings_raw: str = field(
+        default_factory=lambda: _env("STRATEGY_MAPPINGS", "")
+    )
+
+    def parse_mappings(self) -> dict[str, str]:
+        """STRATEGY_MAPPINGS 환경변수를 파싱한다.
+
+        형식: "005930:rsi,000660:ensemble"
+
+        Returns:
+            {종목코드: 전략이름} 딕셔너리
+        """
+        if not self.mappings_raw:
+            return {}
+        result: dict[str, str] = {}
+        for pair in self.mappings_raw.split(","):
+            pair = pair.strip()
+            if ":" in pair:
+                code, strategy = pair.split(":", 1)
+                result[code.strip()] = strategy.strip()
+        return result
+
+
+@dataclass(frozen=True)
 class HealthConfig:
     """헬스체크 서버 설정."""
 
@@ -157,6 +187,7 @@ class Settings:
     calendar: CalendarConfig = field(default_factory=CalendarConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
+    strategy: StrategyConfig = field(default_factory=StrategyConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
 
