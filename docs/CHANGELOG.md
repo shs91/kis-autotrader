@@ -5,6 +5,13 @@
 
 ---
 
+## [2026-04-03] T2-1 웹 대시보드 (Streamlit)
+- 신규 파일: dashboard/app.py, scripts/run_dashboard.sh
+- 기능: 시스템 상태, 보유 포트폴리오, 일일 성과 차트, 최근 주문 내역
+- 헬스체크 API + PostgreSQL 직접 조회
+- 실행: .venv/bin/streamlit run dashboard/app.py (포트 8501)
+- 테스트: 188 passed (기존 테스트 영향 없음)
+
 ## [2026-04-03] T2-4 Telegram 원격 명령
 - 신규 파일: src/notify/bot.py, tests/test_notify/test_bot.py
 - 변경 파일: main.py

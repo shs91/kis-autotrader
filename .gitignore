@@ -8,6 +8,7 @@ build/
 .env
 credentials.json
 token.json
+dashboard/.streamlit/secrets.toml
 
 .venv/
 venv/
