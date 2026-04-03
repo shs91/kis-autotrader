@@ -5,6 +5,12 @@
 
 ---
 
+## [2026-04-03] T2-3 알림 레벨 분류
+- 변경 파일: src/notify/telegram.py, tests/test_notify/test_telegram.py
+- 긴급(손절, 에러) → 소리/진동 알림, 일반(체결, 결산) → 무음 전송
+- Telegram disable_notification 파라미터 활용
+- 테스트: 183 passed (신규 2건)
+
 ## [2026-04-03] T1-4 프로세스 행 감지 + 자동 재시작
 - 로드맵: docs/plans/feature-roadmap.md (T1-4)
 - 신규 파일: scripts/watchdog.sh

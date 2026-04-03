@@ -81,14 +81,21 @@ class TestTelegramNotifier:
         assert "매수" in msg
         assert "삼성전자" in msg
 
-    async def test_notify_sell(self) -> None:
-        """notify_sell이 포맷된 메시지를 전송한다."""
+    async def test_notify_sell_stop_loss_is_urgent(self) -> None:
+        """손절 매도는 urgent=True로 전송된다."""
         notifier = _make_notifier()
         notifier.send = AsyncMock()  # type: ignore[method-assign]
         await notifier.notify_sell("SK하이닉스", "000660", 5, 185000, "손절")
         notifier.send.assert_called_once()
-        msg = notifier.send.call_args[0][0]
-        assert "손절" in msg
+        assert notifier.send.call_args[1]["urgent"] is True
+
+    async def test_notify_sell_take_profit_is_not_urgent(self) -> None:
+        """익절 매도는 urgent=False로 전송된다."""
+        notifier = _make_notifier()
+        notifier.send = AsyncMock()  # type: ignore[method-assign]
+        await notifier.notify_sell("NAVER", "035420", 3, 400000, "익절")
+        notifier.send.assert_called_once()
+        assert notifier.send.call_args[1]["urgent"] is False
 
     async def test_notify_daily_summary(self) -> None:
         """notify_daily_summary가 결산 메시지를 전송한다."""
@@ -99,14 +106,22 @@ class TestTelegramNotifier:
         msg = notifier.send.call_args[0][0]
         assert "결산" in msg
 
-    async def test_notify_error(self) -> None:
-        """notify_error가 에러 메시지를 전송한다."""
+    async def test_notify_error_is_urgent(self) -> None:
+        """에러 알림은 urgent=True로 전송된다."""
         notifier = _make_notifier()
         notifier.send = AsyncMock()  # type: ignore[method-assign]
         await notifier.notify_error("테스트", "에러 발생")
         notifier.send.assert_called_once()
-        msg = notifier.send.call_args[0][0]
-        assert "에러" in msg
+        assert notifier.send.call_args[1]["urgent"] is True
+
+    async def test_notify_buy_is_not_urgent(self) -> None:
+        """매수 알림은 urgent=False(무음)로 전송된다."""
+        notifier = _make_notifier()
+        notifier.send = AsyncMock()  # type: ignore[method-assign]
+        await notifier.notify_buy("삼성전자", "005930", 10, 72000)
+        # send()의 urgent 기본값은 False
+        call_kwargs = notifier.send.call_args[1] if notifier.send.call_args[1] else {}
+        assert call_kwargs.get("urgent", False) is False
 
     async def test_notify_system(self) -> None:
         """notify_system이 시스템 메시지를 전송한다."""
