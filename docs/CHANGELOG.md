@@ -5,6 +5,11 @@
 
 ---
 
+## [2026-04-03] T2-2 성과 시각화
+- 신규 파일: dashboard/pages/performance.py
+- 기능: 일별 수익률 추이, 주간별 집계 차트, 종목별 매매 통계, 기간 통계 요약
+- Streamlit 멀티페이지로 대시보드에 자동 통합
+
 ## [2026-04-03] T2-1 웹 대시보드 (Streamlit)
 - 신규 파일: dashboard/app.py, scripts/run_dashboard.sh
 - 기능: 시스템 상태, 보유 포트폴리오, 일일 성과 차트, 최근 주문 내역
