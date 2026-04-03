@@ -226,6 +226,36 @@ else:
         hide_index=True,
     )
 
+# ── 이벤트 로그 ──────────────────────────────────
+
+st.divider()
+st.subheader("\U0001f4dd 이벤트 로그")
+
+event_query = text("""
+    SELECT timestamp, level, category, message
+    FROM event_logs
+    ORDER BY timestamp DESC
+    LIMIT 30
+""")
+try:
+    with get_engine().connect() as conn:
+        event_df = pd.read_sql(event_query, conn)
+    if event_df.empty:
+        st.info("이벤트 로그가 없습니다.")
+    else:
+        st.dataframe(
+            event_df.rename(columns={
+                "timestamp": "시각",
+                "level": "레벨",
+                "category": "분류",
+                "message": "내용",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+except Exception:
+    st.info("이벤트 로그 테이블이 아직 생성되지 않았습니다.")
+
 # ── 푸터 ────────────────────────────────────────
 
 st.divider()

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from src.db.models import (
     DailyPerformance,
+    EventLevel,
+    EventLog,
     Execution,
     Order,
     OrderStatus,
@@ -398,3 +400,40 @@ class DailyPerformanceRepository:
             .order_by(DailyPerformance.date.desc())
         )
         return list(self._session.execute(stmt).scalars().all())
+
+
+class EventLogRepository:
+    """이벤트 로그 데이터 접근 레이어."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def log(
+        self,
+        level: EventLevel,
+        category: str,
+        message: str,
+        details: str | None = None,
+    ) -> EventLog:
+        """이벤트를 기록한다."""
+        event = EventLog(
+            level=level,
+            category=category,
+            message=message,
+            details=details,
+        )
+        self._session.add(event)
+        self._session.flush()
+        return event
+
+    def info(self, category: str, message: str, details: str | None = None) -> EventLog:
+        """INFO 이벤트를 기록한다."""
+        return self.log(EventLevel.INFO, category, message, details)
+
+    def warning(self, category: str, message: str, details: str | None = None) -> EventLog:
+        """WARNING 이벤트를 기록한다."""
+        return self.log(EventLevel.WARNING, category, message, details)
+
+    def error(self, category: str, message: str, details: str | None = None) -> EventLog:
+        """ERROR 이벤트를 기록한다."""
+        return self.log(EventLevel.ERROR, category, message, details)

@@ -5,6 +5,12 @@
 
 ---
 
+## [2026-04-03] T3-4 로그 구조화 저장
+- 신규: src/db/event_logger.py, alembic migration (event_logs 테이블)
+- 변경: src/db/models.py (EventLog, EventLevel), src/db/repository.py, src/engine.py, main.py, dashboard/app.py
+- 기능: 매매/시스템/에러/경고 이벤트를 DB에 구조화 저장, 대시보드에서 조회
+- 테스트: 195 passed
+
 ## [2026-04-03] T3-1 공휴일 자동 감지
 - 신규 파일: src/scheduler/holidays.py, holidays.json, tests/test_scheduler/test_holidays.py
 - 변경 파일: src/scheduler/jobs.py

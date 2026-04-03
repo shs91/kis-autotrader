@@ -13,6 +13,7 @@ from src.db.session import init_db
 from src.engine import TradingEngine
 from src.notify.bot import TelegramBot
 from src.notify.telegram import TelegramNotifier
+from src.db.event_logger import log_system
 from src.scheduler.jobs import TradingScheduler
 from src.utils.logger import setup_logger
 
@@ -126,6 +127,7 @@ async def main() -> None:
     await bot.start()
 
     await notifier.notify_system(f"자동매매 시스템 가동 ({settings.kis.env})")
+    log_system(f"시스템 시작 ({settings.kis.env})")
 
     # 종료 시그널 핸들러
     stop_event = asyncio.Event()
@@ -147,6 +149,7 @@ async def main() -> None:
         if health_server:
             await health_server.stop()
         await notifier.notify_system("자동매매 시스템 종료")
+        log_system("시스템 종료")
         scheduler.shutdown()
         logger.info("=== KIS 주식 자동매매 시스템 종료 ===")
 

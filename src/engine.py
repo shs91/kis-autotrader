@@ -26,6 +26,7 @@ from src.db.session import get_session
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.moving_average import MovingAverageStrategy
 from src.strategy.risk import RiskManager
+from src.db.event_logger import log_error, log_trade, log_warning
 from src.notify.telegram import TelegramNotifier
 from src.utils.logger import setup_logger
 
@@ -178,6 +179,7 @@ class TradingEngine:
             )
         self._daily_limit_reached = True
         logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+        log_warning("API 일일 한도 초과, 당일 매매 사이클 중단")
 
     # ── 메인 작업 ─────────────────────────────────────────
 
@@ -508,6 +510,7 @@ class TradingEngine:
                 "[매수 체결] %s(%s) %d주, 주문번호=%s",
                 stock_name, stock_code, quantity, result.order_no,
             )
+            log_trade(f"매수 {stock_name}({stock_code}) {quantity}주 @ {price:,}원")
 
             self._record_order_to_db(
                 stock_code, stock_name, OrderType.BUY, quantity, float(price), result.order_no
@@ -531,6 +534,7 @@ class TradingEngine:
                 "[매도 체결] %s %d주, 사유=%s, 주문번호=%s",
                 stock_code, quantity, reason, result.order_no,
             )
+            log_trade(f"매도 {stock_code} {quantity}주 @ {price:,}원 ({reason})")
 
             self._record_order_to_db(
                 stock_code, "", OrderType.SELL, quantity, float(price), result.order_no

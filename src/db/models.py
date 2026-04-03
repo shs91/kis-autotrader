@@ -14,6 +14,14 @@ class Base(DeclarativeBase):
     """SQLAlchemy 선언적 베이스 클래스."""
 
 
+class EventLevel(enum.Enum):
+    """이벤트 심각도."""
+
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+
 class OrderType(enum.Enum):
     """주문 유형."""
 
@@ -156,4 +164,27 @@ class DailyPerformance(Base):
         return (
             f"<DailyPerformance(date={self.date}, "
             f"pl={self.total_profit_loss}, rate={self.profit_rate})>"
+        )
+
+
+class EventLog(Base):
+    """시스템 이벤트 로그 테이블."""
+
+    __tablename__ = "event_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True, nullable=False
+    )
+    level: Mapped[EventLevel] = mapped_column(
+        SAEnum(EventLevel, name="event_level_enum"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<EventLog(id={self.id}, level={self.level.value}, "
+            f"category={self.category!r})>"
         )
