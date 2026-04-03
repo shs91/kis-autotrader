@@ -10,26 +10,26 @@ import pandas as pd
 from src.api.account import AccountAPI, Balance
 from src.api.client import KISClient
 from src.api.order import OrderAPI
-from src.api.quote import DailyPriceItem, QuoteAPI
-from src.config import settings
+from src.api.quote import QuoteAPI
 from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
-from src.utils.exceptions import DailyLimitExceededError
+from src.config import settings
+from src.db.event_logger import log_trade, log_warning
 from src.db.models import OrderStatus, OrderType
 from src.db.repository import (
     DailyPerformanceRepository,
     OrderRepository,
     PortfolioRepository,
     StockRepository,
+    WatchlistRepository,
 )
 from src.db.session import get_session
+from src.notify.telegram import TelegramNotifier
 from src.strategy.base import BaseStrategy, Signal, SignalType
-from src.strategy.moving_average import MovingAverageStrategy
 from src.strategy.registry import StrategyRegistry
 from src.strategy.risk import RiskManager
 from src.strategy.selector import StrategySelector
-from src.db.event_logger import log_error, log_trade, log_warning
-from src.notify.telegram import TelegramNotifier
+from src.utils.exceptions import DailyLimitExceededError
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -81,8 +81,8 @@ class TradingEngine:
         self._risk = RiskManager()
         self._notifier = TelegramNotifier()
 
-        # 고정 관심종목 (설정 기반)
-        self._fixed_watchlist = watchlist or settings.trading.watchlist_codes
+        # 관심종목: 직접 지정 시 고정, 미지정 시 DB에서 매 사이클 조회
+        self._fixed_watchlist: list[str] | None = watchlist
         # 스크리닝으로 발굴된 동적 종목
         self._screened_codes: set[str] = set()
 
@@ -96,15 +96,37 @@ class TradingEngine:
         self._balance_cache: tuple[float, Balance] | None = None
 
         logger.info(
-            "매매 엔진 초기화: 기본전략=%s, 고정 관심종목=%s",
+            "매매 엔진 초기화: 기본전략=%s, 관심종목모드=%s",
             self._selector.default_strategy_name,
-            self._fixed_watchlist,
+            "고정" if self._fixed_watchlist else "DB",
         )
+
+    def _get_watchlist_codes(self) -> list[str]:
+        """관심종목 코드를 반환한다.
+
+        직접 지정된 watchlist가 있으면 그대로 사용,
+        없으면 DB에서 매번 조회한다. DB 실패 시 .env 폴백.
+
+        Returns:
+            관심종목 코드 리스트
+        """
+        if self._fixed_watchlist is not None:
+            return self._fixed_watchlist
+        try:
+            with get_session() as session:
+                repo = WatchlistRepository(session)
+                codes = repo.get_codes()
+            if codes:
+                return codes
+            return settings.trading.watchlist_codes
+        except Exception:
+            logger.exception("관심종목 DB 조회 실패, .env 폴백")
+            return settings.trading.watchlist_codes
 
     @property
     def _watchlist(self) -> list[str]:
-        """고정 관심종목 + 스크리닝 종목을 반환한다 (외부 호환용)."""
-        return self._fixed_watchlist
+        """관심종목을 반환한다 (외부 호환용)."""
+        return self._get_watchlist_codes()
 
     def _build_monitor_targets(self, held_codes: set[str]) -> list[str]:
         """모니터링 대상 종목을 구성한다.
@@ -120,7 +142,7 @@ class TradingEngine:
         all_codes: dict[str, None] = {}
         for code in held_codes:
             all_codes[code] = None
-        for code in self._fixed_watchlist:
+        for code in self._get_watchlist_codes():
             all_codes[code] = None
         for code in self._screened_codes:
             all_codes[code] = None
@@ -226,10 +248,11 @@ class TradingEngine:
                     h.stock_name, h.stock_code, h.quantity, h.avg_price, h.profit_rate,
                 )
 
-            self._ensure_watchlist_stocks()
+            self._seed_watchlist_from_env()
 
             # 관심종목 일봉 사전 캐싱
-            for code in self._fixed_watchlist:
+            watchlist_codes = self._get_watchlist_codes()
+            for code in watchlist_codes:
                 await self._get_daily_df(code)
             logger.info("관심종목 일봉 캐싱 완료 (%d종목)", len(self._daily_cache))
 
@@ -279,7 +302,7 @@ class TradingEngine:
             "모니터링 대상: %d종목 (보유 %d + 관심 %d + 발굴 %d)",
             len(targets),
             len(held_codes),
-            len(self._fixed_watchlist),
+            len(self._get_watchlist_codes()),
             len(self._screened_codes),
         )
 
@@ -370,10 +393,11 @@ class TradingEngine:
         remaining_slots = MAX_SCREENED_STOCKS - len(self._screened_codes)
         new_candidates: list[str] = []
 
+        watchlist_set = set(self._get_watchlist_codes())
         for item in ranked:
             if len(new_candidates) >= remaining_slots:
                 break
-            if item.stock_code in self._fixed_watchlist:
+            if item.stock_code in watchlist_set:
                 continue
             if item.stock_code in self._screened_codes:
                 continue
@@ -639,18 +663,15 @@ class TradingEngine:
         except Exception:
             logger.exception("주문 DB 기록 실패: %s", stock_code)
 
-    def _ensure_watchlist_stocks(self) -> None:
-        """관심종목이 DB에 없으면 생성한다."""
+    def _seed_watchlist_from_env(self) -> None:
+        """최초 실행 시 .env의 관심종목을 DB에 시드한다."""
         try:
             with get_session() as session:
-                stock_repo = StockRepository(session)
-                for code in self._fixed_watchlist:
-                    if stock_repo.get_by_code(code) is None:
-                        stock_repo.create(code, code, "KOSPI")
-                        logger.info("관심종목 DB 등록: %s", code)
-
+                repo = WatchlistRepository(session)
+                for code in settings.trading.watchlist_codes:
+                    repo.add(code)
         except Exception:
-            logger.exception("관심종목 DB 등록 실패")
+            logger.exception("관심종목 시드 실패")
 
     def _save_daily_performance(self, balance: object, executions: list[object]) -> None:
         """일일 성과를 DB에 저장한다."""

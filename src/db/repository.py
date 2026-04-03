@@ -437,3 +437,103 @@ class EventLogRepository:
     def error(self, category: str, message: str, details: str | None = None) -> EventLog:
         """ERROR 이벤트를 기록한다."""
         return self.log(EventLevel.ERROR, category, message, details)
+
+
+class WatchlistRepository:
+    """관심종목 관리 레포지토리."""
+
+    def __init__(self, session: Session) -> None:
+        """초기화.
+
+        Args:
+            session: SQLAlchemy 세션
+        """
+        self._session = session
+
+    def get_codes(self) -> list[str]:
+        """관심종목 코드 목록을 반환한다 (코드 정렬).
+
+        Returns:
+            관심종목 코드 리스트
+        """
+        stmt = (
+            select(Stock.code)
+            .where(Stock.is_watchlist.is_(True))
+            .order_by(Stock.code)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def add(self, stock_code: str, stock_name: str = "") -> bool:
+        """종목을 관심종목에 추가한다.
+
+        종목이 stocks 테이블에 없으면 새로 생성한다.
+        이미 관심종목이면 False를 반환한다.
+
+        Args:
+            stock_code: 종목코드
+            stock_name: 종목명 (없으면 코드로 대체)
+
+        Returns:
+            True: 추가됨, False: 이미 관심종목
+        """
+        stock = self._get_or_create(stock_code, stock_name)
+        if stock.is_watchlist:
+            return False
+        stock.is_watchlist = True
+        stock.updated_at = datetime.utcnow()
+        self._session.flush()
+        logger.info("관심종목 추가: %s (%s)", stock.name, stock.code)
+        return True
+
+    def remove(self, stock_code: str) -> bool:
+        """종목을 관심종목에서 제거한다.
+
+        종목 자체는 삭제하지 않고 is_watchlist만 False로 변경.
+
+        Args:
+            stock_code: 종목코드
+
+        Returns:
+            True: 제거됨, False: 관심종목이 아니었음
+        """
+        stock_repo = StockRepository(self._session)
+        stock = stock_repo.get_by_code(stock_code)
+        if stock is None or not stock.is_watchlist:
+            return False
+        stock.is_watchlist = False
+        stock.updated_at = datetime.utcnow()
+        self._session.flush()
+        logger.info("관심종목 제거: %s (%s)", stock.name, stock.code)
+        return True
+
+    def is_watched(self, stock_code: str) -> bool:
+        """관심종목 여부를 확인한다.
+
+        Args:
+            stock_code: 종목코드
+
+        Returns:
+            관심종목이면 True
+        """
+        stmt = select(Stock.is_watchlist).where(Stock.code == stock_code)
+        result = self._session.execute(stmt).scalar_one_or_none()
+        return result is True
+
+    def count(self) -> int:
+        """관심종목 수를 반환한다."""
+        from sqlalchemy import func
+
+        stmt = (
+            select(func.count())
+            .select_from(Stock)
+            .where(Stock.is_watchlist.is_(True))
+        )
+        return self._session.execute(stmt).scalar_one()
+
+    def _get_or_create(self, stock_code: str, stock_name: str = "") -> Stock:
+        """종목을 조회하거나 없으면 생성한다."""
+        stock_repo = StockRepository(self._session)
+        stock = stock_repo.get_by_code(stock_code)
+        if stock is None:
+            stock = stock_repo.create(stock_code, stock_name or stock_code, "KOSPI")
+        return stock

@@ -9,11 +9,12 @@ from datetime import date
 
 from src.api.health import HealthServer
 from src.config import settings
-from src.db.session import init_db
+from src.db.event_logger import log_system
+from src.db.repository import WatchlistRepository
+from src.db.session import get_session, init_db
 from src.engine import TradingEngine
 from src.notify.bot import TelegramBot
 from src.notify.telegram import TelegramNotifier
-from src.db.event_logger import log_system
 from src.scheduler.jobs import TradingScheduler
 from src.utils.logger import setup_logger
 
@@ -45,7 +46,7 @@ def _register_bot_commands(
         try:
             balance = await engine._get_balance()
             lines = [
-                f"<b>[잔고]</b>",
+                "<b>[잔고]</b>",
                 f"예수금: {balance.deposit:,}원",
                 f"평가손익: {balance.total_profit_loss:,}원 ({balance.total_profit_rate:.2f}%)",
             ]
@@ -63,10 +64,54 @@ def _register_bot_commands(
             f"<b>[당일 현황]</b> {date.today()}\n"
             f"사이클: #{engine._cycle_count}\n"
             f"매매: {engine._today_trade_count}건\n"
-            f"관심종목: {len(engine._fixed_watchlist)}개\n"
+            f"관심종목: {len(engine._get_watchlist_codes())}개\n"
             f"발굴종목: {len(engine._screened_codes)}개\n"
             f"한도 초과: {'예' if engine._daily_limit_reached else '아니오'}"
         )
+
+    async def cmd_watch(args: str) -> str:
+        """관심종목을 추가한다."""
+        stock_code = args.strip()
+        if not stock_code:
+            return "사용법: /watch 005930"
+        if len(stock_code) != 6 or not stock_code.isdigit():
+            return f"잘못된 종목코드: {stock_code} (6자리 숫자)"
+        try:
+            with get_session() as session:
+                repo = WatchlistRepository(session)
+                added = repo.add(stock_code)
+            if added:
+                return f"✅ {stock_code} 관심종목에 추가했습니다."
+            return f"ℹ️ {stock_code}은(는) 이미 관심종목입니다."
+        except Exception as e:
+            return f"❌ 추가 실패: {e!s:.100}"
+
+    async def cmd_unwatch(args: str) -> str:
+        """관심종목에서 제거한다."""
+        stock_code = args.strip()
+        if not stock_code:
+            return "사용법: /unwatch 005930"
+        try:
+            with get_session() as session:
+                repo = WatchlistRepository(session)
+                removed = repo.remove(stock_code)
+            if removed:
+                return f"✅ {stock_code} 관심종목에서 제거했습니다."
+            return f"ℹ️ {stock_code}은(는) 관심종목이 아닙니다."
+        except Exception as e:
+            return f"❌ 제거 실패: {e!s:.100}"
+
+    async def cmd_watchlist(_args: str) -> str:
+        """관심종목 목록을 반환한다."""
+        try:
+            with get_session() as session:
+                repo = WatchlistRepository(session)
+                codes = repo.get_codes()
+            if not codes:
+                return "관심종목이 없습니다."
+            return f"<b>[관심종목]</b> ({len(codes)}건)\n" + ", ".join(codes)
+        except Exception as e:
+            return f"❌ 조회 실패: {e!s:.100}"
 
     async def cmd_help(_args: str) -> str:
         """사용 가능한 명령을 반환한다."""
@@ -75,12 +120,18 @@ def _register_bot_commands(
             "/status — 시스템 상태\n"
             "/balance — 잔고 조회\n"
             "/today — 당일 현황\n"
+            "/watch 종목코드 — 관심종목 추가\n"
+            "/unwatch 종목코드 — 관심종목 제거\n"
+            "/watchlist — 관심종목 목록\n"
             "/help — 명령어 목록"
         )
 
     bot.register("status", cmd_status)
     bot.register("balance", cmd_balance)
     bot.register("today", cmd_today)
+    bot.register("watch", cmd_watch)
+    bot.register("unwatch", cmd_unwatch)
+    bot.register("watchlist", cmd_watchlist)
     bot.register("help", cmd_help)
 
 
