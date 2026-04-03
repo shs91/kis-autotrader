@@ -80,10 +80,13 @@ class RateLimitConfig:
     """API 호출 제한 설정."""
 
     per_second: int = field(
-        default_factory=lambda: _env_int("API_RATE_LIMIT_PER_SECOND", 3)
+        default_factory=lambda: _env_int(
+            "API_RATE_LIMIT_PER_SECOND",
+            20 if _env("KIS_ENV", "virtual") == "real" else 5,
+        )
     )
     daily_limit: int = field(
-        default_factory=lambda: _env_int("API_DAILY_CALL_LIMIT", 10000)
+        default_factory=lambda: _env_int("API_DAILY_CALL_LIMIT", 50000)
     )
     ws_max_reconnect: int = field(
         default_factory=lambda: _env_int("WS_MAX_RECONNECT_ATTEMPTS", 5)

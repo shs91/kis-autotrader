@@ -23,6 +23,9 @@ SUBSCRIBE_DEBOUNCE_INTERVAL: float = 1.0
 # 수신 확인 대기 시간 (초)
 RECEIVE_CONFIRM_TIMEOUT: float = 10.0
 
+# 세션당 최대 구독 종목 수 (KIS 정책)
+MAX_SUBSCRIPTIONS: int = 41
+
 
 class ConnectionState(enum.Enum):
     """웹소켓 연결 상태."""
@@ -159,6 +162,15 @@ class KISWebSocketManager:
 
         if stock_code in self._subscriptions:
             logger.info("이미 구독 중인 종목: %s", stock_code)
+            return
+
+        if len(self._subscriptions) >= MAX_SUBSCRIPTIONS:
+            logger.warning(
+                "구독 종목 상한 도달 (%d/%d), 추가 구독 불가: %s",
+                len(self._subscriptions),
+                MAX_SUBSCRIPTIONS,
+                stock_code,
+            )
             return
 
         # 디바운싱: 최소 1초 간격

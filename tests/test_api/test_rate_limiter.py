@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from src.api.rate_limiter import MIN_CALL_INTERVAL, RateLimiter, TokenBucket
+from src.api.rate_limiter import RateLimiter, TokenBucket
 from src.utils.exceptions import DailyLimitExceededError
 
 
@@ -46,7 +46,7 @@ class TestRateLimiter:
 
         for i in range(1, len(times)):
             interval = times[i] - times[i - 1]
-            assert interval >= MIN_CALL_INTERVAL * 0.9  # 약간의 오차 허용
+            assert interval >= limiter._min_call_interval * 0.9  # 약간의 오차 허용
 
     async def test_daily_limit_exceeded(self) -> None:
         """일일 한도 초과 시 DailyLimitExceededError가 발생한다."""
@@ -96,7 +96,7 @@ class TestRateLimiter:
         call_times.sort()
         for i in range(1, len(call_times)):
             interval = call_times[i] - call_times[i - 1]
-            assert interval >= MIN_CALL_INTERVAL * 0.8  # 동시 실행 오차 허용
+            assert interval >= limiter._min_call_interval * 0.8  # 동시 실행 오차 허용
 
     async def test_daily_count_tracking(self) -> None:
         """일일 호출 횟수가 정확히 추적된다."""

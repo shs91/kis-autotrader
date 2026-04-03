@@ -14,8 +14,7 @@ logger = setup_logger(__name__)
 
 T = TypeVar("T")
 
-# 호출 간 최소 간격 (초)
-MIN_CALL_INTERVAL: float = 0.334
+# 호출 간 최소 간격은 RateLimiter 초기화 시 초당 호출 수로부터 동적 계산
 
 
 class TokenBucket:
@@ -72,6 +71,7 @@ class RateLimiter:
         """
         self._per_second = per_second or settings.rate_limit.per_second
         self._daily_limit = daily_limit or settings.rate_limit.daily_limit
+        self._min_call_interval = 1.0 / self._per_second
         self._bucket = TokenBucket(rate=self._per_second)
         self._daily_count = 0
         self._daily_reset_date: str = _today_str()
@@ -115,8 +115,8 @@ class RateLimiter:
         async with self._interval_lock:
             now = time.monotonic()
             elapsed = now - self._last_call_time
-            if elapsed < MIN_CALL_INTERVAL:
-                wait = MIN_CALL_INTERVAL - elapsed
+            if elapsed < self._min_call_interval:
+                wait = self._min_call_interval - elapsed
                 await asyncio.sleep(wait)
             self._last_call_time = time.monotonic()
 

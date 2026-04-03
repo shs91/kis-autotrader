@@ -5,6 +5,15 @@
 
 ---
 
+## [2026-04-03] KIS API 호출 제한 정책 최신화 (2026년 기준)
+- 변경 파일: .env, src/config.py, src/api/rate_limiter.py, src/api/websocket.py
+- 수정 내용:
+  - 초당 호출 제한을 KIS 최신 정책에 맞게 수정 (모의=5건/초, 실전=20건/초)
+  - MIN_CALL_INTERVAL을 하드코딩에서 초당 호출 수 기반 동적 계산으로 변경
+  - 웹소켓 구독 종목 수 상한 41개 추가 (KIS 세션당 제한)
+  - 일일 호출 한도 10,000 → 50,000으로 상향 (KIS 공식 일일 한도 없음, 안전장치)
+- 테스트: 157 passed
+
 ## [2026-04-03] API 일일 한도 초과 대응 수정
 - 변경 파일: src/engine.py, src/strategy/moving_average.py
 - 원인: 스크리닝 발굴 종목이 무제한 증가하여 API 호출량 폭증 + 한도 초과 후에도 스케줄러가 계속 실행
