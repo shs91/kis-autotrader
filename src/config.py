@@ -119,6 +119,17 @@ class TradingConfig:
 
 
 @dataclass(frozen=True)
+class TelegramConfig:
+    """Telegram 알림 설정."""
+
+    bot_token: str = field(default_factory=lambda: _env("TELEGRAM_BOT_TOKEN"))
+    chat_id: str = field(default_factory=lambda: _env("TELEGRAM_CHAT_ID"))
+    enabled: bool = field(
+        default_factory=lambda: _env("TELEGRAM_ENABLED", "false").lower() == "true"
+    )
+
+
+@dataclass(frozen=True)
 class Settings:
     """전체 설정을 통합 관리한다."""
 
@@ -127,6 +138,7 @@ class Settings:
     calendar: CalendarConfig = field(default_factory=CalendarConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
 
 
 settings = Settings()

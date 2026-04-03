@@ -9,6 +9,7 @@ import sys
 from src.config import settings
 from src.db.session import init_db
 from src.engine import TradingEngine
+from src.notify.telegram import TelegramNotifier
 from src.scheduler.jobs import TradingScheduler
 from src.utils.logger import setup_logger
 
@@ -25,6 +26,8 @@ async def main() -> None:
     logger.info("최대 포지션 비율: %.1f%%", settings.trading.max_position_ratio * 100)
     logger.info("관심종목: %s", settings.trading.watchlist_codes)
 
+    notifier = TelegramNotifier()
+
     # DB 초기화
     logger.info("데이터베이스 초기화 중...")
     init_db()
@@ -36,6 +39,8 @@ async def main() -> None:
     scheduler = TradingScheduler(engine=engine)
     scheduler.start()
     logger.info("스케줄러 시작 완료")
+
+    await notifier.notify_system(f"자동매매 시스템 가동 ({settings.kis.env})")
 
     # 종료 시그널 핸들러
     stop_event = asyncio.Event()
@@ -53,6 +58,7 @@ async def main() -> None:
         await stop_event.wait()
     finally:
         logger.info("시스템 종료 중...")
+        await notifier.notify_system("자동매매 시스템 종료")
         scheduler.shutdown()
         logger.info("=== KIS 주식 자동매매 시스템 종료 ===")
 

@@ -26,6 +26,7 @@ from src.db.session import get_session
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.moving_average import MovingAverageStrategy
 from src.strategy.risk import RiskManager
+from src.notify.telegram import TelegramNotifier
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -62,6 +63,7 @@ class TradingEngine:
         self._account = AccountAPI(client=self._client)
         self._strategy = strategy or MovingAverageStrategy()
         self._risk = RiskManager()
+        self._notifier = TelegramNotifier()
 
         # 고정 관심종목 (설정 기반)
         self._fixed_watchlist = watchlist or settings.trading.watchlist_codes
@@ -168,6 +170,15 @@ class TradingEngine:
         """잔고 캐시를 무효화한다 (주문 실행 후 호출)."""
         self._balance_cache = None
 
+    async def _set_daily_limit_reached(self) -> None:
+        """일일 한도 초과 상태를 설정하고 알림을 전송한다."""
+        if not self._daily_limit_reached:
+            await self._notifier.notify_error(
+                "장중 매매", "API 일일 한도 초과, 당일 매매 사이클 중단"
+            )
+        self._daily_limit_reached = True
+        logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+
     # ── 메인 작업 ─────────────────────────────────────────
 
     async def pre_market(self) -> None:
@@ -232,8 +243,7 @@ class TradingEngine:
             try:
                 await self._screen_stocks()
             except DailyLimitExceededError:
-                self._daily_limit_reached = True
-                logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+                await self._set_daily_limit_reached()
                 return
 
         try:
@@ -262,8 +272,7 @@ class TradingEngine:
                 holding_info = self._find_holding_from_balance(balance, stock_code)
                 await self._process_stock(stock_code, balance.deposit, is_held, holding_info)
             except DailyLimitExceededError:
-                self._daily_limit_reached = True
-                logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+                await self._set_daily_limit_reached()
                 return
             except Exception:
                 logger.exception("종목 처리 중 에러: %s", stock_code)
@@ -295,6 +304,14 @@ class TradingEngine:
 
             # Google Calendar 이벤트 등록
             self._create_calendar_event(balance, executions)
+
+            # Telegram 일일 결산 알림
+            await self._notifier.notify_daily_summary(
+                trade_date=date.today().isoformat(),
+                count=len(executions),
+                profit_loss=int(balance.total_profit_loss),
+                rate=float(balance.total_profit_rate),
+            )
 
             buy_count = sum(1 for e in executions if e.side == "매수")
             sell_count = sum(1 for e in executions if e.side == "매도")
@@ -496,6 +513,8 @@ class TradingEngine:
                 stock_code, stock_name, OrderType.BUY, quantity, float(price), result.order_no
             )
 
+            await self._notifier.notify_buy(stock_name, stock_code, quantity, price)
+
         except Exception:
             logger.exception("[매수 실패] %s(%s)", stock_name, stock_code)
 
@@ -516,6 +535,8 @@ class TradingEngine:
             self._record_order_to_db(
                 stock_code, "", OrderType.SELL, quantity, float(price), result.order_no
             )
+
+            await self._notifier.notify_sell("", stock_code, quantity, price, reason)
 
         except Exception:
             logger.exception("[매도 실패] %s", stock_code)

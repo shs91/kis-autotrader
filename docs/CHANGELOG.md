@@ -5,6 +5,13 @@
 
 ---
 
+## [2026-04-03] T1-1 Telegram 알림 기능 구현
+- 로드맵: docs/plans/feature-roadmap.md (T1-1)
+- 신규 파일: src/notify/__init__.py, src/notify/telegram.py, src/notify/formatter.py
+- 변경 파일: src/config.py, src/engine.py, main.py
+- 기능: 매수/매도 체결, 손절, 일일 결산, 에러, 시스템 시작/종료 Telegram 알림
+- 테스트: 177 passed (신규 20건)
+
 ## [2026-04-03] KIS API 호출 제한 정책 최신화 (2026년 기준)
 - 변경 파일: .env, src/config.py, src/api/rate_limiter.py, src/api/websocket.py
 - 수정 내용:
