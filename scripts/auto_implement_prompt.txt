@@ -13,6 +13,7 @@ docs/BRIDGE_SPEC.md를 읽고, 그 안의 "Claude Code 자동 구현 흐름"을
    - launchctl stop com.kis.autotrader && sleep 5
    - launchctl start com.kis.autotrader
    - sleep 10 && launchctl list | grep com.kis.autotrader
+   - tail -5 logs/autotrader.log 로 정상 기동 확인
 5. ready 제안서가 없으면 "대기 — 새 제안서 없음" 출력 후 종료
 
 작업 폴더: ~/IdeaProjects/kis-autotrader
