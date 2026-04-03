@@ -21,6 +21,7 @@ docs/.bkit-memory.json
 docs/.pdca-status.json
 
 logs/
+backups/
 
 .coverage
 htmlcov/

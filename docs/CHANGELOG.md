@@ -5,6 +5,12 @@
 
 ---
 
+## [2026-04-03] T1-3 DB 자동 백업 구현
+- 로드맵: docs/plans/feature-roadmap.md (T1-3)
+- 신규 파일: scripts/backup_db.sh
+- 기능: Docker exec pg_dump → gzip 압축, 7일 롤링 보관, crontab 매일 04:00 실행
+- crontab 등록 완료
+
 ## [2026-04-03] T1-2 헬스체크 API 구현
 - 로드맵: docs/plans/feature-roadmap.md (T1-2)
 - 신규 파일: src/api/health.py
