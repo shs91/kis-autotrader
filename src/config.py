@@ -53,15 +53,22 @@ class KISConfig:
         return "ws://ops.koreainvestment.com:31000"
 
 
+def _default_db_url() -> str:
+    """KIS_ENV에 따라 기본 DB URL을 반환한다."""
+    env = _env("KIS_ENV", "virtual")
+    env_key = "DATABASE_URL_REAL" if env == "real" else "DATABASE_URL"
+    # 환경별 전용 키가 있으면 우선, 없으면 DATABASE_URL 폴백
+    url = _env(env_key)
+    if url:
+        return url
+    return _env("DATABASE_URL", "postgresql://user:password@localhost:5432/kis_trader")
+
+
 @dataclass(frozen=True)
 class DBConfig:
     """데이터베이스 설정."""
 
-    url: str = field(
-        default_factory=lambda: _env(
-            "DATABASE_URL", "postgresql://user:password@localhost:5432/kis_trader"
-        )
-    )
+    url: str = field(default_factory=_default_db_url)
 
 
 @dataclass(frozen=True)
