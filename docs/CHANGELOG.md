@@ -5,6 +5,12 @@
 
 ---
 
+## [2026-04-03] T1-4 프로세스 행 감지 + 자동 재시작
+- 로드맵: docs/plans/feature-roadmap.md (T1-4)
+- 신규 파일: scripts/watchdog.sh
+- 기능: 로그 미갱신 5분 초과 시 hang 판단, launchctl 재시작, Telegram 알림
+- 장중 시간(09:00~15:25)에만 동작, 평일 5분마다 crontab 실행
+
 ## [2026-04-03] T1-3 DB 자동 백업 구현
 - 로드맵: docs/plans/feature-roadmap.md (T1-3)
 - 신규 파일: scripts/backup_db.sh
