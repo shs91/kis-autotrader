@@ -33,6 +33,7 @@ logger = setup_logger(__name__)
 # 스크리닝 상수
 SCREENING_TOP_N: int = 20  # 거래량 상위 N종목 스캔
 SCREENING_INTERVAL_CYCLES: int = 60  # N사이클마다 스크리닝 (약 5분 간격)
+MAX_SCREENED_STOCKS: int = 15  # 스크리닝 발굴 종목 상한 (API 호출량 제어)
 
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
@@ -69,6 +70,7 @@ class TradingEngine:
 
         self._today_trade_count = 0
         self._cycle_count = 0
+        self._daily_limit_reached = False
 
         # 일봉 캐시: {종목코드: (날짜, DataFrame)}
         self._daily_cache: dict[str, tuple[str, pd.DataFrame]] = {}
@@ -173,6 +175,7 @@ class TradingEngine:
         logger.info("=== 장 시작 전 작업 시작 ===")
         self._today_trade_count = 0
         self._cycle_count = 0
+        self._daily_limit_reached = False
         self._screened_codes.clear()
         self._daily_cache.clear()
         self._balance_cache = None
@@ -213,6 +216,11 @@ class TradingEngine:
     async def run_trading_cycle(self) -> None:
         """장중 매매 사이클 1회 실행."""
         self._cycle_count += 1
+
+        # 일일 한도 초과 시 이후 사이클 전부 즉시 중단
+        if self._daily_limit_reached:
+            return
+
         logger.info("--- 장중 매매 사이클 #%d 시작 ---", self._cycle_count)
 
         if self._risk.check_daily_trade_limit(self._today_trade_count):
@@ -224,12 +232,15 @@ class TradingEngine:
             try:
                 await self._screen_stocks()
             except DailyLimitExceededError:
-                logger.warning("API 일일 한도 초과로 스크리닝 스킵")
+                self._daily_limit_reached = True
+                logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+                return
 
         try:
             balance = await self._get_balance()
         except DailyLimitExceededError:
-            logger.warning("API 일일 한도 초과, 사이클 스킵 (다음 날 초기화)")
+            self._daily_limit_reached = True
+            logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
             return
         except Exception:
             logger.exception("잔고 조회 실패, 사이클 스킵")
@@ -251,8 +262,9 @@ class TradingEngine:
                 holding_info = self._find_holding_from_balance(balance, stock_code)
                 await self._process_stock(stock_code, balance.deposit, is_held, holding_info)
             except DailyLimitExceededError:
-                logger.warning("API 일일 한도 초과, 나머지 종목 스킵")
-                break
+                self._daily_limit_reached = True
+                logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+                return
             except Exception:
                 logger.exception("종목 처리 중 에러: %s", stock_code)
 
@@ -309,6 +321,10 @@ class TradingEngine:
 
     async def _screen_stocks(self) -> None:
         """거래량 상위 종목을 스캔하여 매수 후보를 발굴한다."""
+        if len(self._screened_codes) >= MAX_SCREENED_STOCKS:
+            logger.info("스크리닝 발굴 종목 상한 도달 (%d종목), 스킵", len(self._screened_codes))
+            return
+
         logger.info("=== 종목 스크리닝 시작 ===")
 
         try:
@@ -317,9 +333,12 @@ class TradingEngine:
             logger.exception("거래량 순위 조회 실패")
             return
 
+        remaining_slots = MAX_SCREENED_STOCKS - len(self._screened_codes)
         new_candidates: list[str] = []
 
         for item in ranked:
+            if len(new_candidates) >= remaining_slots:
+                break
             if item.stock_code in self._fixed_watchlist:
                 continue
             if item.stock_code in self._screened_codes:
@@ -347,9 +366,10 @@ class TradingEngine:
 
         self._screened_codes.update(new_candidates)
         logger.info(
-            "=== 종목 스크리닝 완료: 신규 %d종목 발굴 (누적 %d종목) ===",
+            "=== 종목 스크리닝 완료: 신규 %d종목 발굴 (누적 %d/%d종목) ===",
             len(new_candidates),
             len(self._screened_codes),
+            MAX_SCREENED_STOCKS,
         )
 
     # ── 개별 종목 처리 ────────────────────────────────────

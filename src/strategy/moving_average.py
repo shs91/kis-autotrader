@@ -98,7 +98,7 @@ class MovingAverageStrategy(BaseStrategy):
         prev_long = long_ma.iloc[-2]
 
         # 괴리율 기반 신뢰도 계산
-        divergence_rate = abs(current_short - current_long) / current_long
+        divergence_rate = abs(current_short - current_long) / current_long if current_long != 0 else 0.0
         confidence = min(divergence_rate / MAX_DIVERGENCE_RATE, 1.0)
 
         current_price = float(market_data["close"].iloc[-1])
