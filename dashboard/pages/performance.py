@@ -92,7 +92,7 @@ weekly = perf_df.groupby(["year", "week"]).agg(
     trades=("execution_count", "sum"),
     days=("date", "count"),
 ).reset_index()
-weekly["label"] = weekly.apply(lambda r: f"{r['year']}-W{r['week']:02d}", axis=1)
+weekly["label"] = weekly.apply(lambda r: f"{int(r['year'])}-W{int(r['week']):02d}", axis=1)
 
 st.bar_chart(weekly.set_index("label")["total_pl"], color="#4CAF50")
 
