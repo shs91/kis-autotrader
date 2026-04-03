@@ -1,0 +1,71 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kis_trader}
+      POSTGRES_USER: ${POSTGRES_USER:-kis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kis}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kis}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kis_trader}
+      TZ: Asia/Seoul
+    volumes:
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+      - ./credentials.json:/app/credentials.json:ro
+      - ./token.json:/app/token.json
+      - ./holidays.json:/app/holidays.json:ro
+    ports:
+      - "${HEALTH_PORT:-8080}:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kis}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kis_trader}
+      TZ: Asia/Seoul
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
