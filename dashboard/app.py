@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date, timedelta
 
 import httpx
@@ -57,7 +56,7 @@ def fetch_health() -> dict | None:
 
 def load_portfolio() -> pd.DataFrame:
     """보유 포트폴리오를 조회한다."""
-    query = """
+    query = text("""
         SELECT s.code, s.name, p.quantity, p.avg_price, p.current_price,
                p.updated_at,
                CASE WHEN p.avg_price > 0
@@ -68,33 +67,36 @@ def load_portfolio() -> pd.DataFrame:
         JOIN stocks s ON s.id = p.stock_id
         WHERE p.quantity > 0
         ORDER BY profit_loss DESC
-    """
-    return pd.read_sql(query, get_engine())
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn)
 
 
 def load_daily_performance(days: int = 30) -> pd.DataFrame:
     """일일 성과를 조회한다."""
     since = date.today() - timedelta(days=days)
-    query = """
+    query = text("""
         SELECT date, total_profit_loss, profit_rate, execution_count, details
         FROM daily_performances
         WHERE date >= :since
         ORDER BY date
-    """
-    return pd.read_sql(query, get_engine(), params={"since": since})
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn, params={"since": since})
 
 
 def load_recent_orders(limit: int = 50) -> pd.DataFrame:
     """최근 주문 내역을 조회한다."""
-    query = """
+    query = text("""
         SELECT o.created_at, s.code, s.name, o.order_type, o.quantity, o.price,
                o.status, o.order_no
         FROM orders o
         JOIN stocks s ON s.id = o.stock_id
         ORDER BY o.created_at DESC
         LIMIT :limit
-    """
-    return pd.read_sql(query, get_engine(), params={"limit": limit})
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn, params={"limit": limit})
 
 
 # ── 헤더 ────────────────────────────────────────

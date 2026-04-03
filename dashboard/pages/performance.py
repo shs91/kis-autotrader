@@ -6,8 +6,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, text
 
 st.set_page_config(page_title="성과 분석", page_icon="\U0001f4ca", layout="wide")
 
@@ -23,24 +22,26 @@ def get_engine():  # noqa: ANN201
 
 def load_daily_performance(days: int) -> pd.DataFrame:
     since = date.today() - timedelta(days=days)
-    query = """
+    query = text("""
         SELECT date, total_profit_loss, profit_rate, execution_count
         FROM daily_performances
         WHERE date >= :since
         ORDER BY date
-    """
-    return pd.read_sql(query, get_engine(), params={"since": since})
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn, params={"since": since})
 
 
 def load_orders_with_stocks() -> pd.DataFrame:
-    query = """
+    query = text("""
         SELECT o.created_at, s.code, s.name, o.order_type, o.quantity, o.price, o.status
         FROM orders o
         JOIN stocks s ON s.id = o.stock_id
         WHERE o.status IN ('SUBMITTED', 'FILLED')
         ORDER BY o.created_at
-    """
-    return pd.read_sql(query, get_engine())
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn)
 
 
 # ── 페이지 ───────────────────────────────────────
