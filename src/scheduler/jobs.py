@@ -152,8 +152,27 @@ class TradingScheduler:
             return
         _run_async(self._engine.post_market())
 
+    @staticmethod
+    def _heartbeat() -> None:
+        """스케줄러 쓰레드 keepalive용 heartbeat.
+
+        APScheduler BackgroundScheduler는 다음 작업까지 threading.Event.wait()로
+        sleep하는데, macOS에서 장시간(수십 시간) sleep 시 쓰레드가 깨어나지 못하는
+        문제가 있다. 30분마다 깨워서 쓰레드를 활성 상태로 유지한다.
+        """
+
     def _register_jobs(self) -> None:
         """모든 스케줄 작업을 등록한다."""
+        # 스케줄러 쓰레드 keepalive (30분 간격)
+        self._scheduler.add_job(
+            func=self._heartbeat,
+            trigger="interval",
+            minutes=30,
+            id="heartbeat",
+            name="스케줄러 heartbeat",
+            replace_existing=True,
+        )
+
         # 장 시작 전 작업 (평일 08:30)
         self._scheduler.add_job(
             func=self.pre_market_job,

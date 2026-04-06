@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
+# launchd/cron 환경에서 누락될 수 있는 환경변수 설정
+export HOME="/Users/songhansu"
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
 PROJECT_DIR="$HOME/IdeaProjects/kis-autotrader"
 PROMPT_FILE="$PROJECT_DIR/scripts/auto_implement_prompt.txt"
 LOG_DIR="$PROJECT_DIR/logs"

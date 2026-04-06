@@ -5,6 +5,15 @@
 
 ---
 
+## [2026-04-06 18:04] 이동평균 전략 NaN 방어 로직 추가
+- 제안서: docs/proposals/2026-04-06_moving-average-nan-guard.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/strategy/moving_average.py: MA 값 NaN 체크 가드 추가 (math.isnan), NaN 시 HOLD 반환
+  - tests/test_strategy/test_moving_average.py: NaN 데이터 케이스 테스트 추가
+- 검증 결과: pytest ✅ (256 passed) | mypy ✅ (기존 에러만, 새 에러 없음) | ruff ✅ (기존 에러만, 새 에러 없음)
+- 프로세스 재시작: 예정
+
 ## [2026-04-03] T3-4 로그 구조화 저장
 - 신규: src/db/event_logger.py, alembic migration (event_logs 테이블)
 - 변경: src/db/models.py (EventLog, EventLevel), src/db/repository.py, src/engine.py, main.py, dashboard/app.py

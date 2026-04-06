@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from src.strategy.base import BaseStrategy, Signal, SignalType
@@ -96,6 +98,19 @@ class MovingAverageStrategy(BaseStrategy):
         current_long = long_ma.iloc[-1]
         prev_short = short_ma.iloc[-2]
         prev_long = long_ma.iloc[-2]
+
+        # NaN 방어: MA 값 중 하나라도 NaN이면 시그널 판단 불가
+        if any(math.isnan(v) for v in [current_short, current_long, prev_short, prev_long]):
+            logger.warning(
+                "MA 값에 NaN 포함 — HOLD 반환 (short: %s, long: %s)",
+                current_short,
+                current_long,
+            )
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                reason="이동평균 값에 NaN 포함 — 데이터 부족",
+            )
 
         # 괴리율 기반 신뢰도 계산
         divergence_rate = abs(current_short - current_long) / current_long if current_long != 0 else 0.0

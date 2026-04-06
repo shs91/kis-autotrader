@@ -1,7 +1,10 @@
 """이동평균 교차 전략 테스트."""
 
+import math
+
 import pytest
 import pandas as pd
+import numpy as np
 
 from src.strategy.base import SignalType
 from src.strategy.moving_average import MovingAverageStrategy
@@ -101,6 +104,18 @@ class TestMovingAverageAnalyze:
         assert signal.signal_type == SignalType.SELL
         assert signal.confidence > 0.0
         assert "데드크로스" in signal.reason
+
+    def test_nan_ma_values_return_hold(self) -> None:
+        """MA 값에 NaN이 포함되면 HOLD를 반환한다."""
+        strategy = self._make_strategy()
+
+        # 데이터 개수는 충분하지만(7개 >= 6개) 중간에 NaN이 있어
+        # rolling mean 결과에 NaN이 포함되는 경우
+        prices = [100.0, 102.0, float("nan"), 106.0, 108.0, 110.0, 112.0]
+        df = pd.DataFrame({"close": prices})
+        signal = strategy.analyze(df)
+        assert signal.signal_type == SignalType.HOLD
+        assert "NaN" in signal.reason
 
     def test_no_cross_hold_signal(self) -> None:
         """교차가 발생하지 않으면 HOLD를 반환한다."""

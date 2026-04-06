@@ -113,6 +113,16 @@ def _register_bot_commands(
         except Exception as e:
             return f"❌ 조회 실패: {e!s:.100}"
 
+    async def cmd_restart(_args: str) -> str:
+        """시스템을 재시작한다 (launchd가 자동 재시작)."""
+        import os
+
+        logger.info("Telegram 명령으로 재시작 요청")
+        await notifier.notify_system("재시작 요청 수신, 종료 후 자동 재시작됩니다")
+        # KeepAlive=true이므로 SIGTERM 후 launchd가 자동 재시작
+        asyncio.get_event_loop().call_later(1.0, os.kill, os.getpid(), signal.SIGTERM)
+        return "재시작 중... (약 10초 후 복귀)"
+
     async def cmd_help(_args: str) -> str:
         """사용 가능한 명령을 반환한다."""
         return (
@@ -123,6 +133,7 @@ def _register_bot_commands(
             "/watch 종목코드 — 관심종목 추가\n"
             "/unwatch 종목코드 — 관심종목 제거\n"
             "/watchlist — 관심종목 목록\n"
+            "/restart — 시스템 재시작\n"
             "/help — 명령어 목록"
         )
 
@@ -132,6 +143,7 @@ def _register_bot_commands(
     bot.register("watch", cmd_watch)
     bot.register("unwatch", cmd_unwatch)
     bot.register("watchlist", cmd_watchlist)
+    bot.register("restart", cmd_restart)
     bot.register("help", cmd_help)
 
 

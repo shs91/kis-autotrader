@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+
 PROJECT_DIR="$HOME/IdeaProjects/kis-autotrader"
 BACKUP_DIR="$PROJECT_DIR/backups"
 CONTAINER_NAME="kis-postgres"
