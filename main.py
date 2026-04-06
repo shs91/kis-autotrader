@@ -5,11 +5,23 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
-from datetime import date
+from datetime import date, timedelta
+
+from sqlalchemy import case as sa_case
+from sqlalchemy import func as sa_func
+from sqlalchemy import select as sa_select
 
 from src.api.health import HealthServer
 from src.config import settings
+from src.db.analytics import (
+    get_daily_screening,
+    get_daily_trades,
+    get_optimal_risk_params,
+    get_signal_accuracy,
+)
 from src.db.event_logger import log_system
+from src.db.models import Signal as SignalModel
+from src.db.models import Trade, TradeType
 from src.db.repository import WatchlistRepository
 from src.db.session import get_session, init_db
 from src.engine import TradingEngine
@@ -25,6 +37,7 @@ def _register_bot_commands(
     bot: TelegramBot,
     engine: TradingEngine,
     scheduler: TradingScheduler,
+    notifier: TelegramNotifier,
 ) -> None:
     """Telegram 봇 명령을 등록한다."""
 
@@ -113,6 +126,235 @@ def _register_bot_commands(
         except Exception as e:
             return f"❌ 조회 실패: {e!s:.100}"
 
+    async def cmd_trades(_args: str) -> str:
+        """당일 체결 상세를 반환한다."""
+        try:
+            with get_session() as session:
+                trades = get_daily_trades(session, date.today())
+            if not trades:
+                return "<b>[당일 체결]</b> 체결 내역 없음"
+
+            buys = [t for t in trades if t["trade_type"] == "BUY"]
+            sells = [t for t in trades if t["trade_type"] == "SELL"]
+            total_pnl = sum(t["profit_loss_amount"] or 0 for t in sells)
+
+            lines = [
+                f"<b>[당일 체결]</b> {date.today()}",
+                f"매수 {len(buys)}건 / 매도 {len(sells)}건"
+                f" / 실현손익 {total_pnl:+,}원",
+                "",
+            ]
+            for t in trades[-15:]:  # 최근 15건
+                base = (
+                    f"{t['stock_name']}({t['stock_code']}) "
+                    f"{t['trade_type']} {t['quantity']}주 "
+                    f"@{t['price']:,}"
+                )
+                if t["trade_type"] == "SELL" and t["sell_reason"]:
+                    reason = {
+                        "STOP_LOSS": "손절",
+                        "TAKE_PROFIT": "익절",
+                        "STRATEGY": "전략",
+                        "MANUAL": "수동",
+                    }.get(t["sell_reason"], t["sell_reason"])
+                    pct = t["profit_loss_pct"]
+                    pct_str = f" {pct:+.2f}%" if pct is not None else ""
+                    base += f" {reason}{pct_str}"
+                lines.append(base)
+
+            if len(trades) > 15:
+                lines.append(f"... 외 {len(trades) - 15}건")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ 체결 조회 실패: {e!s:.100}"
+
+    async def cmd_pnl(args: str) -> str:
+        """기간 손익 요약을 반환한다."""
+        try:
+            days_str = args.strip()
+            days = int(days_str) if days_str else 7
+            days = max(1, min(days, 90))
+
+            with get_session() as session:
+                since = date.today() - timedelta(days=days)
+                rows = session.execute(
+                    sa_select(
+                        sa_func.cast(
+                            sa_func.date_trunc('day', Trade.traded_at),
+                            Trade.traded_at.type,
+                        ).label("day"),
+                        sa_func.coalesce(
+                            sa_func.sum(Trade.profit_loss_amount),
+                            0,
+                        ).label("pnl"),
+                    )
+                    .where(
+                        Trade.traded_at >= since,
+                        Trade.trade_type == TradeType.SELL,
+                    )
+                    .group_by("day")
+                    .order_by("day")
+                ).all()
+
+            if not rows:
+                return f"<b>[손익]</b> 최근 {days}일 매도 내역 없음"
+
+            daily = [(r.day, int(r.pnl)) for r in rows]
+            total = sum(pnl for _, pnl in daily)
+            wins = sum(1 for _, pnl in daily if pnl > 0)
+            losses = sum(1 for _, pnl in daily if pnl < 0)
+            best = max(daily, key=lambda x: x[1])
+            worst = min(daily, key=lambda x: x[1])
+            win_rate = (wins / len(daily) * 100) if daily else 0
+
+            lines = [
+                f"<b>[손익 요약]</b> 최근 {days}일",
+                f"총 실현손익: {total:+,}원",
+                f"승률: {win_rate:.0f}% ({wins}승 {losses}패)",
+                f"최대 수익: {best[1]:+,} ({best[0].strftime('%m/%d')})",
+                f"최대 손실: {worst[1]:+,} ({worst[0].strftime('%m/%d')})",
+            ]
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ 손익 조회 실패: {e!s:.100}"
+
+    async def cmd_signals(_args: str) -> str:
+        """당일 시그널 현황을 반환한다."""
+        try:
+            with get_session() as session:
+                accuracy = get_signal_accuracy(session, date.today())
+
+            total = accuracy["total_signals"]
+            if total == 0:
+                return "<b>[시그널]</b> 당일 시그널 없음"
+
+            acted = accuracy["acted_count"]
+            confirmed = accuracy["confirmed_count"]
+            acc_rate = accuracy["accuracy_rate"]
+
+            # 유형별 상세
+            with get_session() as session:
+                from datetime import datetime as dt_cls
+                today = date.today()
+                start = dt_cls(today.year, today.month, today.day)
+                end = start + timedelta(days=1)
+                rows = session.execute(
+                    sa_select(
+                        SignalModel.signal_type,
+                        sa_func.count().label("cnt"),
+                        sa_func.sum(sa_case(
+                            (SignalModel.action_taken.is_(True), 1),
+                            else_=0,
+                        )).label("acted"),
+                        sa_func.round(
+                            sa_func.avg(SignalModel.confidence), 2
+                        ).label("avg_conf"),
+                    )
+                    .where(
+                        SignalModel.detected_at >= start,
+                        SignalModel.detected_at < end,
+                    )
+                    .group_by(SignalModel.signal_type)
+                    .order_by(sa_func.count().desc())
+                ).all()
+
+            lines = [
+                f"<b>[당일 시그널]</b> {date.today()}",
+            ]
+            for r in rows:
+                lines.append(
+                    f"{r.signal_type}: {r.cnt}건"
+                    f" (실행 {int(r.acted)}건,"
+                    f" 신뢰도 {float(r.avg_conf):.2f})"
+                )
+            lines.append(
+                f"\n총 {total}건, 실행 {acted}건,"
+                f" 체결확인 {confirmed}건 ({acc_rate:.0f}%)"
+            )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ 시그널 조회 실패: {e!s:.100}"
+
+    async def cmd_risk(args: str) -> str:
+        """리스크 현황을 반환한다."""
+        try:
+            days_str = args.strip()
+            days = int(days_str) if days_str else 30
+            days = max(1, min(days, 90))
+
+            with get_session() as session:
+                result = get_optimal_risk_params(session, lookback_days=days)
+
+            if result["total_sells"] == 0:
+                return f"<b>[리스크]</b> 최근 {days}일 매도 내역 없음"
+
+            sl = result["stop_loss"]
+            tp = result["take_profit"]
+            st_sell = result["strategy"]
+            rec = result["recommendation"]
+
+            lines = [
+                f"<b>[리스크 현황]</b> 최근 {days}일",
+            ]
+            if sl["count"] > 0:
+                lines.append(
+                    f"손절: {sl['count']}건,"
+                    f" 평균 {sl['avg']:+.2f}%"
+                )
+            if tp["count"] > 0:
+                lines.append(
+                    f"익절: {tp['count']}건,"
+                    f" 평균 {tp['avg']:+.2f}%"
+                )
+            if st_sell["count"] > 0:
+                lines.append(
+                    f"전략매도: {st_sell['count']}건,"
+                    f" 평균 {st_sell['avg']:+.2f}%"
+                )
+            lines.append(
+                f"\n<b>권장</b>: 손절 {rec['stop_loss_rate'] * 100:.1f}%"
+                f" / 익절 {rec['take_profit_rate'] * 100:.1f}%"
+            )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ 리스크 조회 실패: {e!s:.100}"
+
+    async def cmd_screen(_args: str) -> str:
+        """스크리닝 현황을 반환한다."""
+        try:
+            with get_session() as session:
+                today_data = get_daily_screening(session, date.today())
+
+            total = today_data["total_screened"]
+            converted = today_data["converted_count"]
+            rate = today_data["conversion_rate"]
+
+            # 최근 7일 평균
+            with get_session() as session:
+                week_total = 0
+                week_converted = 0
+                for i in range(7):
+                    d = date.today() - timedelta(days=i)
+                    day_data = get_daily_screening(session, d)
+                    week_total += day_data["total_screened"]
+                    week_converted += day_data["converted_count"]
+
+            week_rate = (
+                week_converted / week_total * 100
+            ) if week_total > 0 else 0
+
+            lines = [
+                f"<b>[스크리닝]</b> {date.today()}",
+                f"스캔: {total}종목,"
+                f" 발굴→매매: {converted}종목"
+                f" ({rate:.1f}%)",
+                f"최근 7일 평균 전환율: {week_rate:.1f}%"
+                f" ({week_converted}/{week_total})",
+            ]
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ 스크리닝 조회 실패: {e!s:.100}"
+
     async def cmd_restart(_args: str) -> str:
         """시스템을 재시작한다 (launchd가 자동 재시작)."""
         import os
@@ -130,6 +372,11 @@ def _register_bot_commands(
             "/status — 시스템 상태\n"
             "/balance — 잔고 조회\n"
             "/today — 당일 현황\n"
+            "/trades — 당일 체결 상세\n"
+            "/pnl [일수] — 기간 손익 요약\n"
+            "/signals — 당일 시그널 현황\n"
+            "/risk [일수] — 리스크 현황\n"
+            "/screen — 스크리닝 현황\n"
             "/watch 종목코드 — 관심종목 추가\n"
             "/unwatch 종목코드 — 관심종목 제거\n"
             "/watchlist — 관심종목 목록\n"
@@ -140,6 +387,11 @@ def _register_bot_commands(
     bot.register("status", cmd_status)
     bot.register("balance", cmd_balance)
     bot.register("today", cmd_today)
+    bot.register("trades", cmd_trades)
+    bot.register("pnl", cmd_pnl)
+    bot.register("signals", cmd_signals)
+    bot.register("risk", cmd_risk)
+    bot.register("screen", cmd_screen)
     bot.register("watch", cmd_watch)
     bot.register("unwatch", cmd_unwatch)
     bot.register("watchlist", cmd_watchlist)
@@ -186,7 +438,7 @@ async def main() -> None:
 
     # Telegram Bot 시작
     bot = TelegramBot()
-    _register_bot_commands(bot, engine, scheduler)
+    _register_bot_commands(bot, engine, scheduler, notifier)
     await bot.start()
 
     await notifier.notify_system(f"자동매매 시스템 가동 ({settings.kis.env})")
