@@ -85,6 +85,58 @@ def load_daily_performance(days: int = 30) -> pd.DataFrame:
         return pd.read_sql(query, conn, params={"since": since})
 
 
+def load_today_trades() -> pd.DataFrame:
+    """당일 체결 내역(trades 테이블)을 조회한다."""
+    today = date.today()
+    query = text("""
+        SELECT traded_at, stock_code, stock_name, trade_type,
+               quantity, price, total_amount,
+               sell_reason, signal_type,
+               profit_loss_pct, profit_loss_amount, cycle_number
+        FROM trades
+        WHERE traded_at >= :today
+        ORDER BY traded_at DESC
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn, params={"today": today})
+
+
+def load_today_summary() -> pd.Series | None:
+    """당일 일일 요약(daily_summary)을 조회한다."""
+    today = date.today()
+    query = text("""
+        SELECT report_date, total_buy_count, total_sell_count,
+               total_profit_loss, win_rate,
+               stop_loss_count, take_profit_count, strategy_sell_count,
+               screening_count, screening_conversion_count,
+               error_count, cycle_count
+        FROM daily_summary
+        WHERE report_date = :today
+    """)
+    with get_engine().connect() as conn:
+        df = pd.read_sql(query, conn, params={"today": today})
+    if df.empty:
+        return None
+    return df.iloc[0]
+
+
+def load_today_signals_summary() -> pd.DataFrame:
+    """당일 시그널 유형별 요약을 조회한다."""
+    today = date.today()
+    query = text("""
+        SELECT signal_type,
+               COUNT(*) AS total,
+               SUM(CASE WHEN action_taken THEN 1 ELSE 0 END) AS acted,
+               ROUND(AVG(confidence)::numeric, 2) AS avg_confidence
+        FROM signals
+        WHERE detected_at >= :today
+        GROUP BY signal_type
+        ORDER BY total DESC
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn, params={"today": today})
+
+
 def load_recent_orders(limit: int = 50) -> pd.DataFrame:
     """최근 주문 내역을 조회한다."""
     query = text("""
@@ -128,6 +180,31 @@ else:
 
 st.divider()
 
+# ── 당일 매매 요약 (daily_summary) ────────────────
+
+st.subheader("\U0001f4ca 당일 매매 요약")
+
+summary = load_today_summary()
+
+if summary is not None:
+    sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
+    sc1.metric("매수", f"{int(summary['total_buy_count'])}건")
+    sc2.metric("매도", f"{int(summary['total_sell_count'])}건")
+    total_pl = int(summary["total_profit_loss"])
+    sc3.metric("실현손익", f"{total_pl:,}원",
+               delta=f"승률 {summary['win_rate'] * 100:.0f}%")
+    sc4.metric("손절/익절/전략",
+               f"{int(summary['stop_loss_count'])}/{int(summary['take_profit_count'])}/{int(summary['strategy_sell_count'])}")
+    sc5.metric("스크리닝",
+               f"{int(summary['screening_count'])}건",
+               delta=f"전환 {int(summary['screening_conversion_count'])}건")
+    sc6.metric("에러/사이클",
+               f"{int(summary['error_count'])}/{int(summary['cycle_count'])}")
+else:
+    st.info("당일 요약 데이터가 없습니다. 장 마감 후 자동 집계됩니다.")
+
+st.divider()
+
 # ── 보유 포트폴리오 ──────────────────────────────
 
 st.subheader("\U0001f4bc 보유 포트폴리오")
@@ -137,7 +214,6 @@ portfolio_df = load_portfolio()
 if portfolio_df.empty:
     st.info("보유 종목이 없습니다.")
 else:
-    # 요약 지표
     total_pl = portfolio_df["profit_loss"].sum()
     total_eval = (portfolio_df["quantity"] * portfolio_df["current_price"]).sum()
     total_cost = (portfolio_df["quantity"] * portfolio_df["avg_price"]).sum()
@@ -149,24 +225,96 @@ else:
     pcol3.metric("총 평가금액", f"{total_eval:,.0f}원")
 
     st.dataframe(
-        portfolio_df[["code", "name", "quantity", "avg_price", "current_price", "profit_rate", "profit_loss"]].rename(
-            columns={
-                "code": "종목코드",
-                "name": "종목명",
-                "quantity": "수량",
-                "avg_price": "평균가",
-                "current_price": "현재가",
-                "profit_rate": "수익률(%)",
-                "profit_loss": "평가손익",
-            }
-        ),
+        portfolio_df[[
+            "code", "name", "quantity", "avg_price",
+            "current_price", "profit_rate", "profit_loss",
+        ]].rename(columns={
+            "code": "종목코드", "name": "종목명", "quantity": "수량",
+            "avg_price": "평균가", "current_price": "현재가",
+            "profit_rate": "수익률(%)", "profit_loss": "평가손익",
+        }),
         use_container_width=True,
         hide_index=True,
     )
 
 st.divider()
 
-# ── 일일 성과 ────────────────────────────────────
+# ── 당일 체결 내역 (trades) ──────────────────────
+
+st.subheader("\U0001f4b9 당일 체결 내역")
+
+trades_df = load_today_trades()
+
+if trades_df.empty:
+    st.info("당일 체결 내역이 없습니다.")
+else:
+    # 매수/매도 탭
+    buy_tab, sell_tab, all_tab = st.tabs(["매수", "매도", "전체"])
+
+    col_map = {
+        "traded_at": "시각", "stock_code": "종목코드", "stock_name": "종목명",
+        "trade_type": "유형", "quantity": "수량", "price": "가격",
+        "total_amount": "체결금액", "sell_reason": "매도사유",
+        "signal_type": "시그널", "profit_loss_pct": "수익률(%)",
+        "profit_loss_amount": "손익금액",
+    }
+
+    with buy_tab:
+        buy_df = trades_df[trades_df["trade_type"] == "BUY"]
+        if buy_df.empty:
+            st.info("매수 내역 없음")
+        else:
+            st.dataframe(
+                buy_df[["traded_at", "stock_code", "stock_name",
+                         "quantity", "price", "total_amount"]].rename(columns=col_map),
+                use_container_width=True, hide_index=True,
+            )
+
+    with sell_tab:
+        sell_df = trades_df[trades_df["trade_type"] == "SELL"]
+        if sell_df.empty:
+            st.info("매도 내역 없음")
+        else:
+            st.dataframe(
+                sell_df[["traded_at", "stock_code", "stock_name", "quantity",
+                          "price", "sell_reason", "profit_loss_pct",
+                          "profit_loss_amount"]].rename(columns=col_map),
+                use_container_width=True, hide_index=True,
+            )
+
+    with all_tab:
+        st.dataframe(
+            trades_df[["traded_at", "stock_code", "stock_name", "trade_type",
+                        "quantity", "price", "total_amount", "sell_reason",
+                        "profit_loss_pct", "profit_loss_amount"]].rename(columns=col_map),
+            use_container_width=True, hide_index=True,
+        )
+
+st.divider()
+
+# ── 당일 시그널 현황 ─────────────────────────────
+
+st.subheader("\U0001f4e1 당일 시그널 현황")
+
+signals_summary = load_today_signals_summary()
+
+if signals_summary.empty:
+    st.info("당일 시그널이 없습니다.")
+else:
+    st.dataframe(
+        signals_summary.rename(columns={
+            "signal_type": "시그널 유형",
+            "total": "발생",
+            "acted": "실행",
+            "avg_confidence": "평균 신뢰도",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+st.divider()
+
+# ── 일일 성과 추이 ───────────────────────────────
 
 st.subheader("\U0001f4c5 일일 성과 추이")
 
@@ -177,8 +325,6 @@ if perf_df.empty:
     st.info("성과 데이터가 없습니다.")
 else:
     perf_df["date"] = pd.to_datetime(perf_df["date"])
-
-    # 누적 수익률 계산
     perf_df["cumulative_pl"] = perf_df["total_profit_loss"].cumsum()
 
     chart_col1, chart_col2 = st.columns(2)
@@ -191,7 +337,6 @@ else:
         st.caption("누적 손익 (원)")
         st.line_chart(perf_df.set_index("date")["cumulative_pl"], color="#2196F3")
 
-    # 성과 요약
     scol1, scol2, scol3, scol4 = st.columns(4)
     scol1.metric("총 손익", f"{perf_df['total_profit_loss'].sum():,.0f}원")
     scol2.metric("총 체결", f"{perf_df['execution_count'].sum():,}건")
@@ -200,35 +345,8 @@ else:
 
 st.divider()
 
-# ── 최근 주문 내역 ───────────────────────────────
-
-st.subheader("\U0001f4cb 최근 주문 내역")
-
-orders_df = load_recent_orders()
-
-if orders_df.empty:
-    st.info("주문 내역이 없습니다.")
-else:
-    st.dataframe(
-        orders_df.rename(
-            columns={
-                "created_at": "시각",
-                "code": "종목코드",
-                "name": "종목명",
-                "order_type": "유형",
-                "quantity": "수량",
-                "price": "가격",
-                "status": "상태",
-                "order_no": "주문번호",
-            }
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
-
 # ── 이벤트 로그 ──────────────────────────────────
 
-st.divider()
 st.subheader("\U0001f4dd 이벤트 로그")
 
 event_query = text("""
@@ -245,10 +363,8 @@ try:
     else:
         st.dataframe(
             event_df.rename(columns={
-                "timestamp": "시각",
-                "level": "레벨",
-                "category": "분류",
-                "message": "내용",
+                "timestamp": "시각", "level": "레벨",
+                "category": "분류", "message": "내용",
             }),
             use_container_width=True,
             hide_index=True,
