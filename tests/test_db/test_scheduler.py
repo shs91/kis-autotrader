@@ -94,3 +94,19 @@ class TestTradingScheduler:
         """장 마감 후 작업이 에러 없이 실행된다."""
         scheduler = TradingScheduler()
         scheduler.post_market_job()
+
+    def test_summarize_daily_job_registered(self) -> None:
+        """일일 요약 집계 작업이 스케줄러에 등록된다."""
+        scheduler = TradingScheduler()
+        scheduler.start()
+
+        job_ids = [job.id for job in scheduler.scheduler.get_jobs()]
+        assert "summarize_daily_job" in job_ids
+
+        scheduler.shutdown()
+
+    def test_summarize_daily_job_runs(self) -> None:
+        """일일 요약 집계 작업이 에러 없이 실행된다."""
+        scheduler = TradingScheduler()
+        # DB 없어도 예외가 전파되지 않아야 한다
+        scheduler.summarize_daily_job()

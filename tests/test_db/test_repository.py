@@ -5,22 +5,42 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import JSON, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.db.models import Base, OrderStatus, OrderType
+from src.db.models import Base, OrderStatus, OrderType, SellReason, TradeType
 from src.db.repository import (
     DailyPerformanceRepository,
+    DailySummaryRepository,
     ExecutionRepository,
     OrderRepository,
     PortfolioRepository,
+    ScreeningResultRepository,
+    SignalRepository,
     StockRepository,
+    SystemMetricRepository,
+    TradeRepository,
 )
 
 
 @pytest.fixture()
 def session() -> Session:
-    """SQLite in-memory 세션을 생성한다."""
+    """SQLite in-memory 세션을 생성한다.
+
+    JSONB 컬럼을 SQLite에서도 동작하도록 JSON으로 렌더링한다.
+    """
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    from sqlalchemy import types as satypes
+
+    # SQLite 컴파일러에 JSONB를 JSON으로 렌더링하는 방법 등록
+    from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
+
+    if not hasattr(SQLiteTypeCompiler, "visit_JSONB"):
+        def visit_jsonb(self, type_, **kw):  # type: ignore[no-untyped-def]
+            return "JSON"
+        SQLiteTypeCompiler.visit_JSONB = visit_jsonb  # type: ignore[attr-defined]
+
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -263,3 +283,317 @@ class TestDailyPerformanceRepository:
         # 최신순 정렬 확인
         if len(recent) >= 2:
             assert recent[0].date >= recent[1].date
+
+
+class TestTradeRepository:
+    """TradeRepository 테스트."""
+
+    def test_record_trade_buy(self, session: Session) -> None:
+        """매수 체결을 기록한다."""
+        repo = TradeRepository(session)
+        trade = repo.record_trade(
+            stock_code="005930",
+            stock_name="삼성전자",
+            trade_type=TradeType.BUY,
+            quantity=10,
+            price=70000,
+            total_amount=700000,
+            traded_at=datetime(2026, 4, 7, 9, 30, 0),
+            cycle_number=1,
+        )
+        session.commit()
+
+        assert trade.id is not None
+        assert trade.trade_type == TradeType.BUY
+        assert trade.total_amount == 700000
+        assert trade.sell_reason is None
+
+    def test_record_trade_sell(self, session: Session) -> None:
+        """매도 체결을 기록한다 (손익 포함)."""
+        repo = TradeRepository(session)
+        trade = repo.record_trade(
+            stock_code="005930",
+            stock_name="삼성전자",
+            trade_type=TradeType.SELL,
+            quantity=10,
+            price=72000,
+            total_amount=720000,
+            traded_at=datetime(2026, 4, 7, 14, 0, 0),
+            cycle_number=1,
+            sell_reason=SellReason.TAKE_PROFIT,
+            signal_type="GOLDEN_CROSS",
+            profit_loss_pct=2.86,
+            profit_loss_amount=20000,
+        )
+        session.commit()
+
+        assert trade.sell_reason == SellReason.TAKE_PROFIT
+        assert trade.profit_loss_pct == 2.86
+        assert trade.profit_loss_amount == 20000
+
+    def test_get_trades_by_date(self, session: Session) -> None:
+        """날짜별 체결 내역을 조회한다."""
+        repo = TradeRepository(session)
+        repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.BUY, quantity=10, price=70000,
+            total_amount=700000, traded_at=datetime(2026, 4, 7, 9, 30),
+        )
+        repo.record_trade(
+            stock_code="000660", stock_name="SK하이닉스",
+            trade_type=TradeType.BUY, quantity=5, price=120000,
+            total_amount=600000, traded_at=datetime(2026, 4, 7, 10, 0),
+        )
+        # 다른 날짜
+        repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.SELL, quantity=10, price=72000,
+            total_amount=720000, traded_at=datetime(2026, 4, 8, 9, 30),
+        )
+        session.commit()
+
+        trades = repo.get_trades_by_date(date(2026, 4, 7))
+        assert len(trades) == 2
+
+    def test_get_trades_by_stock(self, session: Session) -> None:
+        """종목별 체결 내역을 조회한다."""
+        repo = TradeRepository(session)
+        repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.BUY, quantity=10, price=70000,
+            total_amount=700000, traded_at=datetime(2026, 4, 7, 9, 30),
+        )
+        repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.SELL, quantity=10, price=72000,
+            total_amount=720000, traded_at=datetime(2026, 4, 7, 14, 0),
+        )
+        session.commit()
+
+        trades = repo.get_trades_by_stock("005930")
+        assert len(trades) == 2
+        # 최신순
+        assert trades[0].traded_at > trades[1].traded_at
+
+
+class TestSignalRepository:
+    """SignalRepository 테스트."""
+
+    def test_record_signal(self, session: Session) -> None:
+        """시그널을 기록한다."""
+        repo = SignalRepository(session)
+        signal = repo.record_signal(
+            stock_code="005930",
+            stock_name="삼성전자",
+            signal_type="GOLDEN_CROSS",
+            detected_at=datetime(2026, 4, 7, 9, 15),
+            signal_value={"ma5": 70000, "ma20": 68000},
+            confidence=0.85,
+            action_taken=True,
+        )
+        session.commit()
+
+        assert signal.id is not None
+        assert signal.signal_type == "GOLDEN_CROSS"
+        assert signal.confidence == 0.85
+        assert signal.action_taken is True
+
+    def test_get_signals_by_date(self, session: Session) -> None:
+        """날짜별 시그널을 조회한다."""
+        repo = SignalRepository(session)
+        repo.record_signal(
+            stock_code="005930", stock_name="삼성전자",
+            signal_type="GOLDEN_CROSS",
+            detected_at=datetime(2026, 4, 7, 9, 15),
+        )
+        repo.record_signal(
+            stock_code="000660", stock_name="SK하이닉스",
+            signal_type="RSI_OVERSOLD",
+            detected_at=datetime(2026, 4, 7, 10, 0),
+        )
+        session.commit()
+
+        signals = repo.get_signals_by_date(date(2026, 4, 7))
+        assert len(signals) == 2
+
+
+class TestScreeningResultRepository:
+    """ScreeningResultRepository 테스트."""
+
+    def test_record_screening(self, session: Session) -> None:
+        """스크리닝 결과를 기록한다."""
+        repo = ScreeningResultRepository(session)
+        result = repo.record_screening(
+            stock_code="005930",
+            stock_name="삼성전자",
+            screening_rank=1,
+            volume=5000000,
+            price_change_pct=3.5,
+            screened_at=datetime(2026, 4, 7, 9, 0),
+            cycle_number=1,
+        )
+        session.commit()
+
+        assert result.id is not None
+        assert result.screening_rank == 1
+        assert result.volume == 5000000
+        assert result.converted_to_trade is False
+
+    def test_get_by_cycle(self, session: Session) -> None:
+        """사이클별 스크리닝 결과를 조회한다."""
+        repo = ScreeningResultRepository(session)
+        repo.record_screening(
+            stock_code="005930", stock_name="삼성전자",
+            screening_rank=1, volume=5000000, price_change_pct=3.5,
+            screened_at=datetime(2026, 4, 7, 9, 0), cycle_number=1,
+        )
+        repo.record_screening(
+            stock_code="000660", stock_name="SK하이닉스",
+            screening_rank=2, volume=3000000, price_change_pct=2.1,
+            screened_at=datetime(2026, 4, 7, 9, 0), cycle_number=1,
+        )
+        repo.record_screening(
+            stock_code="035420", stock_name="NAVER",
+            screening_rank=1, volume=1000000, price_change_pct=1.0,
+            screened_at=datetime(2026, 4, 7, 10, 0), cycle_number=2,
+        )
+        session.commit()
+
+        cycle1 = repo.get_by_cycle(1)
+        assert len(cycle1) == 2
+        assert cycle1[0].screening_rank == 1  # rank 순
+
+        cycle2 = repo.get_by_cycle(2)
+        assert len(cycle2) == 1
+
+
+class TestSystemMetricRepository:
+    """SystemMetricRepository 테스트."""
+
+    def test_record_metric(self, session: Session) -> None:
+        """시스템 메트릭을 기록한다."""
+        repo = SystemMetricRepository(session)
+        metric = repo.record_metric(
+            metric_type="CYCLE_START",
+            detail={"cycle": 1, "stocks": ["005930", "000660"]},
+            recorded_at=datetime(2026, 4, 7, 9, 0),
+        )
+        session.commit()
+
+        assert metric.id is not None
+        assert metric.metric_type == "CYCLE_START"
+
+    def test_get_by_type(self, session: Session) -> None:
+        """메트릭 유형으로 조회한다."""
+        repo = SystemMetricRepository(session)
+        repo.record_metric("CYCLE_START", recorded_at=datetime(2026, 4, 7, 9, 0))
+        repo.record_metric("CYCLE_END", recorded_at=datetime(2026, 4, 7, 9, 5))
+        repo.record_metric("ERROR", detail={"msg": "timeout"}, recorded_at=datetime(2026, 4, 7, 9, 3))
+        session.commit()
+
+        starts = repo.get_by_type("CYCLE_START")
+        assert len(starts) == 1
+        errors = repo.get_by_type("ERROR")
+        assert len(errors) == 1
+
+    def test_get_by_type_with_since(self, session: Session) -> None:
+        """since 필터로 메트릭을 조회한다."""
+        repo = SystemMetricRepository(session)
+        repo.record_metric("ERROR", recorded_at=datetime(2026, 4, 6, 9, 0))
+        repo.record_metric("ERROR", recorded_at=datetime(2026, 4, 7, 9, 0))
+        session.commit()
+
+        errors = repo.get_by_type("ERROR", since=datetime(2026, 4, 7, 0, 0))
+        assert len(errors) == 1
+
+
+class TestDailySummaryRepository:
+    """DailySummaryRepository 테스트."""
+
+    def test_upsert_daily_summary_empty(self, session: Session) -> None:
+        """매매 없는 날 요약을 생성한다."""
+        repo = DailySummaryRepository(session)
+        summary = repo.upsert_daily_summary(date(2026, 4, 7))
+        session.commit()
+
+        assert summary.id is not None
+        assert summary.total_buy_count == 0
+        assert summary.total_sell_count == 0
+        assert summary.total_profit_loss == 0
+
+    def test_upsert_daily_summary_with_trades(self, session: Session) -> None:
+        """매매 데이터가 있을 때 정확히 집계한다."""
+        trade_repo = TradeRepository(session)
+        trade_repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.BUY, quantity=10, price=70000,
+            total_amount=700000, traded_at=datetime(2026, 4, 7, 9, 30),
+            cycle_number=1,
+        )
+        trade_repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.SELL, quantity=10, price=72000,
+            total_amount=720000, traded_at=datetime(2026, 4, 7, 14, 0),
+            cycle_number=1, sell_reason=SellReason.TAKE_PROFIT,
+            profit_loss_amount=20000, profit_loss_pct=2.86,
+        )
+        trade_repo.record_trade(
+            stock_code="000660", stock_name="SK하이닉스",
+            trade_type=TradeType.BUY, quantity=5, price=120000,
+            total_amount=600000, traded_at=datetime(2026, 4, 7, 10, 0),
+            cycle_number=1,
+        )
+        trade_repo.record_trade(
+            stock_code="000660", stock_name="SK하이닉스",
+            trade_type=TradeType.SELL, quantity=5, price=118000,
+            total_amount=590000, traded_at=datetime(2026, 4, 7, 14, 30),
+            cycle_number=1, sell_reason=SellReason.STOP_LOSS,
+            profit_loss_amount=-10000, profit_loss_pct=-1.67,
+        )
+        session.flush()
+
+        repo = DailySummaryRepository(session)
+        summary = repo.upsert_daily_summary(date(2026, 4, 7))
+        session.commit()
+
+        assert summary.total_buy_count == 2
+        assert summary.total_sell_count == 2
+        assert summary.total_profit_loss == 10000  # 20000 + (-10000)
+        assert summary.win_rate == 0.5  # 1 win / 2 sells
+        assert summary.take_profit_count == 1
+        assert summary.stop_loss_count == 1
+
+    def test_upsert_updates_existing(self, session: Session) -> None:
+        """기존 요약이 있으면 갱신한다."""
+        repo = DailySummaryRepository(session)
+        summary1 = repo.upsert_daily_summary(date(2026, 4, 7))
+        session.flush()
+        first_id = summary1.id
+
+        # 매매 추가 후 재집계
+        trade_repo = TradeRepository(session)
+        trade_repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.BUY, quantity=10, price=70000,
+            total_amount=700000, traded_at=datetime(2026, 4, 7, 9, 30),
+        )
+        session.flush()
+
+        summary2 = repo.upsert_daily_summary(date(2026, 4, 7))
+        session.commit()
+
+        assert summary2.id == first_id  # 같은 레코드
+        assert summary2.total_buy_count == 1
+
+    def test_get_by_date(self, session: Session) -> None:
+        """날짜로 요약을 조회한다."""
+        repo = DailySummaryRepository(session)
+        repo.upsert_daily_summary(date(2026, 4, 7))
+        session.commit()
+
+        found = repo.get_by_date(date(2026, 4, 7))
+        assert found is not None
+        assert found.report_date == date(2026, 4, 7)
+
+        not_found = repo.get_by_date(date(2026, 4, 8))
+        assert not_found is None

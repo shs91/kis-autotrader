@@ -28,6 +28,8 @@ PRE_MARKET_HOUR = 8
 PRE_MARKET_MINUTE = 30
 POST_MARKET_HOUR = 15
 POST_MARKET_MINUTE = 40
+SUMMARY_HOUR = 16
+SUMMARY_MINUTE = 0
 MISFIRE_GRACE_TIME = 60
 MAX_INSTANCES = 1
 
@@ -153,6 +155,35 @@ class TradingScheduler:
         _run_async(self._engine.post_market())
 
     @staticmethod
+    def summarize_daily_job() -> None:
+        """일일 요약 집계 작업 (16:00).
+
+        trades, signals, screening_results, system_metrics를 집계하여
+        daily_summary 테이블에 UPSERT한다. 이미 존재하면 덮어쓴다.
+        """
+        if is_market_closed():
+            logger.info("휴장일이므로 일일 요약 집계 스킵")
+            return
+
+        try:
+            from src.db.repository import DailySummaryRepository
+            from src.db.session import get_session
+
+            today = date.today()
+            with get_session() as session:
+                repo = DailySummaryRepository(session)
+                summary = repo.upsert_daily_summary(today)
+                logger.info(
+                    "일일 요약 집계 완료: %s (매수=%d, 매도=%d, 손익=%d)",
+                    today,
+                    summary.total_buy_count,
+                    summary.total_sell_count,
+                    summary.total_profit_loss,
+                )
+        except Exception:
+            logger.exception("일일 요약 집계 실패 (매매에 영향 없음)")
+
+    @staticmethod
     def _heartbeat() -> None:
         """스케줄러 쓰레드 keepalive용 heartbeat.
 
@@ -270,6 +301,23 @@ class TradingScheduler:
             "장 마감 후 작업 등록: 평일 %02d:%02d",
             POST_MARKET_HOUR,
             POST_MARKET_MINUTE,
+        )
+
+        # 일일 요약 집계 작업 (평일 16:00)
+        self._scheduler.add_job(
+            func=self.summarize_daily_job,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=SUMMARY_HOUR,
+            minute=SUMMARY_MINUTE,
+            id="summarize_daily_job",
+            name="일일 요약 집계",
+            replace_existing=True,
+        )
+        logger.info(
+            "일일 요약 집계 등록: 평일 %02d:%02d",
+            SUMMARY_HOUR,
+            SUMMARY_MINUTE,
         )
 
     def start(self) -> None:

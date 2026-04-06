@@ -157,6 +157,243 @@ ruff check src/
 [제안서 작성이 필요한 항목 — 이 섹션의 내용을 proposals/로 분리 작성]
 ```
 
+## 분석 쿼리 출력 포맷 (query_analytics.py)
+
+Cowork가 리포트/제안서를 작성할 때 `scripts/query_analytics.py`의 JSON 출력을 파싱합니다.
+
+### daily 커맨드
+
+```bash
+python scripts/query_analytics.py daily 2026-04-07
+```
+
+```json
+{
+  "date": "2026-04-07",
+  "trades": [
+    {
+      "id": 1,
+      "stock_code": "005930",
+      "stock_name": "삼성전자",
+      "trade_type": "BUY | SELL",
+      "quantity": 10,
+      "price": 70000,
+      "total_amount": 700000,
+      "sell_reason": "STOP_LOSS | TAKE_PROFIT | STRATEGY | MANUAL | null",
+      "signal_type": "GOLDEN_CROSS | DEAD_CROSS | null",
+      "profit_loss_pct": 2.86,
+      "profit_loss_amount": 20000,
+      "cycle_number": 1,
+      "traded_at": "2026-04-07T09:30:00"
+    }
+  ],
+  "signals": [
+    {
+      "id": 1,
+      "stock_code": "005930",
+      "stock_name": "삼성전자",
+      "signal_type": "GOLDEN_CROSS | DEAD_CROSS | RSI_SIGNAL",
+      "signal_value": {"ma5": 70500, "ma20": 68000},
+      "confidence": 0.85,
+      "action_taken": true,
+      "detected_at": "2026-04-07T09:25:00"
+    }
+  ],
+  "screening": {
+    "total_screened": 20,
+    "converted_count": 3,
+    "conversion_rate": 15.0,
+    "items": [
+      {
+        "stock_code": "005930",
+        "stock_name": "삼성전자",
+        "screening_rank": 1,
+        "volume": 5000000,
+        "price_change_pct": 3.5,
+        "converted_to_trade": true,
+        "cycle_number": 1
+      }
+    ]
+  },
+  "errors": {
+    "total_errors": 2,
+    "items": [
+      {
+        "id": 1,
+        "detail": {"msg": "timeout", "stock_code": "005930"},
+        "recorded_at": "2026-04-07T10:30:00"
+      }
+    ]
+  },
+  "summary": {
+    "report_date": "2026-04-07",
+    "total_buy_count": 5,
+    "total_sell_count": 3,
+    "total_profit_loss": 45000,
+    "win_rate": 0.67,
+    "stop_loss_count": 1,
+    "take_profit_count": 1,
+    "strategy_sell_count": 1,
+    "screening_count": 20,
+    "screening_conversion_count": 3,
+    "error_count": 2,
+    "cycle_count": 10
+  },
+  "signal_accuracy": {
+    "total_signals": 8,
+    "acted_count": 5,
+    "not_acted_count": 3,
+    "confirmed_count": 4,
+    "accuracy_rate": 80.0
+  }
+}
+```
+
+### weekly 커맨드
+
+```bash
+python scripts/query_analytics.py weekly 2026 15
+```
+
+```json
+{
+  "year": 2026,
+  "week": 15,
+  "trade_stats": {
+    "year": 2026,
+    "week": 15,
+    "period": "2026-04-06 ~ 2026-04-12",
+    "total_trades": 24,
+    "daily_stats": [
+      {
+        "date": "2026-04-07",
+        "buy_count": 5,
+        "sell_count": 3,
+        "total_profit_loss": 45000,
+        "trades": 8
+      }
+    ]
+  },
+  "stock_frequency": [
+    {
+      "stock_code": "005930",
+      "stock_name": "삼성전자",
+      "trade_count": 8,
+      "buy_count": 4,
+      "sell_count": 4,
+      "total_pnl": 35000
+    }
+  ],
+  "signal_performance": [
+    {
+      "signal_type": "GOLDEN_CROSS",
+      "total": 12,
+      "acted": 8,
+      "act_rate": 66.7,
+      "avg_confidence": 0.72
+    }
+  ],
+  "risk_analysis": {
+    "total_sells": 10,
+    "by_reason": {
+      "TAKE_PROFIT": {"count": 4, "avg_pnl_pct": 3.2, "total_pnl": 80000},
+      "STOP_LOSS": {"count": 3, "avg_pnl_pct": -2.1, "total_pnl": -42000},
+      "STRATEGY": {"count": 3, "avg_pnl_pct": 1.5, "total_pnl": 30000}
+    }
+  },
+  "screening_conversion": {
+    "period": "2026-04-06 ~ 2026-04-12",
+    "total_screened": 60,
+    "total_converted": 8,
+    "overall_rate": 13.3,
+    "daily": [
+      {"date": "2026-04-07", "total_screened": 20, "converted": 3, "rate": 15.0}
+    ]
+  },
+  "error_trend": {
+    "period": "2026-04-06 ~ 2026-04-12",
+    "total_errors": 5,
+    "daily": [
+      {"date": "2026-04-07", "error_count": 2}
+    ]
+  }
+}
+```
+
+### range 커맨드
+
+```bash
+python scripts/query_analytics.py range 2026-03-01 2026-04-07
+```
+
+```json
+{
+  "period": "2026-03-01 ~ 2026-04-07",
+  "cumulative_pnl": {
+    "period": "2026-03-01 ~ 2026-04-07",
+    "total_pnl": 250000,
+    "trading_days": 18,
+    "curve": [
+      {"date": "2026-03-03", "daily_pnl": 15000, "cumulative_pnl": 15000},
+      {"date": "2026-03-04", "daily_pnl": -5000, "cumulative_pnl": 10000}
+    ]
+  },
+  "strategy_comparison": [
+    {
+      "signal_type": "GOLDEN_CROSS",
+      "signal_count": 45,
+      "acted_count": 30,
+      "act_rate": 66.7,
+      "avg_confidence": 0.68,
+      "related_sells": 20,
+      "total_pnl": 180000,
+      "avg_pnl": 9000
+    }
+  ]
+}
+```
+
+### risk 커맨드
+
+```bash
+python scripts/query_analytics.py risk --days 30
+```
+
+```json
+{
+  "lookback_days": 30,
+  "total_sells": 25,
+  "stop_loss": {
+    "count": 8,
+    "avg": -2.15,
+    "min": -3.0,
+    "max": -1.2,
+    "median": -2.1
+  },
+  "take_profit": {
+    "count": 10,
+    "avg": 3.45,
+    "min": 2.0,
+    "max": 5.1,
+    "median": 3.3
+  },
+  "strategy": {
+    "count": 7,
+    "avg": 1.2,
+    "min": -0.5,
+    "max": 4.0,
+    "median": 1.1
+  },
+  "recommendation": {
+    "stop_loss_rate": 0.0215,
+    "take_profit_rate": 0.0345
+  }
+}
+```
+
+> **참고**: `stop_loss`·`take_profit`·`strategy`의 `avg`/`min`/`max`/`median` 단위는 **수익률 %** (예: -2.15 = -2.15%).
+> `recommendation`의 `stop_loss_rate`·`take_profit_rate`는 **비율** (예: 0.0215 = 2.15%)로, `config.py`의 `MAX_LOSS_RATE`·`TAKE_PROFIT_RATIO` 형식과 동일합니다.
+
 ## CHANGELOG 규격
 
 Claude Code가 자동으로 기록:

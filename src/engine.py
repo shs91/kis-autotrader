@@ -15,12 +15,17 @@ from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
 from src.config import settings
 from src.db.event_logger import log_trade, log_warning
-from src.db.models import OrderStatus, OrderType
+from src.db.models import OrderStatus, OrderType, SellReason, TradeType
 from src.db.repository import (
     DailyPerformanceRepository,
+    DailySummaryRepository,
     OrderRepository,
     PortfolioRepository,
+    ScreeningResultRepository,
+    SignalRepository,
     StockRepository,
+    SystemMetricRepository,
+    TradeRepository,
     WatchlistRepository,
 )
 from src.db.session import get_session
@@ -217,6 +222,7 @@ class TradingEngine:
         self._daily_limit_reached = True
         logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
         log_warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+        self._record_metric("API_LIMIT", {"cycle": self._cycle_count})
 
     # ── 메인 작업 ─────────────────────────────────────────
 
@@ -273,6 +279,7 @@ class TradingEngine:
             return
 
         logger.info("--- 장중 매매 사이클 #%d 시작 ---", self._cycle_count)
+        self._record_metric("CYCLE_START", {"cycle": self._cycle_count})
 
         if self._risk.check_daily_trade_limit(self._today_trade_count):
             logger.warning("일일 매매 횟수 한도 도달, 사이클 스킵")
@@ -316,8 +323,17 @@ class TradingEngine:
                 return
             except Exception:
                 logger.exception("종목 처리 중 에러: %s", stock_code)
+                self._record_metric("ERROR", {
+                    "cycle": self._cycle_count,
+                    "stock_code": stock_code,
+                    "error": "종목 처리 실패",
+                })
 
         self._client._limiter.log_daily_count()
+        self._record_metric("CYCLE_END", {
+            "cycle": self._cycle_count,
+            "trade_count": self._today_trade_count,
+        })
         logger.info(
             "--- 장중 매매 사이클 #%d 완료 (당일 매매: %d건) ---",
             self._cycle_count,
@@ -341,6 +357,7 @@ class TradingEngine:
 
             self._save_daily_performance(balance, executions)
             self._sync_portfolio(balance)
+            self._upsert_daily_summary()
 
             # Google Calendar 이벤트 등록
             self._create_calendar_event(balance, executions)
@@ -425,6 +442,7 @@ class TradingEngine:
                 logger.debug("스크리닝 분석 실패: %s", item.stock_code)
 
         self._screened_codes.update(new_candidates)
+        self._record_screening_to_db(ranked, new_candidates)
         logger.info(
             "=== 종목 스크리닝 완료: 신규 %d종목 발굴 (누적 %d/%d종목) ===",
             len(new_candidates),
@@ -473,8 +491,15 @@ class TradingEngine:
             f"{current.current_price:,}",
         )
 
+        # 3-1. 시그널 DB 기록 (BUY/SELL만, action_taken은 아래서 결정)
+        will_act = False
+
         # 4. 보유 종목 처리
         if is_held and holding_info is not None:
+            will_act = signal.signal_type == SignalType.SELL and signal.confidence >= 0.1
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=will_act,
+            )
             await self._process_held_stock(
                 stock_code, current.current_price, holding_info, signal
             )
@@ -483,14 +508,27 @@ class TradingEngine:
         # 5. 미보유 종목 — 매수 시그널 처리
         if signal.signal_type == SignalType.BUY:
             if not self._risk.validate_order(signal, float(deposit), 0):
+                self._record_signal_to_db(
+                    stock_code, current.stock_name, signal, action_taken=False,
+                )
                 return
             quantity = self._risk.calculate_position_size(
                 float(deposit), float(current.current_price)
             )
             if quantity <= 0:
                 logger.info("[%s] 매수 가능 수량 0, 스킵", stock_code)
+                self._record_signal_to_db(
+                    stock_code, current.stock_name, signal, action_taken=False,
+                )
                 return
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=True,
+            )
             await self._execute_buy(stock_code, current.stock_name, quantity, current.current_price)
+        elif signal.signal_type != SignalType.HOLD:
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+            )
 
     async def _process_held_stock(
         self,
@@ -517,7 +555,10 @@ class TradingEngine:
                 "[%s] 손절 매도 실행 (현재가: %d, 매입가: %.0f)",
                 stock_code, current_price, avg_price,
             )
-            await self._execute_sell(stock_code, quantity, current_price, reason="손절")
+            await self._execute_sell(
+                stock_code, quantity, current_price,
+                reason="손절", avg_price=avg_price,
+            )
             return
 
         if self._risk.should_take_profit(float(current_price), avg_price):
@@ -525,7 +566,10 @@ class TradingEngine:
                 "[%s] 익절 매도 실행 (현재가: %d, 매입가: %.0f)",
                 stock_code, current_price, avg_price,
             )
-            await self._execute_sell(stock_code, quantity, current_price, reason="익절")
+            await self._execute_sell(
+                stock_code, quantity, current_price,
+                reason="익절", avg_price=avg_price,
+            )
             return
 
         if signal.signal_type == SignalType.SELL and signal.confidence >= 0.1:
@@ -535,7 +579,8 @@ class TradingEngine:
             )
             await self._execute_sell(
                 stock_code, quantity, current_price,
-                reason="전략매도",
+                reason="전략매도", avg_price=avg_price,
+                signal_type=signal.reason.split(" ")[0] if signal.reason else None,
             )
 
     # ── 주문 실행 ─────────────────────────────────────────
@@ -558,6 +603,9 @@ class TradingEngine:
             self._record_order_to_db(
                 stock_code, stock_name, OrderType.BUY, quantity, float(price), result.order_no
             )
+            self._record_trade_to_db(
+                stock_code, stock_name, TradeType.BUY, quantity, price,
+            )
 
             await self._notifier.notify_buy(stock_name, stock_code, quantity, price)
 
@@ -565,7 +613,13 @@ class TradingEngine:
             logger.exception("[매수 실패] %s(%s)", stock_name, stock_code)
 
     async def _execute_sell(
-        self, stock_code: str, quantity: int, price: int, reason: str = ""
+        self,
+        stock_code: str,
+        quantity: int,
+        price: int,
+        reason: str = "",
+        avg_price: float | None = None,
+        signal_type: str | None = None,
     ) -> None:
         """매도 주문을 실행하고 DB에 기록한다."""
         try:
@@ -582,13 +636,153 @@ class TradingEngine:
             self._record_order_to_db(
                 stock_code, "", OrderType.SELL, quantity, float(price), result.order_no
             )
+            self._record_trade_to_db(
+                stock_code, "", TradeType.SELL, quantity, price,
+                reason=reason, signal_type=signal_type, avg_price=avg_price,
+            )
 
             await self._notifier.notify_sell("", stock_code, quantity, price, reason)
 
         except Exception:
             logger.exception("[매도 실패] %s", stock_code)
 
-    # ── DB 연동 ───────────────────────────────────────────
+    # ── 매매 데이터 DB 적재 ──────────────────────────────────
+
+    _SELL_REASON_MAP: dict[str, SellReason] = {
+        "손절": SellReason.STOP_LOSS,
+        "익절": SellReason.TAKE_PROFIT,
+        "전략매도": SellReason.STRATEGY,
+    }
+
+    def _record_trade_to_db(
+        self,
+        stock_code: str,
+        stock_name: str,
+        trade_type: TradeType,
+        quantity: int,
+        price: int,
+        reason: str = "",
+        signal_type: str | None = None,
+        avg_price: float | None = None,
+    ) -> None:
+        """매매 체결 내역을 trades 테이블에 기록한다. 실패 시 로그만 남긴다."""
+        try:
+            sell_reason: SellReason | None = None
+            profit_loss_pct: float | None = None
+            profit_loss_amount: int | None = None
+
+            if trade_type == TradeType.SELL:
+                sell_reason = self._SELL_REASON_MAP.get(reason)
+                if avg_price and avg_price > 0:
+                    profit_loss_pct = ((price - avg_price) / avg_price) * 100
+                    profit_loss_amount = int((price - avg_price) * quantity)
+
+            with get_session() as session:
+                repo = TradeRepository(session)
+                repo.record_trade(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    trade_type=trade_type,
+                    quantity=quantity,
+                    price=price,
+                    total_amount=price * quantity,
+                    traded_at=datetime.now(),
+                    cycle_number=self._cycle_count,
+                    sell_reason=sell_reason,
+                    signal_type=signal_type,
+                    profit_loss_pct=profit_loss_pct,
+                    profit_loss_amount=profit_loss_amount,
+                )
+        except Exception:
+            logger.exception("매매 DB 적재 실패: %s %s", stock_code, trade_type.value)
+
+    def _record_screening_to_db(
+        self,
+        ranked: list[object],
+        new_candidates: list[str],
+    ) -> None:
+        """스크리닝 결과를 screening_results 테이블에 배치 기록한다."""
+        try:
+            with get_session() as session:
+                repo = ScreeningResultRepository(session)
+                candidate_set = set(new_candidates)
+                for rank_idx, item in enumerate(ranked, start=1):
+                    repo.record_screening(
+                        stock_code=item.stock_code,
+                        stock_name=item.stock_name,
+                        screening_rank=rank_idx,
+                        volume=item.volume,
+                        price_change_pct=getattr(item, "price_change_pct", 0.0),
+                        screened_at=datetime.now(),
+                        cycle_number=self._cycle_count,
+                        converted_to_trade=item.stock_code in candidate_set,
+                    )
+        except Exception:
+            logger.exception("스크리닝 DB 적재 실패")
+
+    def _record_signal_to_db(
+        self,
+        stock_code: str,
+        stock_name: str,
+        signal: Signal,
+        action_taken: bool = False,
+    ) -> None:
+        """전략 시그널을 signals 테이블에 기록한다. BUY/SELL만 기록한다."""
+        if signal.signal_type == SignalType.HOLD:
+            return
+        try:
+            # 시그널 reason에서 시그널 타입 추출
+            signal_type_str = "UNKNOWN"
+            if "골든크로스" in signal.reason:
+                signal_type_str = "GOLDEN_CROSS"
+            elif "데드크로스" in signal.reason:
+                signal_type_str = "DEAD_CROSS"
+            elif "RSI" in signal.reason.upper():
+                signal_type_str = "RSI_SIGNAL"
+            else:
+                signal_type_str = signal.reason[:50] if signal.reason else "UNKNOWN"
+
+            with get_session() as session:
+                repo = SignalRepository(session)
+                repo.record_signal(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    signal_type=signal_type_str,
+                    detected_at=datetime.now(),
+                    signal_value={
+                        "confidence": signal.confidence,
+                        "target_price": signal.target_price,
+                        "reason": signal.reason,
+                    },
+                    confidence=signal.confidence,
+                    action_taken=action_taken,
+                )
+        except Exception:
+            logger.exception("시그널 DB 적재 실패: %s", stock_code)
+
+    def _record_metric(self, metric_type: str, detail: dict | None = None) -> None:
+        """시스템 메트릭을 system_metrics 테이블에 기록한다."""
+        try:
+            with get_session() as session:
+                repo = SystemMetricRepository(session)
+                repo.record_metric(
+                    metric_type=metric_type,
+                    detail=detail,
+                    recorded_at=datetime.now(),
+                )
+        except Exception:
+            logger.exception("시스템 메트릭 DB 적재 실패: %s", metric_type)
+
+    def _upsert_daily_summary(self) -> None:
+        """일일 요약을 집계하여 daily_summary 테이블에 UPSERT한다."""
+        try:
+            with get_session() as session:
+                repo = DailySummaryRepository(session)
+                repo.upsert_daily_summary(date.today())
+        except Exception:
+            logger.exception("일일 요약 DB 적재 실패")
+
+    # ── DB 연동 (기존) ─────────────────────────────────────
 
     def _create_calendar_event(self, balance: object, executions: list[object]) -> None:
         """일일 매매 결과를 Google Calendar에 등록한다."""
