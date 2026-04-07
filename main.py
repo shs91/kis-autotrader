@@ -43,11 +43,10 @@ def _register_bot_commands(
     """Telegram 봇 명령을 등록한다."""
 
     async def cmd_status(_args: str) -> str:
-        """시스템 상태를 반환한다 (DB + 메모리 병행)."""
+        """시스템 상태를 반환한다 (DB 기반)."""
         limiter = engine._client._limiter
         running = scheduler.scheduler.running
 
-        # DB에서 당일 사이클/에러/매매 수 조회
         try:
             from datetime import datetime as dt_cls
             today = date.today()
@@ -71,22 +70,60 @@ def _register_bot_commands(
                     sa_select(sa_func.count()).select_from(Trade)
                     .where(Trade.traded_at >= start)
                 ).scalar_one()
-            db_line = (
-                f"사이클(DB): {cycle_cnt}회\n"
-                f"매매(DB): {trade_cnt}건\n"
-                f"에러(DB): {error_cnt}건"
+
+                # 최신 CYCLE_END에서 API 호출, 모니터링 상세
+                last_cycle = session.execute(
+                    sa_select(SystemMetric)
+                    .where(
+                        SystemMetric.metric_type == "CYCLE_END",
+                        SystemMetric.recorded_at >= start,
+                    )
+                    .order_by(SystemMetric.recorded_at.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+
+            # 최신 사이클 상세
+            if last_cycle and last_cycle.detail:
+                d = last_cycle.detail
+                api_calls = d.get("api_calls", limiter.daily_count)
+                api_limit = d.get("api_limit", limiter.daily_limit)
+                monitor = d.get("monitor_stocks", "?")
+                held = d.get("held_stocks", "?")
+                screened = d.get("screened_stocks", "?")
+                last_cycle_num = d.get("cycle", "?")
+                cycle_detail = (
+                    f"최근 사이클: #{last_cycle_num}\n"
+                    f"API 호출: {api_calls:,}/{api_limit:,}\n"
+                    f"모니터링: {monitor}종목"
+                    f" (보유 {held} + 발굴 {screened})"
+                )
+            else:
+                cycle_detail = (
+                    f"API 호출: {limiter.daily_count:,}"
+                    f"/{limiter.daily_limit:,}"
+                )
+
+            return (
+                f"<b>[상태]</b>\n"
+                f"환경: {settings.kis.env}\n"
+                f"스케줄러: {'가동중' if running else '중지'}\n"
+                f"사이클: {cycle_cnt}회\n"
+                f"매매: {trade_cnt}건\n"
+                f"에러: {error_cnt}건\n"
+                f"{cycle_detail}"
             )
         except Exception:
-            db_line = "DB 조회 실패"
-
-        return (
-            f"<b>[상태]</b>\n"
-            f"환경: {settings.kis.env}\n"
-            f"스케줄러: {'가동중' if running else '중지'}\n"
-            f"API 호출: {limiter.daily_count:,}/{limiter.daily_limit:,}\n"
-            f"사이클(메모리): #{engine._cycle_count}\n"
-            f"{db_line}"
-        )
+            # DB 실패 시 메모리 폴백
+            return (
+                f"<b>[상태]</b>\n"
+                f"환경: {settings.kis.env}\n"
+                f"스케줄러: {'가동중' if running else '중지'}\n"
+                f"사이클: #{engine._cycle_count}\n"
+                f"API 호출: {limiter.daily_count:,}"
+                f"/{limiter.daily_limit:,}\n"
+                f"당일 매매: {engine._today_trade_count}건\n"
+                f"(DB 조회 실패, 메모리 기준)"
+            )
 
     async def cmd_balance(_args: str) -> str:
         """잔고를 조회한다."""

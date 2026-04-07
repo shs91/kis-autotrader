@@ -279,7 +279,13 @@ class TradingEngine:
             return
 
         logger.info("--- 장중 매매 사이클 #%d 시작 ---", self._cycle_count)
-        self._record_metric("CYCLE_START", {"cycle": self._cycle_count})
+        limiter = self._client._limiter
+        self._record_metric("CYCLE_START", {
+            "cycle": self._cycle_count,
+            "api_calls": limiter.daily_count,
+            "api_limit": limiter.daily_limit,
+            "trade_count": self._today_trade_count,
+        })
 
         if self._risk.check_daily_trade_limit(self._today_trade_count):
             logger.warning("일일 매매 횟수 한도 도달, 사이클 스킵")
@@ -329,10 +335,16 @@ class TradingEngine:
                     "error": "종목 처리 실패",
                 })
 
-        self._client._limiter.log_daily_count()
+        limiter = self._client._limiter
+        limiter.log_daily_count()
         self._record_metric("CYCLE_END", {
             "cycle": self._cycle_count,
             "trade_count": self._today_trade_count,
+            "api_calls": limiter.daily_count,
+            "api_limit": limiter.daily_limit,
+            "monitor_stocks": len(targets),
+            "held_stocks": len(held_codes),
+            "screened_stocks": len(self._screened_codes),
         })
         logger.info(
             "--- 장중 매매 사이클 #%d 완료 (당일 매매: %d건) ---",
