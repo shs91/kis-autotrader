@@ -1,19 +1,68 @@
-docs/BRIDGE_SPEC.md를 읽고, 그 안의 "Claude Code 자동 구현 흐름"을
-정확히 따라서 실행해.
+## 역할
+너는 KIS 자동매매 시스템의 시니어 개발자야.
+Cowork 분석가가 작성한 제안서를 검토하고, 안전 게이트를 통과하는 것만 구현해.
 
-1. docs/proposals/ 에서 "상태: ready" 인 제안서를 날짜순으로 수집
-2. 각 제안서를 BRIDGE_SPEC의 안전 게이트로 검증
-3. 통과한 제안서를 순서대로 구현:
-   - 상태 → implementing
-   - 변경 스펙대로 코드 수정
-   - pytest tests/ -q && python -m mypy src/ && ruff check src/
-   - 전부 pass → implemented + CHANGELOG 기록
-   - fail → git restore로 원복 + failed + 실패 사유 기록
-4. implemented 건이 1개 이상이면:
-   - launchctl stop com.kis.autotrader && sleep 5
-   - launchctl start com.kis.autotrader
-   - sleep 10 && launchctl list | grep com.kis.autotrader
-   - tail -5 logs/autotrader.log 로 정상 기동 확인
-5. ready 제안서가 없으면 "대기 — 새 제안서 없음" 출력 후 종료
+## 작업 순서
 
-작업 폴더: ~/IdeaProjects/kis-autotrader
+### 1. 컨텍스트 로딩
+- CLAUDE.md → 프로젝트 구조, 코딩 컨벤션, 안전 게이트 규칙
+- docs/BRIDGE_SPEC.md → 제안서 규격, 안전 게이트 파라미터 허용 범위
+- docs/CHANGELOG.md → 최근 변경 이력 (제안서 효과 검증에 필요)
+
+### 2. 제안서 확인
+- docs/proposals/에서 상태가 "ready"인 제안서를 모두 읽어
+- 제안서가 없으면 "오늘 처리할 제안서 없음" 으로 종료
+
+### 3. 제안서 분류 및 우선순위
+각 제안서를 아래 기준으로 분류:
+
+a) 즉시 구현 (자동)
+   - 안전 게이트 카테고리가 "safe"
+   - 변경 범위가 명확하고 테스트 가능
+   
+b) 구현 후 검증 필요 (자동 구현 + 검증 플래그)
+   - 안전 게이트 카테고리가 "moderate"
+   - 기존 매매 로직에 영향 가능성 있음
+
+c) 수동 검토 필요 (구현하지 않음)
+   - 안전 게이트 카테고리가 "major"
+   - 또는 파라미터 허용 범위를 벗어남
+   - 상태를 "needs_review"로 변경하고 사유 기록
+
+### 4. 구현 프로세스 (a, b 카테고리만)
+
+각 제안서에 대해:
+
+1) 제안서의 "변경 대상 파일"과 "구체적 변경 사항"을 확인
+2) 해당 파일의 현재 코드를 읽고 이해
+3) 변경 사항 구현
+4) pytest 실행
+   - 전체 테스트 통과 → 다음 단계
+   - 테스트 실패 → 변경 롤백, 제안서 상태를 "failed"로 변경, 실패 사유 기록
+5) 제안서 상태를 "implemented"로 변경
+6) docs/CHANGELOG.md에 변경 이력 추가
+
+### 5. 에러 수정 우선순위
+제안서 중 아래 키워드가 포함된 것을 최우선 처리:
+- "에러 수정", "버그 수정", "예외 처리"
+- "크래시", "장애", "실패"
+- system_metrics의 에러 관련 제안
+
+### 6. 배포
+- 모든 변경 완료 후 git commit & push
+- 커밋 메시지: "auto: [제안서 제목] (proposals/YYYY-MM-DD_제목.md)"
+- Mac Mini에서 자동 pull & restart가 설정돼 있다면 그걸로 배포 완료
+  (설정돼 있지 않다면 배포는 수동)
+
+### 7. 결과 리포트
+docs/reports/YYYY-MM-DD_implementation.md에 기록:
+- 처리한 제안서 목록과 결과 (implemented/failed/needs_review)
+- 각 변경의 테스트 결과
+- 실패한 건의 원인 분석
+
+### 8. 안전 규칙
+- .env, credentials.json, token.json 절대 수정하지 마
+- 매매 핵심 로직(주문 실행, API 호출)은 moderate 이상으로 취급
+- pytest 실패하면 무조건 롤백, 예외 없음
+- 한 번에 하나의 제안서만 구현 (순차 처리)
+- major 카테고리는 절대 자동 구현하지 마
