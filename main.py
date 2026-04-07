@@ -14,6 +14,7 @@ from sqlalchemy import select as sa_select
 from src.api.health import HealthServer
 from src.config import settings
 from src.db.analytics import (
+    get_daily_errors,
     get_daily_screening,
     get_daily_trades,
     get_optimal_risk_params,
@@ -21,7 +22,7 @@ from src.db.analytics import (
 )
 from src.db.event_logger import log_system
 from src.db.models import Signal as SignalModel
-from src.db.models import Trade, TradeType
+from src.db.models import SystemMetric, Trade, TradeType
 from src.db.repository import WatchlistRepository
 from src.db.session import get_session, init_db
 from src.engine import TradingEngine
@@ -42,16 +43,49 @@ def _register_bot_commands(
     """Telegram 봇 명령을 등록한다."""
 
     async def cmd_status(_args: str) -> str:
-        """시스템 상태를 반환한다."""
+        """시스템 상태를 반환한다 (DB + 메모리 병행)."""
         limiter = engine._client._limiter
         running = scheduler.scheduler.running
+
+        # DB에서 당일 사이클/에러/매매 수 조회
+        try:
+            from datetime import datetime as dt_cls
+            today = date.today()
+            start = dt_cls(today.year, today.month, today.day)
+            with get_session() as session:
+                cycle_cnt = session.execute(
+                    sa_select(sa_func.count()).select_from(SystemMetric)
+                    .where(
+                        SystemMetric.metric_type == "CYCLE_START",
+                        SystemMetric.recorded_at >= start,
+                    )
+                ).scalar_one()
+                error_cnt = session.execute(
+                    sa_select(sa_func.count()).select_from(SystemMetric)
+                    .where(
+                        SystemMetric.metric_type == "ERROR",
+                        SystemMetric.recorded_at >= start,
+                    )
+                ).scalar_one()
+                trade_cnt = session.execute(
+                    sa_select(sa_func.count()).select_from(Trade)
+                    .where(Trade.traded_at >= start)
+                ).scalar_one()
+            db_line = (
+                f"사이클(DB): {cycle_cnt}회\n"
+                f"매매(DB): {trade_cnt}건\n"
+                f"에러(DB): {error_cnt}건"
+            )
+        except Exception:
+            db_line = "DB 조회 실패"
+
         return (
             f"<b>[상태]</b>\n"
             f"환경: {settings.kis.env}\n"
             f"스케줄러: {'가동중' if running else '중지'}\n"
-            f"사이클: #{engine._cycle_count}\n"
             f"API 호출: {limiter.daily_count:,}/{limiter.daily_limit:,}\n"
-            f"당일 매매: {engine._today_trade_count}건"
+            f"사이클(메모리): #{engine._cycle_count}\n"
+            f"{db_line}"
         )
 
     async def cmd_balance(_args: str) -> str:
@@ -72,15 +106,37 @@ def _register_bot_commands(
             return f"잔고 조회 실패: {e!s:.100}"
 
     async def cmd_today(_args: str) -> str:
-        """당일 매매 요약을 반환한다."""
-        return (
-            f"<b>[당일 현황]</b> {date.today()}\n"
-            f"사이클: #{engine._cycle_count}\n"
-            f"매매: {engine._today_trade_count}건\n"
-            f"관심종목: {len(engine._get_watchlist_codes())}개\n"
-            f"발굴종목: {len(engine._screened_codes)}개\n"
-            f"한도 초과: {'예' if engine._daily_limit_reached else '아니오'}"
-        )
+        """당일 매매 요약을 반환한다 (DB 기반)."""
+        try:
+            today = date.today()
+            with get_session() as session:
+                trades = get_daily_trades(session, today)
+                errors = get_daily_errors(session, today)
+                screening = get_daily_screening(session, today)
+
+            buys = [t for t in trades if t["trade_type"] == "BUY"]
+            sells = [t for t in trades if t["trade_type"] == "SELL"]
+            total_pnl = sum(t["profit_loss_amount"] or 0 for t in sells)
+            wins = sum(
+                1 for t in sells
+                if t["profit_loss_amount"] is not None and t["profit_loss_amount"] > 0
+            )
+            win_rate = (wins / len(sells) * 100) if sells else 0
+
+            lines = [
+                f"<b>[당일 현황]</b> {today}",
+                f"매수: {len(buys)}건 / 매도: {len(sells)}건",
+                f"실현손익: {total_pnl:+,}원 (승률 {win_rate:.0f}%)",
+                f"스크리닝: {screening['total_screened']}건"
+                f" → 전환 {screening['converted_count']}건",
+                f"에러: {errors['total_errors']}건",
+                f"관심종목: {len(engine._get_watchlist_codes())}개",
+                f"발굴종목: {len(engine._screened_codes)}개",
+                f"한도 초과: {'예' if engine._daily_limit_reached else '아니오'}",
+            ]
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ 당일 현황 조회 실패: {e!s:.100}"
 
     async def cmd_watch(args: str) -> str:
         """관심종목을 추가한다."""
