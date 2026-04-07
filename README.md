@@ -5,13 +5,16 @@
 
 ## 주요 기능
 
-- **자동 매매** — 이동평균 교차, RSI 전략 기반 자동 매수/매도
+- **자동 매매** — 이동평균 교차, RSI, 앙상블 전략 기반 자동 매수/매도
 - **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 손절/익절 자동 판단
 - **실시간 시세** — 웹소켓 기반 실시간 호가/체결 수신 (상태 머신 + 자동 재연결)
 - **API 안전장치** — Token Bucket Rate Limiter, Circuit Breaker, exponential backoff 재시도
-- **스케줄링** — 장 시작 전 토큰 갱신 → 장중 주기적 매매 → 장 마감 후 결산 자동 실행
+- **스케줄링** — 장 시작 전 토큰 갱신 → 장중 주기적 매매 → 장 마감 후 결산 자동 실행 (휴장일 자동 감지)
 - **Google Calendar 연동** — 일일 매매 결과를 캘린더 이벤트로 자동 등록
-- **DB 영속성** — PostgreSQL + SQLAlchemy ORM + Alembic 마이그레이션
+- **Telegram 알림** — 매매 체결, 일일 결산, 시스템 상태 알림 + Bot 명령어 지원
+- **백테스트** — 과거 데이터 기반 전략 시뮬레이션, 성과 리포트 자동 생성
+- **헬스체크** — 경량 HTTP 서버로 프로세스/DB/스케줄러 상태 모니터링
+- **DB 영속성** — PostgreSQL + SQLAlchemy ORM + Alembic 마이그레이션 + 매매 분석 쿼리
 - **종목 스크리닝** — 거래량 상위 종목 자동 발굴, 매매 후보 동적 추가
 - **자동 개선 파이프라인** — Cowork(분석/제안) + Claude Code(구현) 스케줄 자동화
 
@@ -26,6 +29,7 @@
 | Scheduler | APScheduler |
 | Data Analysis | pandas |
 | Calendar | Google Calendar API |
+| Notification | Telegram Bot API |
 | Test | pytest + pytest-asyncio |
 | Lint/Type | ruff, mypy (strict) |
 
@@ -50,18 +54,34 @@ kis-autotrader/
 │   │   ├── order.py               # 주문 API (매수/매도/정정/취소)
 │   │   ├── quote.py               # 시세 조회 API (현재가, 일봉, 분봉)
 │   │   ├── account.py             # 잔고/체결내역 조회
+│   │   ├── health.py              # 헬스체크 HTTP 서버 (/health)
 │   │   └── websocket.py           # 실시간 웹소켓 매니저
 │   ├── strategy/
 │   │   ├── base.py                # 매매 전략 추상 클래스 + Signal
 │   │   ├── moving_average.py      # 이동평균 교차 전략
 │   │   ├── rsi.py                 # RSI 기반 전략
+│   │   ├── ensemble.py            # 앙상블 전략 (복수 전략 투표 통합)
+│   │   ├── registry.py            # 전략 레지스트리 (중앙 관리)
+│   │   ├── selector.py            # 전략 셀렉터 (종목별 배정)
 │   │   └── risk.py                # 리스크 관리 모듈
+│   ├── backtest/
+│   │   ├── engine.py              # 백테스트 시뮬레이션 엔진
+│   │   ├── broker.py              # 가상 브로커 (주문 실행/잔고 관리)
+│   │   ├── data_loader.py         # 과거 데이터 로더
+│   │   └── report.py              # 백테스트 결과 리포트
 │   ├── db/
 │   │   ├── models.py              # SQLAlchemy ORM 모델
 │   │   ├── session.py             # DB 세션 관리
-│   │   └── repository.py          # CRUD Repository
+│   │   ├── repository.py          # CRUD Repository
+│   │   ├── analytics.py           # 매매 분석 쿼리 (Cowork용)
+│   │   └── event_logger.py        # 이벤트 DB 기록 헬퍼
 │   ├── scheduler/
-│   │   └── jobs.py                # APScheduler 작업 정의
+│   │   ├── jobs.py                # APScheduler 작업 정의
+│   │   └── holidays.py            # 한국 증시 휴장일 관리
+│   ├── notify/
+│   │   ├── telegram.py            # Telegram Bot API 전송
+│   │   ├── bot.py                 # Telegram Bot 명령어 처리
+│   │   └── formatter.py           # 알림 메시지 포맷팅
 │   ├── calendar/
 │   │   ├── google_auth.py         # Google OAuth2 인증
 │   │   └── event.py               # 캘린더 이벤트 생성
@@ -69,18 +89,42 @@ kis-autotrader/
 │       ├── logger.py              # 로깅 설정
 │       └── exceptions.py          # 커스텀 예외 클래스
 ├── scripts/
-│   ├── run_auto_implement.sh      # Claude Code 자동 구현 cron 스크립트
-│   └── auto_implement_prompt.txt  # 자동 구현 프롬프트
+│   ├── run_auto_implement.sh      # Claude Code 자동 구현 스크립트
+│   ├── auto_implement_prompt.txt  # 자동 구현 프롬프트
+│   ├── run_backtest.py            # 백테스트 실행
+│   ├── query_analytics.py         # 매매 분석 쿼리 실행
+│   ├── generate_daily_report.py   # 일일 리포트 생성
+│   ├── create_patch_note_event.py # 패치노트 캘린더 등록
+│   ├── backup_db.sh               # DB 백업
+│   ├── docker-entrypoint.sh       # Docker 엔트리포인트
+│   ├── run_dashboard.sh           # 대시보드 실행
+│   ├── watchdog.sh                # 프로세스 감시
+│   ├── test_real_buy.py           # 실매수 테스트
+│   ├── test_volume_rank.py        # 거래량 순위 테스트
+│   ├── test_calendar.py           # 캘린더 연동 테스트
+│   ├── debug_raw_response.py      # API 응답 디버깅
+│   └── debug_strategy.py          # 전략 디버깅
 ├── docs/
 │   ├── BRIDGE_SPEC.md             # Cowork ↔ Claude Code 브릿지 규격
 │   ├── CHANGELOG.md               # 자동 구현 변경 이력
+│   ├── 01-plan/                   # 기획 문서
+│   ├── 02-design/                 # 설계 문서
+│   ├── 03-analysis/               # 분석 문서
+│   ├── 04-report/                 # PDCA 리포트
+│   ├── plans/                     # 실행 계획
 │   ├── proposals/                 # Cowork가 작성하는 개선 제안서
-│   └── reports/                   # 일일/주간 매매 리포트
+│   ├── reports/                   # 일일/주간 매매 리포트
+│   └── archive/                   # 아카이브
 └── tests/
-    ├── test_api/                   # API 모듈 테스트 (5개)
-    ├── test_strategy/              # 전략 모듈 테스트 (4개)
+    ├── test_api/                   # API 모듈 테스트 (6개)
+    ├── test_strategy/              # 전략 모듈 테스트 (8개)
+    ├── test_backtest/              # 백테스트 테스트 (3개)
+    ├── test_notify/                # 알림 모듈 테스트 (3개)
     ├── test_db/                    # DB/스케줄러 테스트 (3개)
-    └── test_calendar/              # Calendar 테스트 (2개)
+    ├── test_scheduler/             # 스케줄러 테스트 (1개)
+    ├── test_calendar/              # Calendar 테스트 (2개)
+    ├── test_analytics.py           # 분석 쿼리 테스트
+    └── test_engine_db_integration.py  # 엔진-DB 통합 테스트
 ```
 
 ---
@@ -390,6 +434,14 @@ WS_RECONNECT_BASE_DELAY=5         # 웹소켓 재연결 기본 대기(초)
 MAX_LOSS_RATE=0.03                 # 최대 손실률 (3%)
 MAX_POSITION_RATIO=0.2             # 최대 포지션 비율 (20%)
 DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한
+
+# Telegram (선택)
+TELEGRAM_BOT_TOKEN=봇_토큰          # BotFather에서 발급
+TELEGRAM_CHAT_ID=채팅_ID            # 알림 수신 채팅방 ID
+TELEGRAM_ENABLED=false              # true로 변경 시 알림 활성화
+
+# Health Check (선택)
+HEALTH_PORT=8080                   # 헬스체크 HTTP 포트
 ```
 
 ---
@@ -411,6 +463,15 @@ DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한
 | 매수 (BUY) | RSI < 과매도 임계값 | RSI 기간 14일, 임계값 30 |
 | 매도 (SELL) | RSI > 과매수 임계값 | RSI 기간 14일, 임계값 70 |
 | 관망 (HOLD) | 30 ≤ RSI ≤ 70 | — |
+
+### 앙상블 전략 (Ensemble)
+
+복수의 전략 시그널을 투표 방식으로 통합합니다. 개별 전략의 confidence를 가중 합산하여 최종 매매 판단을 내립니다.
+
+### 전략 관리
+
+- **전략 레지스트리** — 사용 가능한 전략을 중앙에서 등록/조회
+- **전략 셀렉터** — 종목별로 적합한 전략을 자동 배정
 
 ### 전략 확장
 
@@ -538,7 +599,10 @@ pytest tests/ -v
 # 모듈별 테스트
 pytest tests/test_api/ -v
 pytest tests/test_strategy/ -v
+pytest tests/test_backtest/ -v
+pytest tests/test_notify/ -v
 pytest tests/test_db/ -v
+pytest tests/test_scheduler/ -v
 pytest tests/test_calendar/ -v
 ```
 
