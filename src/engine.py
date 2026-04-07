@@ -674,7 +674,8 @@ class TradingEngine:
             if trade_type == TradeType.SELL:
                 sell_reason = self._SELL_REASON_MAP.get(reason)
                 if avg_price and avg_price > 0:
-                    profit_loss_pct = ((price - avg_price) / avg_price) * 100
+                    avg_price = float(avg_price)
+                    profit_loss_pct = float(((price - avg_price) / avg_price) * 100)
                     profit_loss_amount = int((price - avg_price) * quantity)
 
             with get_session() as session:
@@ -712,7 +713,7 @@ class TradingEngine:
                         stock_name=item.stock_name,
                         screening_rank=rank_idx,
                         volume=item.volume,
-                        price_change_pct=getattr(item, "price_change_pct", 0.0),
+                        price_change_pct=float(getattr(item, "price_change_pct", 0.0)),
                         screened_at=datetime.now(),
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
@@ -742,6 +743,10 @@ class TradingEngine:
             else:
                 signal_type_str = signal.reason[:50] if signal.reason else "UNKNOWN"
 
+            # numpy float → Python float 변환 (PostgreSQL JSONB 호환)
+            conf = float(signal.confidence)
+            target = float(signal.target_price) if signal.target_price is not None else None
+
             with get_session() as session:
                 repo = SignalRepository(session)
                 repo.record_signal(
@@ -750,11 +755,11 @@ class TradingEngine:
                     signal_type=signal_type_str,
                     detected_at=datetime.now(),
                     signal_value={
-                        "confidence": signal.confidence,
-                        "target_price": signal.target_price,
+                        "confidence": conf,
+                        "target_price": target,
                         "reason": signal.reason,
                     },
-                    confidence=signal.confidence,
+                    confidence=conf,
                     action_taken=action_taken,
                 )
         except Exception:
