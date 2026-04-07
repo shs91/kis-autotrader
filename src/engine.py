@@ -287,75 +287,86 @@ class TradingEngine:
             "trade_count": self._today_trade_count,
         })
 
-        if self._risk.check_daily_trade_limit(self._today_trade_count):
-            logger.warning("일일 매매 횟수 한도 도달, 사이클 스킵")
-            return
-
-        # 주기적 스크리닝 (N사이클마다)
-        if self._cycle_count % SCREENING_INTERVAL_CYCLES == 0:
-            try:
-                await self._screen_stocks()
-            except DailyLimitExceededError:
-                await self._set_daily_limit_reached()
+        exit_reason: str = "completed"
+        held_codes: set[str] = set()
+        targets: list[str] = []
+        try:
+            if self._risk.check_daily_trade_limit(self._today_trade_count):
+                logger.warning("일일 매매 횟수 한도 도달, 사이클 스킵")
+                exit_reason = "trade_limit"
                 return
 
-        try:
-            balance = await self._get_balance()
-        except DailyLimitExceededError:
-            self._daily_limit_reached = True
-            logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
-            return
-        except Exception:
-            logger.exception("잔고 조회 실패, 사이클 스킵")
-            return
+            # 주기적 스크리닝 (N사이클마다)
+            if self._cycle_count % SCREENING_INTERVAL_CYCLES == 0:
+                try:
+                    await self._screen_stocks()
+                except DailyLimitExceededError:
+                    await self._set_daily_limit_reached()
+                    exit_reason = "api_limit_screening"
+                    return
 
-        held_codes = {h.stock_code for h in balance.holdings if h.quantity > 0}
-        targets = self._build_monitor_targets(held_codes)
-        logger.info(
-            "모니터링 대상: %d종목 (보유 %d + 관심 %d + 발굴 %d)",
-            len(targets),
-            len(held_codes),
-            len(self._get_watchlist_codes()),
-            len(self._screened_codes),
-        )
-
-        for stock_code in targets:
             try:
-                is_held = stock_code in held_codes
-                holding_info = self._find_holding_from_balance(balance, stock_code)
-                await self._process_stock(stock_code, balance.deposit, is_held, holding_info)
+                balance = await self._get_balance()
             except DailyLimitExceededError:
-                await self._set_daily_limit_reached()
+                self._daily_limit_reached = True
+                logger.warning("API 일일 한도 초과, 당일 매매 사이클 중단")
+                exit_reason = "api_limit_balance"
                 return
             except Exception:
-                logger.exception("종목 처리 중 에러: %s", stock_code)
-                self._record_metric("ERROR", {
-                    "cycle": self._cycle_count,
-                    "stock_code": stock_code,
-                    "error": "종목 처리 실패",
-                })
+                logger.exception("잔고 조회 실패, 사이클 스킵")
+                exit_reason = "balance_error"
+                return
 
-        limiter = self._client._limiter
-        self._record_metric("CYCLE_END", {
-            "cycle": self._cycle_count,
-            "trade_count": self._today_trade_count,
-            "api_calls": limiter.daily_count,
-            "api_limit": limiter.daily_limit,
-            "monitor_stocks": len(targets),
-            "held_stocks": len(held_codes),
-            "screened_stocks": len(self._screened_codes),
-        })
-        logger.info(
-            "--- 사이클 #%d 완료 — 매매 %d건, API %d/%d, "
-            "모니터링 %d종목(보유 %d/발굴 %d) ---",
-            self._cycle_count,
-            self._today_trade_count,
-            limiter.daily_count,
-            limiter.daily_limit,
-            len(targets),
-            len(held_codes),
-            len(self._screened_codes),
-        )
+            held_codes = {h.stock_code for h in balance.holdings if h.quantity > 0}
+            targets = self._build_monitor_targets(held_codes)
+            logger.info(
+                "모니터링 대상: %d종목 (보유 %d + 관심 %d + 발굴 %d)",
+                len(targets),
+                len(held_codes),
+                len(self._get_watchlist_codes()),
+                len(self._screened_codes),
+            )
+
+            for stock_code in targets:
+                try:
+                    is_held = stock_code in held_codes
+                    holding_info = self._find_holding_from_balance(balance, stock_code)
+                    await self._process_stock(stock_code, balance.deposit, is_held, holding_info)
+                except DailyLimitExceededError:
+                    await self._set_daily_limit_reached()
+                    exit_reason = "api_limit_processing"
+                    return
+                except Exception:
+                    logger.exception("종목 처리 중 에러: %s", stock_code)
+                    self._record_metric("ERROR", {
+                        "cycle": self._cycle_count,
+                        "stock_code": stock_code,
+                        "error": "종목 처리 실패",
+                    })
+        finally:
+            limiter = self._client._limiter
+            self._record_metric("CYCLE_END", {
+                "cycle": self._cycle_count,
+                "exit_reason": exit_reason,
+                "trade_count": self._today_trade_count,
+                "api_calls": limiter.daily_count,
+                "api_limit": limiter.daily_limit,
+                "monitor_stocks": len(targets),
+                "held_stocks": len(held_codes),
+                "screened_stocks": len(self._screened_codes),
+            })
+            logger.info(
+                "--- 사이클 #%d %s — 매매 %d건, API %d/%d, "
+                "모니터링 %d종목(보유 %d/발굴 %d) ---",
+                self._cycle_count,
+                "완료" if exit_reason == "completed" else f"조기종료({exit_reason})",
+                self._today_trade_count,
+                limiter.daily_count,
+                limiter.daily_limit,
+                len(targets),
+                len(held_codes),
+                len(self._screened_codes),
+            )
 
     async def post_market(self) -> None:
         """장 마감 후 작업: 체결 내역 조회, 일일 성과 저장."""

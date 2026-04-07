@@ -5,6 +5,14 @@
 
 ---
 
+## [2026-04-07] 사이클 조기종료 시 CYCLE_END 메트릭 누락 수정
+- 제안서: docs/proposals/2026-04-07_cycle-end-metric-missing.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: run_trading_cycle()에 try/finally 패턴 적용, 조기종료 시에도 CYCLE_END 기록, exit_reason 필드 추가
+- 검증 결과: pytest ✅ (305 passed) | mypy ✅ (기존 에러만, 새 에러 없음) | ruff ✅
+- 프로세스 재시작: 예정
+
 ## [2026-04-06 18:04] 이동평균 전략 NaN 방어 로직 추가
 - 제안서: docs/proposals/2026-04-06_moving-average-nan-guard.md
 - 카테고리: bug_fix
