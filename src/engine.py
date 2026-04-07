@@ -336,7 +336,6 @@ class TradingEngine:
                 })
 
         limiter = self._client._limiter
-        limiter.log_daily_count()
         self._record_metric("CYCLE_END", {
             "cycle": self._cycle_count,
             "trade_count": self._today_trade_count,
@@ -347,9 +346,15 @@ class TradingEngine:
             "screened_stocks": len(self._screened_codes),
         })
         logger.info(
-            "--- 장중 매매 사이클 #%d 완료 (당일 매매: %d건) ---",
+            "--- 사이클 #%d 완료 — 매매 %d건, API %d/%d, "
+            "모니터링 %d종목(보유 %d/발굴 %d) ---",
             self._cycle_count,
             self._today_trade_count,
+            limiter.daily_count,
+            limiter.daily_limit,
+            len(targets),
+            len(held_codes),
+            len(self._screened_codes),
         )
 
     async def post_market(self) -> None:
