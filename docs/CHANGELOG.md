@@ -5,6 +5,33 @@
 
 ---
 
+## [2026-04-09] 스크리닝 고도화 — 사전필터 + 복수소스 스코어링 파이프라인
+- 카테고리: enhancement
+- 신규 파일:
+  - src/strategy/screener.py: ScreeningFilter(사전 필터) + ScreeningScorer(가중 스코어링) + StockScreener(통합 클래스)
+  - tests/test_strategy/test_screener.py: 필터/스코어링/통합 테스트 18건
+- 변경 파일:
+  - src/config.py: ScreeningConfig 추가 (15개 설정값 .env 외부화)
+  - src/engine.py: _screen_stocks를 4단계 파이프라인으로 교체 (필터→분석→스코어링→정렬)
+- 스코어링: 거래량순위(0.2) + 등락률(0.3) + 전략신뢰도(0.5) 가중합산
+- 검증 결과: pytest ✅ (323 passed) | mypy ✅ | ruff ✅
+- 프로세스 재시작: 완료
+
+## [2026-04-09] 대시보드 에러 수정 + 매수사유 추적 + 안정화
+- 카테고리: bug_fix, enhancement
+- 신규 파일:
+  - alembic/versions/499487c40196_add_buy_reason_to_trades.py: DB 마이그레이션
+- 변경 파일:
+  - src/db/models.py: BuyReason enum 추가, Trade 모델에 buy_reason 컬럼
+  - src/db/repository.py: record_trade()에 buy_reason 파라미터 추가
+  - src/engine.py: 매수 시 시그널→BuyReason 자동 매핑, signal 정보 기록
+  - dashboard/pages/trades.py: sell_reason enum 에러 수정, 매수 사유 분석 섹션 추가
+  - dashboard/app.py: 당일 체결 매수 탭에 매수사유 표시
+  - src/notify/bot.py: 시작 시 기존 업데이트 flush (재시작 루프 방지)
+  - src/calendar/google_auth.py: 토큰 갱신 실패 시 재인증 플로우 자동 fallback
+- 검증 결과: pytest ✅ (305 passed) | mypy ✅ | ruff ✅
+- 프로세스 재시작: 완료
+
 ## [2026-04-08] 스크리닝 등락률(price_change_pct) 필드명 불일치 수정
 - 제안서: docs/proposals/2026-04-08_screening-price-change-field-mismatch.md
 - 카테고리: bug_fix

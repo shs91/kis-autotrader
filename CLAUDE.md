@@ -42,7 +42,8 @@ kis-autotrader/
 │   │   ├── base.py            # 매매 전략 추상 클래스
 │   │   ├── moving_average.py  # 이동평균 교차 전략
 │   │   ├── rsi.py             # RSI 기반 전략
-│   │   └── risk.py            # 리스크 관리 모듈
+│   │   ├── risk.py            # 리스크 관리 모듈
+│   │   └── screener.py        # 종목 스크리닝 (필터+스코어링)
 │   ├── db/                    # [db-scheduler-engineer 담당]
 │   │   ├── __init__.py
 │   │   ├── models.py          # SQLAlchemy 모델
