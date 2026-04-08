@@ -52,10 +52,14 @@ class StrategyRegistry:
 
         전략 파라미터는 settings.strategy에서 자동으로 로드된다.
         """
+        from src.strategy.bollinger import BollingerBandStrategy
+        from src.strategy.macd import MACDStrategy
         from src.strategy.moving_average import MovingAverageStrategy
         from src.strategy.rsi import RSIStrategy
 
         registry = cls()
         registry.register("moving_average", MovingAverageStrategy())
         registry.register("rsi", RSIStrategy())
+        registry.register("macd", MACDStrategy())
+        registry.register("bollinger", BollingerBandStrategy())
         return registry

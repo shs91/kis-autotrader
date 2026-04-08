@@ -387,4 +387,10 @@ except Exception:
 # ── 푸터 ────────────────────────────────────────
 
 st.divider()
-st.caption(f"환경: {health.get('env', '-') if health else '-'} | 데이터 갱신: 페이지 새로고침")
+auto_refresh = st.checkbox("30초 자동 갱신", value=False)
+st.caption(f"환경: {health.get('env', '-') if health else '-'} | 데이터 갱신: {'자동 30초' if auto_refresh else '수동 새로고침'}")
+
+if auto_refresh:
+    import time
+    time.sleep(30)
+    st.rerun()

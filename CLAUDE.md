@@ -46,6 +46,8 @@ kis-autotrader/
 │   │   ├── ensemble.py        # 앙상블 (다중 전략 투표)
 │   │   ├── registry.py        # 전략 레지스트리
 │   │   ├── selector.py        # 종목별 전략 셀렉터
+│   │   ├── macd.py            # MACD 전략
+│   │   ├── bollinger.py       # 볼린저밴드 전략
 │   │   ├── risk.py            # 리스크 관리 모듈
 │   │   └── screener.py        # 종목 스크리닝 (필터+스코어링)
 │   ├── db/                    # [db-scheduler-engineer 담당]
@@ -76,7 +78,8 @@ kis-autotrader/
 │   └── pages/
 │       ├── trades.py          # 매매 분석
 │       ├── performance.py     # 성과 분석
-│       └── signals.py         # 시그널 분석
+│       ├── signals.py         # 시그널 분석
+│       └── risk.py            # 리스크 분석 (MDD, Sharpe, 연패)
 ├── tests/
 │   ├── test_api/
 │   ├── test_strategy/

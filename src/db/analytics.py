@@ -1010,3 +1010,44 @@ def get_consecutive_losses(
         "current_loss_streak": current_loss,
         "total_sells": len(sells),
     }
+
+
+def get_strategy_win_rates(
+    session: Session, lookback_days: int = 30,
+) -> dict[str, float]:
+    """전략(signal_type)별 승률을 계산하여 반환한다.
+
+    앙상블 가중치 자동 조정에 사용된다.
+
+    Args:
+        session: DB 세션
+        lookback_days: 분석 기간 (일수)
+
+    Returns:
+        {전략명: 승률(0.0~1.0)} 딕셔너리. 데이터 없는 전략은 0.5.
+    """
+    since = datetime.now() - timedelta(days=lookback_days)
+
+    sells = session.execute(
+        select(Trade)
+        .where(
+            Trade.traded_at >= since,
+            Trade.trade_type == TradeType.SELL,
+            Trade.signal_type.isnot(None),
+            Trade.profit_loss_amount.isnot(None),
+        )
+    ).scalars().all()
+
+    by_strategy: dict[str, dict[str, int]] = {}
+    for t in sells:
+        key = t.signal_type or "UNKNOWN"
+        if key not in by_strategy:
+            by_strategy[key] = {"wins": 0, "total": 0}
+        by_strategy[key]["total"] += 1
+        if (t.profit_loss_amount or 0) > 0:
+            by_strategy[key]["wins"] += 1
+
+    return {
+        name: stats["wins"] / stats["total"] if stats["total"] > 0 else 0.5
+        for name, stats in by_strategy.items()
+    }

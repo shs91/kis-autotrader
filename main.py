@@ -458,10 +458,35 @@ def _register_bot_commands(
         asyncio.get_event_loop().call_later(1.0, os.kill, os.getpid(), signal.SIGTERM)
         return "재시작 중... (약 10초 후 복귀)"
 
+    async def cmd_stop(_args: str) -> str:
+        """매매를 일시 중단한다."""
+        engine._risk._portfolio_halted = True
+        logger.info("Telegram 명령으로 매매 중단")
+        return "매매가 중단되었습니다. /resume으로 재개할 수 있습니다."
+
+    async def cmd_resume(_args: str) -> str:
+        """매매를 재개한다."""
+        engine._risk._portfolio_halted = False
+        logger.info("Telegram 명령으로 매매 재개")
+        return "매매가 재개되었습니다."
+
+    async def cmd_setlimit(args: str) -> str:
+        """일일 매매 한도를 조정한다."""
+        try:
+            new_limit = int(args.strip())
+            if new_limit < 1 or new_limit > 1000:
+                return "유효 범위: 1~1000"
+            engine._risk._daily_trade_limit = new_limit
+            logger.info("Telegram 명령으로 일일 매매 한도 변경: %d", new_limit)
+            return f"일일 매매 한도가 {new_limit}건으로 변경되었습니다."
+        except ValueError:
+            return "사용법: /setlimit 숫자 (예: /setlimit 50)"
+
     async def cmd_help(_args: str) -> str:
         """사용 가능한 명령을 반환한다."""
+        halted = "중단" if engine._risk.is_portfolio_halted else "운영"
         return (
-            "<b>[명령어]</b>\n"
+            f"<b>[명령어]</b> (매매: {halted})\n"
             "/status — 시스템 상태\n"
             "/balance — 잔고 조회\n"
             "/today — 당일 현황\n"
@@ -473,6 +498,9 @@ def _register_bot_commands(
             "/watch 종목코드 — 관심종목 추가\n"
             "/unwatch 종목코드 — 관심종목 제거\n"
             "/watchlist — 관심종목 목록\n"
+            "/stop — 매매 중단\n"
+            "/resume — 매매 재개\n"
+            "/setlimit N — 일일 매매 한도 변경\n"
             "/restart — 시스템 재시작\n"
             "/help — 명령어 목록"
         )
@@ -488,6 +516,9 @@ def _register_bot_commands(
     bot.register("watch", cmd_watch)
     bot.register("unwatch", cmd_unwatch)
     bot.register("watchlist", cmd_watchlist)
+    bot.register("stop", cmd_stop)
+    bot.register("resume", cmd_resume)
+    bot.register("setlimit", cmd_setlimit)
     bot.register("restart", cmd_restart)
     bot.register("help", cmd_help)
 
