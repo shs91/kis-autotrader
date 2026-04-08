@@ -9,8 +9,6 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# 기본 익절 비율
-DEFAULT_TAKE_PROFIT_RATIO: float = 0.05
 
 
 class RiskManager:
@@ -27,7 +25,7 @@ class RiskManager:
         max_loss_rate: float | None = None,
         max_position_ratio: float | None = None,
         daily_trade_limit: int | None = None,
-        take_profit_ratio: float = DEFAULT_TAKE_PROFIT_RATIO,
+        take_profit_ratio: float | None = None,
     ) -> None:
         """리스크 관리자를 초기화한다.
 
@@ -52,7 +50,12 @@ class RiskManager:
             if daily_trade_limit is not None
             else settings.trading.daily_trade_limit
         )
-        self._take_profit_ratio = take_profit_ratio
+        self._take_profit_ratio = (
+            take_profit_ratio
+            if take_profit_ratio is not None
+            else settings.strategy.take_profit_ratio
+        )
+        self._min_confidence = settings.strategy.min_confidence
 
     def check_max_loss(self, current_price: float, avg_price: float) -> bool:
         """최대 손실률 초과 여부를 확인한다.
@@ -237,12 +240,11 @@ class RiskManager:
                 )
 
         # 신뢰도가 너무 낮은 시그널은 거부
-        MIN_CONFIDENCE: float = 0.1
-        if signal.confidence < MIN_CONFIDENCE:
+        if signal.confidence < self._min_confidence:
             logger.info(
                 "낮은 신뢰도로 주문 거부: %.2f < %.2f",
                 signal.confidence,
-                MIN_CONFIDENCE,
+                self._min_confidence,
             )
             return False
 

@@ -136,6 +136,43 @@ class StrategyConfig:
         default_factory=lambda: _env("STRATEGY_MAPPINGS", "")
     )
 
+    # 이동평균 전략 파라미터
+    ma_short_period: int = field(
+        default_factory=lambda: _env_int("STRATEGY_MA_SHORT_PERIOD", 5)
+    )
+    ma_long_period: int = field(
+        default_factory=lambda: _env_int("STRATEGY_MA_LONG_PERIOD", 20)
+    )
+    ma_max_divergence: float = field(
+        default_factory=lambda: _env_float("STRATEGY_MA_MAX_DIVERGENCE", 0.05)
+    )
+
+    # RSI 전략 파라미터
+    rsi_period: int = field(
+        default_factory=lambda: _env_int("STRATEGY_RSI_PERIOD", 14)
+    )
+    rsi_oversold: float = field(
+        default_factory=lambda: _env_float("STRATEGY_RSI_OVERSOLD", 30.0)
+    )
+    rsi_overbought: float = field(
+        default_factory=lambda: _env_float("STRATEGY_RSI_OVERBOUGHT", 70.0)
+    )
+
+    # 앙상블 투표 방식 ("majority" 또는 "weighted")
+    ensemble_method: str = field(
+        default_factory=lambda: _env("STRATEGY_ENSEMBLE_METHOD", "weighted")
+    )
+
+    # 리스크: 익절 비율
+    take_profit_ratio: float = field(
+        default_factory=lambda: _env_float("TAKE_PROFIT_RATIO", 0.05)
+    )
+
+    # 최소 신뢰도 (이 미만 시그널 무시)
+    min_confidence: float = field(
+        default_factory=lambda: _env_float("STRATEGY_MIN_CONFIDENCE", 0.1)
+    )
+
     def parse_mappings(self) -> dict[str, str]:
         """STRATEGY_MAPPINGS 환경변수를 파싱한다.
 

@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import pandas as pd
 
+from src.config import settings
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.utils.exceptions import StrategyError
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
-
-# 기본 RSI 설정
-DEFAULT_RSI_PERIOD: int = 14
-DEFAULT_OVERSOLD_THRESHOLD: float = 30.0
-DEFAULT_OVERBOUGHT_THRESHOLD: float = 70.0
 
 
 class RSIStrategy(BaseStrategy):
@@ -28,9 +24,9 @@ class RSIStrategy(BaseStrategy):
 
     def __init__(
         self,
-        period: int = DEFAULT_RSI_PERIOD,
-        oversold_threshold: float = DEFAULT_OVERSOLD_THRESHOLD,
-        overbought_threshold: float = DEFAULT_OVERBOUGHT_THRESHOLD,
+        period: int | None = None,
+        oversold_threshold: float | None = None,
+        overbought_threshold: float | None = None,
     ) -> None:
         """RSI 전략을 초기화한다.
 
@@ -42,6 +38,11 @@ class RSIStrategy(BaseStrategy):
         Raises:
             StrategyError: 파라미터 값이 유효하지 않은 경우
         """
+        scfg = settings.strategy
+        period = period if period is not None else scfg.rsi_period
+        oversold_threshold = oversold_threshold if oversold_threshold is not None else scfg.rsi_oversold
+        overbought_threshold = overbought_threshold if overbought_threshold is not None else scfg.rsi_overbought
+
         if period < 1:
             raise StrategyError("RSI 기간은 1 이상이어야 합니다.")
         if not 0.0 < oversold_threshold < overbought_threshold < 100.0:

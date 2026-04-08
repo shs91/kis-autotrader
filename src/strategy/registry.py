@@ -48,7 +48,10 @@ class StrategyRegistry:
 
     @classmethod
     def create_default(cls) -> StrategyRegistry:
-        """기본 전략들이 등록된 레지스트리를 생성한다."""
+        """기본 전략들이 등록된 레지스트리를 생성한다.
+
+        전략 파라미터는 settings.strategy에서 자동으로 로드된다.
+        """
         from src.strategy.moving_average import MovingAverageStrategy
         from src.strategy.rsi import RSIStrategy
 

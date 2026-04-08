@@ -51,8 +51,8 @@ restart_service() {
 }
 
 # 장중 시간 체크 (09:05~15:25)
-HOUR=$(date +%H)
-MINUTE=$(date +%M)
+HOUR=$(date +%-H)
+MINUTE=$(date +%-M)
 CURRENT_MIN=$((HOUR * 60 + MINUTE))
 MARKET_OPEN=$((9 * 60 + 5))   # 09:05 (장 시작 후 5분 여유)
 MARKET_CLOSE=$((15 * 60 + 20)) # 15:20

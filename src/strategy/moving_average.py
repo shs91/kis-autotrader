@@ -6,18 +6,12 @@ import math
 
 import pandas as pd
 
+from src.config import settings
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.utils.exceptions import StrategyError
 from src.utils.logger import setup_logger
 
-logger = setup_logger(__name__)
-
-# 기본 이동평균 기간
-DEFAULT_SHORT_PERIOD: int = 5
-DEFAULT_LONG_PERIOD: int = 20
-
-# 신뢰도 계산 상수
-MAX_DIVERGENCE_RATE: float = 0.05  # 최대 괴리율 (5%)
+logger = setup_logger(__name__)  # 최대 괴리율 (5%)
 
 
 class MovingAverageStrategy(BaseStrategy):
@@ -32,8 +26,8 @@ class MovingAverageStrategy(BaseStrategy):
 
     def __init__(
         self,
-        short_period: int = DEFAULT_SHORT_PERIOD,
-        long_period: int = DEFAULT_LONG_PERIOD,
+        short_period: int | None = None,
+        long_period: int | None = None,
     ) -> None:
         """이동평균 교차 전략을 초기화한다.
 
@@ -44,6 +38,10 @@ class MovingAverageStrategy(BaseStrategy):
         Raises:
             StrategyError: 단기 기간이 장기 기간 이상인 경우
         """
+        scfg = settings.strategy
+        short_period = short_period if short_period is not None else scfg.ma_short_period
+        long_period = long_period if long_period is not None else scfg.ma_long_period
+
         if short_period >= long_period:
             raise StrategyError(
                 f"단기 기간({short_period})은 장기 기간({long_period})보다 작아야 합니다."
@@ -53,6 +51,7 @@ class MovingAverageStrategy(BaseStrategy):
 
         self._short_period = short_period
         self._long_period = long_period
+        self._max_divergence = scfg.ma_max_divergence
 
     @property
     def name(self) -> str:
@@ -114,7 +113,7 @@ class MovingAverageStrategy(BaseStrategy):
 
         # 괴리율 기반 신뢰도 계산
         divergence_rate = abs(current_short - current_long) / current_long if current_long != 0 else 0.0
-        confidence = min(divergence_rate / MAX_DIVERGENCE_RATE, 1.0)
+        confidence = min(divergence_rate / self._max_divergence, 1.0)
 
         current_price = float(market_data["close"].iloc[-1])
 
