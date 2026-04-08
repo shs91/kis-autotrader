@@ -5,6 +5,14 @@
 
 ---
 
+## [2026-04-08] 스크리닝 등락률(price_change_pct) 필드명 불일치 수정
+- 제안서: docs/proposals/2026-04-08_screening-price-change-field-mismatch.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `getattr(item, "price_change_pct", 0.0)` → `item.change_rate` 직접 접근으로 수정 (VolumeRankItem 필드명 불일치 해소)
+- 검증 결과: pytest ✅ (305 passed) | mypy ✅ (기존 에러만, 새 에러 없음) | ruff ✅ (기존 에러만, 새 에러 없음)
+- 프로세스 재시작: 예정
+
 ## [2026-04-07] 사이클 조기종료 시 CYCLE_END 메트릭 누락 수정
 - 제안서: docs/proposals/2026-04-07_cycle-end-metric-missing.md
 - 카테고리: bug_fix

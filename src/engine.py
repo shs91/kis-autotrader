@@ -15,7 +15,7 @@ from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
 from src.config import settings
 from src.db.event_logger import log_trade, log_warning
-from src.db.models import OrderStatus, OrderType, SellReason, TradeType
+from src.db.models import BuyReason, OrderStatus, OrderType, SellReason, TradeType
 from src.db.repository import (
     DailyPerformanceRepository,
     DailySummaryRepository,
@@ -254,7 +254,7 @@ class TradingEngine:
                     h.stock_name, h.stock_code, h.quantity, h.avg_price, h.profit_rate,
                 )
 
-            self._seed_watchlist_from_env()
+            await self._seed_watchlist_from_env()
 
             # 관심종목 일봉 사전 캐싱
             watchlist_codes = self._get_watchlist_codes()
@@ -505,6 +505,10 @@ class TradingEngine:
         # 2. 현재가 조회 (실시간)
         current = await self._quote.get_current_price(stock_code)
 
+        # 2-1. 종목명이 코드와 동일하면 API 응답의 실제 이름으로 갱신
+        if current.stock_name and current.stock_name != stock_code:
+            self._update_stock_name_if_needed(stock_code, current.stock_name)
+
         # 3. 전략 분석 (보유/미보유 모두 실행)
         strategy = self._selector.get_strategy(stock_code)
         signal = strategy.analyze(df)
@@ -552,7 +556,9 @@ class TradingEngine:
             self._record_signal_to_db(
                 stock_code, current.stock_name, signal, action_taken=True,
             )
-            await self._execute_buy(stock_code, current.stock_name, quantity, current.current_price)
+            await self._execute_buy(
+                stock_code, current.stock_name, quantity, current.current_price, signal=signal,
+            )
         elif signal.signal_type != SignalType.HOLD:
             self._record_signal_to_db(
                 stock_code, current.stock_name, signal, action_taken=False,
@@ -614,7 +620,8 @@ class TradingEngine:
     # ── 주문 실행 ─────────────────────────────────────────
 
     async def _execute_buy(
-        self, stock_code: str, stock_name: str, quantity: int, price: int
+        self, stock_code: str, stock_name: str, quantity: int, price: int,
+        signal: Signal | None = None,
     ) -> None:
         """매수 주문을 실행하고 DB에 기록한다."""
         try:
@@ -633,6 +640,7 @@ class TradingEngine:
             )
             self._record_trade_to_db(
                 stock_code, stock_name, TradeType.BUY, quantity, price,
+                signal=signal,
             )
 
             await self._notifier.notify_buy(stock_name, stock_code, quantity, price)
@@ -682,6 +690,24 @@ class TradingEngine:
         "전략매도": SellReason.STRATEGY,
     }
 
+    _BUY_REASON_MAP: dict[str, BuyReason] = {
+        "골든크로스": BuyReason.GOLDEN_CROSS,
+        "과매도": BuyReason.RSI_OVERSOLD,
+        "앙상블": BuyReason.ENSEMBLE,
+    }
+
+    @staticmethod
+    def _detect_buy_reason(signal: Signal) -> BuyReason | None:
+        """시그널 reason 문자열에서 BuyReason을 추론한다."""
+        reason = signal.reason
+        if "골든크로스" in reason:
+            return BuyReason.GOLDEN_CROSS
+        if "과매도" in reason or "RSI" in reason.upper():
+            return BuyReason.RSI_OVERSOLD
+        if "앙상블" in reason or "ensemble" in reason.lower():
+            return BuyReason.ENSEMBLE
+        return None
+
     def _record_trade_to_db(
         self,
         stock_code: str,
@@ -690,14 +716,20 @@ class TradingEngine:
         quantity: int,
         price: int,
         reason: str = "",
+        signal: Signal | None = None,
         signal_type: str | None = None,
         avg_price: float | None = None,
     ) -> None:
         """매매 체결 내역을 trades 테이블에 기록한다. 실패 시 로그만 남긴다."""
         try:
+            buy_reason: BuyReason | None = None
             sell_reason: SellReason | None = None
             profit_loss_pct: float | None = None
             profit_loss_amount: int | None = None
+
+            if trade_type == TradeType.BUY and signal is not None:
+                buy_reason = self._detect_buy_reason(signal)
+                signal_type = signal.reason.split(" ")[0] if signal.reason else signal_type
 
             if trade_type == TradeType.SELL:
                 sell_reason = self._SELL_REASON_MAP.get(reason)
@@ -717,6 +749,7 @@ class TradingEngine:
                     total_amount=price * quantity,
                     traded_at=datetime.now(),
                     cycle_number=self._cycle_count,
+                    buy_reason=buy_reason,
                     sell_reason=sell_reason,
                     signal_type=signal_type,
                     profit_loss_pct=profit_loss_pct,
@@ -741,7 +774,7 @@ class TradingEngine:
                         stock_name=item.stock_name,
                         screening_rank=rank_idx,
                         volume=item.volume,
-                        price_change_pct=float(getattr(item, "price_change_pct", 0.0)),
+                        price_change_pct=item.change_rate,
                         screened_at=datetime.now(),
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
@@ -865,6 +898,17 @@ class TradingEngine:
                 }
         return None
 
+    def _update_stock_name_if_needed(self, stock_code: str, stock_name: str) -> None:
+        """DB의 종목명이 코드와 동일할 경우 실제 이름으로 갱신한다."""
+        try:
+            with get_session() as session:
+                stock_repo = StockRepository(session)
+                stock = stock_repo.get_by_code(stock_code)
+                if stock is not None and stock.name == stock.code:
+                    stock_repo.update_name(stock_code, stock_name)
+        except Exception:
+            logger.debug("종목명 갱신 실패: %s", stock_code)
+
     def _record_order_to_db(
         self,
         stock_code: str,
@@ -890,13 +934,24 @@ class TradingEngine:
         except Exception:
             logger.exception("주문 DB 기록 실패: %s", stock_code)
 
-    def _seed_watchlist_from_env(self) -> None:
-        """최초 실행 시 .env의 관심종목을 DB에 시드한다."""
+    async def _seed_watchlist_from_env(self) -> None:
+        """최초 실행 시 .env의 관심종목을 DB에 시드하고, 종목명을 보정한다."""
         try:
             with get_session() as session:
                 repo = WatchlistRepository(session)
+                stock_repo = StockRepository(session)
                 for code in settings.trading.watchlist_codes:
                     repo.add(code)
+
+                    # 종목명이 코드와 동일하면 API로 실제 이름을 조회하여 갱신
+                    stock = stock_repo.get_by_code(code)
+                    if stock is not None and stock.name == stock.code:
+                        try:
+                            price_info = await self._quote.get_current_price(code)
+                            if price_info.stock_name:
+                                stock_repo.update_name(code, price_info.stock_name)
+                        except Exception:
+                            logger.debug("종목명 조회 실패 (시드): %s", code)
         except Exception:
             logger.exception("관심종목 시드 실패")
 
