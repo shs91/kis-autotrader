@@ -5,6 +5,39 @@
 
 ---
 
+## [2026-04-09] Phase 3 — 전략 추가 + 성과 피드백 + 대시보드 리스크 + 매매 제어
+- 카테고리: enhancement
+- 신규 파일:
+  - src/strategy/macd.py: MACD 전략 (EMA 교차 기반 골든/데드크로스)
+  - src/strategy/bollinger.py: 볼린저밴드 전략 (%B 지표 기반 과매수/과매도)
+  - dashboard/pages/risk.py: 리스크 분석 페이지 (MDD, Sharpe/Sortino, Profit Factor, 연패)
+  - tests/test_strategy/test_macd.py, test_bollinger.py: 전략 테스트 10건
+- 변경 파일:
+  - src/strategy/ensemble.py: "performance" 투표 모드 추가 (과거 승률 기반 가중치)
+  - src/strategy/registry.py: macd, bollinger 전략 자동 등록
+  - src/db/analytics.py: get_strategy_win_rates() 추가 (전략별 승률 조회)
+  - dashboard/app.py: 30초 자동 갱신 옵션 추가
+  - main.py: Telegram /stop, /resume, /setlimit 매매 제어 명령 3개 추가
+- 검증 결과: pytest ✅ (333 passed)
+
+## [2026-04-09] Phase 2 — 분석 지표 고도화 + 포트폴리오 리스크 + 시간대 조정
+- 카테고리: enhancement
+- 변경 파일:
+  - src/db/analytics.py: MDD, Sharpe/Sortino Ratio, Profit Factor, 연속 손실/수익 추적 함수 추가
+  - src/strategy/risk.py: record_trade_result() + 당일 MDD/연패 감시 → 자동 매매 중단, 장 마감 임박(14:30 이후) 신규 매수 차단 + 익절 비율 50% 하향
+  - src/engine.py: 매도 결과 리스크 추적 연동, 포트폴리오 halt 체크, 장 시작 시 리스크 초기화
+  - src/config.py: TradingConfig에 MAX_DAILY_DRAWDOWN, MAX_CONSECUTIVE_LOSSES, MARKET_CLOSE_CUTOFF 추가
+- 검증 결과: pytest ✅ (323 passed)
+
+## [2026-04-09] Phase 1 — 전략 파라미터 외부화 + watchdog 수정 + 로그 로테이션
+- 카테고리: enhancement, bug_fix
+- 변경 파일:
+  - src/config.py: StrategyConfig에 MA/RSI/앙상블/익절/신뢰도 파라미터 11개 추가
+  - src/strategy/moving_average.py, rsi.py, risk.py: 하드코딩 → settings 주입
+  - scripts/watchdog.sh: date +%H → +%-H (08/09시 8진수 파싱 버그 수정)
+  - src/utils/logger.py: WARNING 이상 크기 기반 로테이션 추가 (50MB × 5)
+- 검증 결과: pytest ✅ (323 passed)
+
 ## [2026-04-09] 스크리닝 고도화 — 사전필터 + 복수소스 스코어링 파이프라인
 - 카테고리: enhancement
 - 신규 파일:
