@@ -100,12 +100,13 @@ class TestRefreshToken:
         mock_creds.refresh.assert_called_once()
         assert result is mock_creds
 
-    def test_refresh_failure_raises_calendar_error(
+    def test_refresh_failure_falls_back_to_auth_flow(
         self, tmp_paths: tuple[Path, Path]
     ) -> None:
-        """토큰 갱신 실패 시 CalendarError가 발생한다."""
+        """토큰 갱신 실패 시 재인증 플로우로 fallback한다."""
         creds_path, token_path = tmp_paths
         token_path.write_text("{}")
+        creds_path.write_text("{}")
 
         mock_creds = MagicMock()
         mock_creds.valid = False
@@ -113,17 +114,26 @@ class TestRefreshToken:
         mock_creds.refresh_token = "refresh_token_value"
         mock_creds.refresh.side_effect = Exception("네트워크 오류")
 
+        mock_new_creds = MagicMock()
+        mock_new_creds.to_json.return_value = "{}"
+
         with (
             patch(
                 "src.calendar.google_auth.Credentials.from_authorized_user_file",
                 return_value=mock_creds,
             ),
-            pytest.raises(CalendarError, match="토큰 갱신 실패"),
+            patch(
+                "src.calendar.google_auth.InstalledAppFlow.from_client_secrets_file",
+            ) as mock_flow,
         ):
+            mock_flow.return_value.run_local_server.return_value = mock_new_creds
             auth = GoogleCalendarAuth(
                 credentials_path=creds_path, token_path=token_path
             )
-            auth.authenticate()
+            result = auth.authenticate()
+
+        assert result is mock_new_creds
+        mock_flow.return_value.run_local_server.assert_called_once()
 
 
 class TestCredentialsMissing:

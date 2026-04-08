@@ -33,16 +33,12 @@ from src.notify.telegram import TelegramNotifier
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.registry import StrategyRegistry
 from src.strategy.risk import RiskManager
+from src.strategy.screener import StockScreener
 from src.strategy.selector import StrategySelector
 from src.utils.exceptions import DailyLimitExceededError
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
-
-# 스크리닝 상수
-SCREENING_TOP_N: int = 20  # 거래량 상위 N종목 스캔
-SCREENING_INTERVAL_CYCLES: int = 60  # N사이클마다 스크리닝 (약 5분 간격)
-MAX_SCREENED_STOCKS: int = 15  # 스크리닝 발굴 종목 상한 (API 호출량 제어)
 
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
@@ -85,6 +81,7 @@ class TradingEngine:
 
         self._risk = RiskManager()
         self._notifier = TelegramNotifier()
+        self._screener = StockScreener()
 
         # 관심종목: 직접 지정 시 고정, 미지정 시 DB에서 매 사이클 조회
         self._fixed_watchlist: list[str] | None = watchlist
@@ -297,7 +294,7 @@ class TradingEngine:
                 return
 
             # 주기적 스크리닝 (N사이클마다)
-            if self._cycle_count % SCREENING_INTERVAL_CYCLES == 0:
+            if self._cycle_count % self._screener.config.interval_cycles == 0:
                 try:
                     await self._screen_stocks()
                 except DailyLimitExceededError:
@@ -422,31 +419,30 @@ class TradingEngine:
     # ── 종목 스크리닝 ─────────────────────────────────────
 
     async def _screen_stocks(self) -> None:
-        """거래량 상위 종목을 스캔하여 매수 후보를 발굴한다."""
-        if len(self._screened_codes) >= MAX_SCREENED_STOCKS:
+        """거래량 상위 종목을 필터링·스코어링하여 매수 후보를 발굴한다."""
+        scfg = self._screener.config
+        if len(self._screened_codes) >= scfg.max_screened:
             logger.info("스크리닝 발굴 종목 상한 도달 (%d종목), 스킵", len(self._screened_codes))
             return
 
         logger.info("=== 종목 스크리닝 시작 ===")
 
         try:
-            ranked = await self._quote.get_volume_rank(top_n=SCREENING_TOP_N)
+            ranked = await self._quote.get_volume_rank(top_n=scfg.top_n)
         except Exception:
             logger.exception("거래량 순위 조회 실패")
             return
 
-        remaining_slots = MAX_SCREENED_STOCKS - len(self._screened_codes)
-        new_candidates: list[str] = []
-
+        # 1단계: 사전 필터 (가격/시총/등락률/거래량)
         watchlist_set = set(self._get_watchlist_codes())
-        for item in ranked:
-            if len(new_candidates) >= remaining_slots:
-                break
-            if item.stock_code in watchlist_set:
-                continue
-            if item.stock_code in self._screened_codes:
-                continue
+        exclude_codes = watchlist_set | self._screened_codes
+        filtered = self._screener.filter_candidates(ranked, exclude_codes)
 
+        # 2단계: 전략 분석 + 스코어링
+        from src.strategy.screener import ScoredCandidate
+
+        scored: list[ScoredCandidate] = []
+        for rank_idx, item in enumerate(filtered):
             try:
                 df = await self._get_daily_df(item.stock_code)
                 if df is None:
@@ -455,19 +451,34 @@ class TradingEngine:
                 strategy = self._selector.get_strategy(item.stock_code)
                 signal = strategy.analyze(df)
 
-                if signal.signal_type == SignalType.BUY and signal.confidence >= 0.3:
-                    new_candidates.append(item.stock_code)
-                    logger.info(
-                        "[스크리닝 발굴] %s(%s) 전략=%s — %s, 신뢰도=%.2f",
-                        item.stock_name,
-                        item.stock_code,
-                        strategy.name,
-                        signal.reason,
-                        signal.confidence,
-                    )
+                candidate = self._screener.score_candidate(
+                    item, rank_idx, len(filtered), signal,
+                )
+                scored.append(candidate)
 
             except Exception:
                 logger.debug("스크리닝 분석 실패: %s", item.stock_code)
+
+        # 3단계: 종합 점수 정렬 + 최소 점수 컷
+        top_candidates = self._screener.rank_candidates(scored)
+
+        # 4단계: 슬롯 수만큼 발굴
+        remaining_slots = scfg.max_screened - len(self._screened_codes)
+        new_candidates: list[str] = []
+
+        for candidate in top_candidates[:remaining_slots]:
+            new_candidates.append(candidate.stock_code)
+            logger.info(
+                "[스크리닝 발굴] %s(%s) 종합=%.2f "
+                "(거래량=%.2f, 등락률=%.2f, 전략=%.2f) — %s",
+                candidate.stock_name,
+                candidate.stock_code,
+                candidate.total_score,
+                candidate.volume_rank_score,
+                candidate.change_rate_score,
+                candidate.strategy_score,
+                candidate.signal.reason,
+            )
 
         self._screened_codes.update(new_candidates)
         self._record_screening_to_db(ranked, new_candidates)
@@ -475,7 +486,7 @@ class TradingEngine:
             "=== 종목 스크리닝 완료: 신규 %d종목 발굴 (누적 %d/%d종목) ===",
             len(new_candidates),
             len(self._screened_codes),
-            MAX_SCREENED_STOCKS,
+            scfg.max_screened,
         )
 
     # ── 개별 종목 처리 ────────────────────────────────────

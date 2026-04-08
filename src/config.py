@@ -156,6 +156,58 @@ class StrategyConfig:
 
 
 @dataclass(frozen=True)
+class ScreeningConfig:
+    """종목 스크리닝 설정."""
+
+    # 조회 설정
+    top_n: int = field(
+        default_factory=lambda: _env_int("SCREENING_TOP_N", 20)
+    )
+    interval_cycles: int = field(
+        default_factory=lambda: _env_int("SCREENING_INTERVAL_CYCLES", 60)
+    )
+    max_screened: int = field(
+        default_factory=lambda: _env_int("MAX_SCREENED_STOCKS", 15)
+    )
+
+    # 사전 필터
+    min_price: int = field(
+        default_factory=lambda: _env_int("SCREENING_MIN_PRICE", 1000)
+    )
+    max_price: int = field(
+        default_factory=lambda: _env_int("SCREENING_MAX_PRICE", 500000)
+    )
+    min_market_cap: int = field(
+        default_factory=lambda: _env_int("SCREENING_MIN_MARKET_CAP", 100_000_000)
+    )
+    change_rate_min: float = field(
+        default_factory=lambda: _env_float("SCREENING_CHANGE_RATE_MIN", -5.0)
+    )
+    change_rate_max: float = field(
+        default_factory=lambda: _env_float("SCREENING_CHANGE_RATE_MAX", 15.0)
+    )
+    min_volume: int = field(
+        default_factory=lambda: _env_int("SCREENING_MIN_VOLUME", 10000)
+    )
+
+    # 스코어링 가중치
+    weight_volume_rank: float = field(
+        default_factory=lambda: _env_float("SCREENING_WEIGHT_VOLUME_RANK", 0.3)
+    )
+    weight_change_rate: float = field(
+        default_factory=lambda: _env_float("SCREENING_WEIGHT_CHANGE_RATE", 0.3)
+    )
+    weight_strategy: float = field(
+        default_factory=lambda: _env_float("SCREENING_WEIGHT_STRATEGY", 0.4)
+    )
+
+    # 최소 종합 점수 (0.0~1.0, 이하 컷)
+    min_score: float = field(
+        default_factory=lambda: _env_float("SCREENING_MIN_SCORE", 0.3)
+    )
+
+
+@dataclass(frozen=True)
 class HealthConfig:
     """헬스체크 서버 설정."""
 
@@ -188,6 +240,7 @@ class Settings:
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
+    screening: ScreeningConfig = field(default_factory=ScreeningConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
 

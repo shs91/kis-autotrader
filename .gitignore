@@ -20,9 +20,13 @@ venv/
 .DS_Store
 docs/.bkit-memory.json
 docs/.pdca-status.json
+scripts/docs/
+
+.mcp.json
 
 logs/
 backups/
+docs/reports/daily/
 
 .coverage
 htmlcov/
