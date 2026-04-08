@@ -58,9 +58,13 @@ class GoogleCalendarAuth:
                 return creds
 
             if creds and creds.expired and creds.refresh_token:
-                creds = self._refresh_token(creds)
-                self._credentials = creds
-                return creds
+                try:
+                    creds = self._refresh_token(creds)
+                    self._credentials = creds
+                    return creds
+                except CalendarError:
+                    logger.warning("토큰 갱신 실패, 재인증 플로우 실행")
+                    creds = None
 
             # 새로운 인증 플로우 실행
             creds = self._run_auth_flow()

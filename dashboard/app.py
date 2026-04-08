@@ -91,7 +91,7 @@ def load_today_trades() -> pd.DataFrame:
     query = text("""
         SELECT traded_at, stock_code, stock_name, trade_type,
                quantity, price, total_amount,
-               sell_reason, signal_type,
+               buy_reason, sell_reason, signal_type,
                profit_loss_pct, profit_loss_amount, cycle_number
         FROM trades
         WHERE traded_at >= :today
@@ -254,10 +254,21 @@ else:
     col_map = {
         "traded_at": "시각", "stock_code": "종목코드", "stock_name": "종목명",
         "trade_type": "유형", "quantity": "수량", "price": "가격",
-        "total_amount": "체결금액", "sell_reason": "매도사유",
+        "total_amount": "체결금액", "buy_reason": "매수사유",
+        "sell_reason": "매도사유",
         "signal_type": "시그널", "profit_loss_pct": "수익률(%)",
         "profit_loss_amount": "손익금액",
     }
+
+    _buy_reason_labels = {
+        "GOLDEN_CROSS": "골든크로스",
+        "RSI_OVERSOLD": "RSI 과매도",
+        "ENSEMBLE": "앙상블",
+        "MANUAL": "수동",
+    }
+    trades_df["buy_reason"] = trades_df["buy_reason"].map(
+        lambda x: _buy_reason_labels.get(x, x) if pd.notna(x) else ""
+    )
 
     with buy_tab:
         buy_df = trades_df[trades_df["trade_type"] == "BUY"]
@@ -266,7 +277,8 @@ else:
         else:
             st.dataframe(
                 buy_df[["traded_at", "stock_code", "stock_name",
-                         "quantity", "price", "total_amount"]].rename(columns=col_map),
+                         "quantity", "price", "total_amount",
+                         "buy_reason"]].rename(columns=col_map),
                 use_container_width=True, hide_index=True,
             )
 

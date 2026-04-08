@@ -29,7 +29,7 @@ def load_trades(since: date) -> pd.DataFrame:
     query = text("""
         SELECT traded_at, stock_code, stock_name, trade_type,
                quantity, price, total_amount,
-               sell_reason, signal_type,
+               buy_reason, sell_reason, signal_type,
                profit_loss_pct, profit_loss_amount, cycle_number
         FROM trades
         WHERE traded_at >= :since
@@ -57,10 +57,25 @@ def load_stock_pnl(since: date) -> pd.DataFrame:
         return pd.read_sql(query, conn, params={"since": since})
 
 
+def load_buy_reason_dist(since: date) -> pd.DataFrame:
+    """매수 사유 분포를 집계한다."""
+    query = text("""
+        SELECT buy_reason,
+               COUNT(*) AS count,
+               COALESCE(SUM(total_amount), 0) AS total_amount
+        FROM trades
+        WHERE trade_type = 'BUY' AND traded_at >= :since
+        GROUP BY buy_reason
+        ORDER BY count DESC
+    """)
+    with get_engine().connect() as conn:
+        return pd.read_sql(query, conn, params={"since": since})
+
+
 def load_sell_reason_dist(since: date) -> pd.DataFrame:
     """매도 사유 분포를 집계한다."""
     query = text("""
-        SELECT COALESCE(sell_reason, 'UNKNOWN') AS sell_reason,
+        SELECT sell_reason,
                COUNT(*) AS count,
                COALESCE(SUM(profit_loss_amount), 0) AS total_pnl,
                ROUND(AVG(profit_loss_pct)::numeric, 2) AS avg_pnl_pct
@@ -176,6 +191,47 @@ if not stock_pnl.empty:
 
 st.divider()
 
+# ── 매수 사유 분포 ───────────────────────────────
+
+st.subheader("\U0001f4a1 매수 사유 분석")
+
+buy_reason_df = load_buy_reason_dist(since)
+
+if buy_reason_df.empty:
+    st.info("매수 사유 데이터가 없습니다.")
+else:
+    buy_reason_labels = {
+        "GOLDEN_CROSS": "골든크로스",
+        "RSI_OVERSOLD": "RSI 과매도",
+        "ENSEMBLE": "앙상블",
+        "MANUAL": "수동",
+    }
+    buy_reason_df["buy_reason"] = buy_reason_df["buy_reason"].fillna("UNKNOWN")
+    buy_reason_df["label"] = buy_reason_df["buy_reason"].map(
+        lambda x: buy_reason_labels.get(x, x)
+    )
+
+    brc1, brc2 = st.columns(2)
+
+    with brc1:
+        st.caption("사유별 건수")
+        st.bar_chart(buy_reason_df.set_index("label")["count"])
+
+    with brc2:
+        st.caption("사유별 매수금액")
+        st.bar_chart(buy_reason_df.set_index("label")["total_amount"], color="#2196F3")
+
+    st.dataframe(
+        buy_reason_df[["label", "count", "total_amount"]].rename(columns={
+            "label": "매수사유", "count": "건수",
+            "total_amount": "총 매수금액",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+st.divider()
+
 # ── 매도 사유 분포 ───────────────────────────────
 
 st.subheader("\U0001f6a8 매도 사유 분석")
@@ -190,6 +246,7 @@ if not reason_df.empty:
         "MANUAL": "수동",
         "UNKNOWN": "미분류",
     }
+    reason_df["sell_reason"] = reason_df["sell_reason"].fillna("UNKNOWN")
     reason_df["label"] = reason_df["sell_reason"].map(
         lambda x: reason_labels.get(x, x)
     )
@@ -219,16 +276,38 @@ st.divider()
 
 st.subheader("\U0001f4cb 체결 내역 상세")
 
+_buy_reason_labels = {
+    "GOLDEN_CROSS": "골든크로스",
+    "RSI_OVERSOLD": "RSI 과매도",
+    "ENSEMBLE": "앙상블",
+    "MANUAL": "수동",
+}
+_sell_reason_labels = {
+    "STOP_LOSS": "손절",
+    "TAKE_PROFIT": "익절",
+    "STRATEGY": "전략매도",
+    "MANUAL": "수동",
+}
+
+detail_df = trades_df.copy()
+detail_df["buy_reason"] = detail_df["buy_reason"].map(
+    lambda x: _buy_reason_labels.get(x, x) if pd.notna(x) else ""
+)
+detail_df["sell_reason"] = detail_df["sell_reason"].map(
+    lambda x: _sell_reason_labels.get(x, x) if pd.notna(x) else ""
+)
+
 st.dataframe(
-    trades_df[[
+    detail_df[[
         "traded_at", "stock_code", "stock_name", "trade_type",
         "quantity", "price", "total_amount",
-        "sell_reason", "signal_type",
+        "buy_reason", "sell_reason", "signal_type",
         "profit_loss_pct", "profit_loss_amount",
     ]].rename(columns={
         "traded_at": "시각", "stock_code": "종목코드", "stock_name": "종목명",
         "trade_type": "유형", "quantity": "수량", "price": "가격",
-        "total_amount": "체결금액", "sell_reason": "매도사유",
+        "total_amount": "체결금액", "buy_reason": "매수사유",
+        "sell_reason": "매도사유",
         "signal_type": "시그널", "profit_loss_pct": "수익률(%)",
         "profit_loss_amount": "손익금액",
     }),

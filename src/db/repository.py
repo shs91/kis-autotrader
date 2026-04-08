@@ -9,6 +9,7 @@ from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
 from src.db.models import (
+    BuyReason,
     DailyPerformance,
     DailySummary,
     EventLevel,
@@ -74,6 +75,25 @@ class StockRepository:
         self._session.flush()
         logger.info("종목 생성: %s (%s)", name, code)
         return stock
+
+    def update_name(self, code: str, name: str) -> bool:
+        """종목명을 업데이트한다. 이름이 코드와 동일할 때 실제 이름으로 교체용.
+
+        Args:
+            code: 종목코드
+            name: 종목명
+
+        Returns:
+            True: 업데이트됨, False: 종목 없음 또는 이미 정상
+        """
+        stock = self.get_by_code(code)
+        if stock is None or stock.name == name:
+            return False
+        old_name = stock.name
+        stock.name = name
+        self._session.flush()
+        logger.info("종목명 업데이트: %s → %s (%s)", old_name, name, code)
+        return True
 
     def list_all(self) -> list[Stock]:
         """전체 종목 목록을 조회한다.
@@ -568,6 +588,7 @@ class TradeRepository:
         total_amount: int,
         traded_at: datetime,
         cycle_number: int = 0,
+        buy_reason: BuyReason | None = None,
         sell_reason: SellReason | None = None,
         signal_type: str | None = None,
         profit_loss_pct: float | None = None,
@@ -584,6 +605,7 @@ class TradeRepository:
             total_amount: 체결금액
             traded_at: 체결 시각
             cycle_number: 매매 사이클 번호
+            buy_reason: 매수 사유 (매수 시)
             sell_reason: 매도 사유 (매도 시)
             signal_type: 시그널 유형
             profit_loss_pct: 수익률 (매도 시)
@@ -601,6 +623,7 @@ class TradeRepository:
             total_amount=total_amount,
             traded_at=traded_at,
             cycle_number=cycle_number,
+            buy_reason=buy_reason,
             sell_reason=sell_reason,
             signal_type=signal_type,
             profit_loss_pct=profit_loss_pct,

@@ -41,6 +41,15 @@ class TradeType(enum.Enum):
     SELL = "SELL"
 
 
+class BuyReason(enum.Enum):
+    """매수 사유."""
+
+    GOLDEN_CROSS = "GOLDEN_CROSS"
+    RSI_OVERSOLD = "RSI_OVERSOLD"
+    ENSEMBLE = "ENSEMBLE"
+    MANUAL = "MANUAL"
+
+
 class SellReason(enum.Enum):
     """매도 사유."""
 
@@ -235,6 +244,9 @@ class Trade(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     total_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    buy_reason: Mapped[BuyReason | None] = mapped_column(
+        SAEnum(BuyReason, name="buy_reason_enum"), nullable=True
+    )
     sell_reason: Mapped[SellReason | None] = mapped_column(
         SAEnum(SellReason, name="sell_reason_enum"), nullable=True
     )

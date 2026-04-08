@@ -71,8 +71,20 @@ class TelegramBot:
                 pass
         logger.info("Telegram Bot 종료")
 
+    async def _flush_old_updates(self) -> None:
+        """시작 전 기존 업데이트를 건너뛴다 (재시작 루프 방지)."""
+        try:
+            updates = await self._get_updates()
+            if updates:
+                last_id = max(u.get("update_id", 0) for u in updates)
+                self._offset = last_id + 1
+                logger.info("기존 Telegram 업데이트 %d건 스킵 (offset=%d)", len(updates), self._offset)
+        except Exception:
+            logger.debug("기존 업데이트 flush 실패, 무시")
+
     async def _poll_loop(self) -> None:
         """getUpdates 롱 폴링 루프."""
+        await self._flush_old_updates()
         while self._running:
             try:
                 updates = await self._get_updates()
