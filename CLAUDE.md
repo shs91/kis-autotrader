@@ -36,29 +36,47 @@ kis-autotrader/
 │   │   ├── order.py           # 주문 API (매수/매도/정정/취소)
 │   │   ├── quote.py           # 시세 조회 API
 │   │   ├── account.py         # 잔고/계좌 조회 API
-│   │   └── websocket.py       # 실시간 웹소켓 매니저
+│   │   ├── websocket.py       # 실시간 웹소켓 매니저
+│   │   └── health.py          # 헬스체크 HTTP 서버
 │   ├── strategy/              # [strategy-engineer 담당]
 │   │   ├── __init__.py
 │   │   ├── base.py            # 매매 전략 추상 클래스
 │   │   ├── moving_average.py  # 이동평균 교차 전략
 │   │   ├── rsi.py             # RSI 기반 전략
+│   │   ├── ensemble.py        # 앙상블 (다중 전략 투표)
+│   │   ├── registry.py        # 전략 레지스트리
+│   │   ├── selector.py        # 종목별 전략 셀렉터
 │   │   ├── risk.py            # 리스크 관리 모듈
 │   │   └── screener.py        # 종목 스크리닝 (필터+스코어링)
 │   ├── db/                    # [db-scheduler-engineer 담당]
 │   │   ├── __init__.py
 │   │   ├── models.py          # SQLAlchemy 모델
 │   │   ├── session.py         # DB 세션 관리
-│   │   └── repository.py      # 데이터 접근 레이어
+│   │   ├── repository.py      # 데이터 접근 레이어
+│   │   ├── analytics.py       # 매매 분석 쿼리
+│   │   └── event_logger.py    # 구조화 이벤트 로깅
 │   ├── scheduler/             # [db-scheduler-engineer 담당]
 │   │   ├── __init__.py
-│   │   └── jobs.py            # APScheduler 작업 정의
+│   │   ├── jobs.py            # APScheduler 작업 정의
+│   │   └── holidays.py        # 공휴일/휴장일 판단
 │   ├── calendar/              # [calendar-engineer 담당]
 │   │   ├── __init__.py
 │   │   ├── google_auth.py     # Google OAuth2 인증
 │   │   └── event.py           # 캘린더 이벤트 생성
+│   ├── notify/                # [team lead 담당]
+│   │   ├── __init__.py
+│   │   ├── telegram.py        # Telegram 알림 전송
+│   │   ├── formatter.py       # 메시지 포매터
+│   │   └── bot.py             # Telegram 봇 명령 수신
 │   └── utils/
 │       ├── __init__.py
 │       └── logger.py          # 로깅 설정
+├── dashboard/                 # Streamlit 웹 대시보드
+│   ├── app.py                 # 메인 대시보드
+│   └── pages/
+│       ├── trades.py          # 매매 분석
+│       ├── performance.py     # 성과 분석
+│       └── signals.py         # 시그널 분석
 ├── tests/
 │   ├── test_api/
 │   ├── test_strategy/

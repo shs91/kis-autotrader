@@ -48,6 +48,11 @@
 - 검증 결과: pytest ✅ (305 passed) | mypy ✅ (기존 에러만, 새 에러 없음) | ruff ✅
 - 프로세스 재시작: 예정
 
+## [2026-04-06] DAILY_TRADE_LIMIT 50~500으로 수정
+- 카테고리: config
+- 변경 파일: .env
+- 내용: 일일 매매 한도를 10 → 200으로 상향 (모의투자 데이터 축적 목적)
+
 ## [2026-04-06 18:04] 이동평균 전략 NaN 방어 로직 추가
 - 제안서: docs/proposals/2026-04-06_moving-average-nan-guard.md
 - 카테고리: bug_fix
@@ -56,6 +61,58 @@
   - tests/test_strategy/test_moving_average.py: NaN 데이터 케이스 테스트 추가
 - 검증 결과: pytest ✅ (256 passed) | mypy ✅ (기존 에러만, 새 에러 없음) | ruff ✅ (기존 에러만, 새 에러 없음)
 - 프로세스 재시작: 예정
+
+## [2026-04-05] 사이클 완료 로그에 API 호출/모니터링 상세 통합
+- 카테고리: refactor
+- 변경 파일: src/engine.py
+- 내용: 사이클 완료 시 API 호출수, 모니터링 종목수(보유/발굴), exit_reason 등 상세 로그 통합
+
+## [2026-04-05] 사이클 메트릭 상세 추가 + /status 명령 개선
+- 카테고리: enhancement
+- 변경 파일: src/engine.py, src/notify/bot.py
+- 내용: CYCLE_END 메트릭에 API 호출/모니터링 상세 추가, /status 텔레그램 명령에서 표시
+
+## [2026-04-05] /status, /today 명령을 DB 데이터 기반으로 개선
+- 카테고리: enhancement
+- 변경 파일: src/notify/bot.py
+- 내용: 헬스체크 API 대신 DB 직접 조회로 정확도 향상, daily_summary 테이블 활용
+
+## [2026-04-04] numpy float → Python float 변환 수정
+- 카테고리: bug_fix
+- 변경 파일: src/engine.py, src/db/repository.py
+- 내용: numpy float64를 PostgreSQL JSONB/파라미터에 전달 시 직렬화 실패 수정
+
+## [2026-04-04] Telegram 봇 명령 5개 추가
+- 카테고리: enhancement
+- 변경 파일: src/notify/bot.py, main.py
+- 명령: /trades (체결 내역), /pnl (손익), /signals (시그널), /risk (리스크), /screen (스크리닝)
+
+## [2026-04-04] 대시보드 고도화 — trades/signals/daily_summary 기반 분석 페이지
+- 카테고리: enhancement
+- 신규 파일: dashboard/pages/trades.py, dashboard/pages/signals.py
+- 변경 파일: dashboard/app.py, dashboard/pages/performance.py
+- 내용: 매매 분석, 시그널 분석 페이지 추가, daily_summary 기반 성과 분석 고도화
+
+## [2026-04-04] 매매 데이터 PostgreSQL 적재 인프라 + 분석 쿼리 + 엔진 연동
+- 카테고리: enhancement
+- 신규 파일: src/db/analytics.py, alembic migrations (trades, signals, screening_results, daily_summary, system_metrics)
+- 변경 파일: src/db/models.py, src/db/repository.py, src/engine.py
+- 내용: Trade/Signal/ScreeningResult/DailySummary/SystemMetric 모델 + 엔진에서 자동 기록
+
+## [2026-04-04] 워치독 헬스체크 기반 감시 개선
+- 카테고리: enhancement
+- 변경 파일: scripts/watchdog.sh
+- 내용: 로그 파일 기반 → 헬스체크 API + cycle_count 기반 hang 감지로 개선
+
+## [2026-04-03] 모의/실전 DB 분리
+- 카테고리: enhancement
+- 변경 파일: src/config.py, .env
+- 내용: KIS_ENV에 따라 DATABASE_URL / DATABASE_URL_REAL 자동 선택
+
+## [2026-04-03] 대시보드 SQL/타입 수정
+- 카테고리: bug_fix
+- 변경 파일: dashboard/app.py, dashboard/pages/performance.py
+- 내용: text()로 SQL 감싸기, isocalendar float→int 변환, connection 사용
 
 ## [2026-04-03] T3-4 로그 구조화 저장
 - 신규: src/db/event_logger.py, alembic migration (event_logs 테이블)
