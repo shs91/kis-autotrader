@@ -124,6 +124,20 @@ class TradingConfig:
         ]
     )
 
+    # 포트폴리오 리스크
+    max_daily_drawdown: float = field(
+        default_factory=lambda: _env_float("MAX_DAILY_DRAWDOWN", 0.05)
+    )
+    max_consecutive_losses: int = field(
+        default_factory=lambda: _env_int("MAX_CONSECUTIVE_LOSSES", 5)
+    )
+    market_close_cutoff_hour: int = field(
+        default_factory=lambda: _env_int("MARKET_CLOSE_CUTOFF_HOUR", 14)
+    )
+    market_close_cutoff_minute: int = field(
+        default_factory=lambda: _env_int("MARKET_CLOSE_CUTOFF_MINUTE", 30)
+    )
+
 
 @dataclass(frozen=True)
 class StrategyConfig:

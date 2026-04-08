@@ -6,6 +6,7 @@ Cowork 에이전트가 리포트/제안서를 작성할 때 사용하는 읽기 
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -767,4 +768,245 @@ def get_optimal_risk_params(
                 abs(sum(take_profit_pcts) / len(take_profit_pcts)) / 100, 4
             ) if take_profit_pcts else 0.05,
         },
+    }
+
+
+# ── 고급 분석 지표 ────────────────────────────────────────
+
+
+def _daily_pnl_series(
+    session: Session, start_date: date, end_date: date,
+) -> list[tuple[str, int]]:
+    """기간 내 일별 실현손익 시계열을 반환한다 (내부 헬퍼)."""
+    start = datetime(start_date.year, start_date.month, start_date.day)
+    end = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
+
+    sells = session.execute(
+        select(Trade)
+        .where(
+            Trade.traded_at >= start,
+            Trade.traded_at < end,
+            Trade.trade_type == TradeType.SELL,
+        )
+        .order_by(Trade.traded_at)
+    ).scalars().all()
+
+    daily: dict[str, int] = {}
+    for t in sells:
+        day_key = t.traded_at.strftime("%Y-%m-%d")
+        daily[day_key] = daily.get(day_key, 0) + (t.profit_loss_amount or 0)
+
+    return [(k, daily[k]) for k in sorted(daily)]
+
+
+def get_max_drawdown(
+    session: Session, start_date: date, end_date: date,
+) -> dict[str, Any]:
+    """기간 내 최대 낙폭(MDD)을 계산한다.
+
+    MDD = (피크 대비 최대 하락액) / 피크 * 100
+
+    Args:
+        session: DB 세션
+        start_date: 시작일
+        end_date: 종료일
+
+    Returns:
+        MDD 관련 지표
+    """
+    series = _daily_pnl_series(session, start_date, end_date)
+    if not series:
+        return {"mdd_pct": 0.0, "mdd_amount": 0, "peak": 0, "trough": 0, "peak_date": None, "trough_date": None}
+
+    cumulative = 0
+    peak = 0
+    peak_date = series[0][0]
+    mdd_amount = 0
+    mdd_peak = 0
+    mdd_trough = 0
+    mdd_peak_date = series[0][0]
+    mdd_trough_date = series[0][0]
+
+    for day_key, daily_pnl in series:
+        cumulative += daily_pnl
+        if cumulative > peak:
+            peak = cumulative
+            peak_date = day_key
+        drawdown = peak - cumulative
+        if drawdown > mdd_amount:
+            mdd_amount = drawdown
+            mdd_peak = peak
+            mdd_trough = cumulative
+            mdd_peak_date = peak_date
+            mdd_trough_date = day_key
+
+    mdd_pct = (mdd_amount / mdd_peak * 100) if mdd_peak > 0 else 0.0
+
+    return {
+        "mdd_pct": round(mdd_pct, 2),
+        "mdd_amount": mdd_amount,
+        "peak": mdd_peak,
+        "trough": mdd_trough,
+        "peak_date": mdd_peak_date,
+        "trough_date": mdd_trough_date,
+    }
+
+
+def get_sharpe_ratio(
+    session: Session, start_date: date, end_date: date,
+    risk_free_rate: float = 0.035,
+) -> dict[str, Any]:
+    """기간 내 Sharpe Ratio를 계산한다.
+
+    Sharpe = (평균 일별 수익 - 무위험수익률/252) / 일별 수익 표준편차 * sqrt(252)
+
+    Args:
+        session: DB 세션
+        start_date: 시작일
+        end_date: 종료일
+        risk_free_rate: 연간 무위험수익률 (기본 3.5%)
+
+    Returns:
+        Sharpe Ratio 관련 지표
+    """
+    series = _daily_pnl_series(session, start_date, end_date)
+    if len(series) < 2:
+        return {"sharpe_ratio": 0.0, "sortino_ratio": 0.0, "trading_days": len(series)}
+
+    returns = [pnl for _, pnl in series]
+    avg_return = sum(returns) / len(returns)
+    daily_rf = risk_free_rate / 252
+
+    # 표준편차 (전체)
+    variance = sum((r - avg_return) ** 2 for r in returns) / (len(returns) - 1)
+    std_dev = math.sqrt(variance) if variance > 0 else 0.0
+
+    sharpe = ((avg_return - daily_rf) / std_dev * math.sqrt(252)) if std_dev > 0 else 0.0
+
+    # Sortino (하방 편차만)
+    downside = [r for r in returns if r < 0]
+    if len(downside) >= 2:
+        down_var = sum(r ** 2 for r in downside) / (len(downside) - 1)
+        down_std = math.sqrt(down_var) if down_var > 0 else 0.0
+        sortino = ((avg_return - daily_rf) / down_std * math.sqrt(252)) if down_std > 0 else 0.0
+    else:
+        sortino = 0.0
+
+    return {
+        "sharpe_ratio": round(sharpe, 3),
+        "sortino_ratio": round(sortino, 3),
+        "avg_daily_pnl": round(avg_return),
+        "daily_std_dev": round(std_dev),
+        "trading_days": len(series),
+    }
+
+
+def get_profit_factor(
+    session: Session, start_date: date, end_date: date,
+) -> dict[str, Any]:
+    """기간 내 Profit Factor 및 Win/Loss 비율을 계산한다.
+
+    Profit Factor = 총 수익 / 총 손실 (절대값)
+
+    Args:
+        session: DB 세션
+        start_date: 시작일
+        end_date: 종료일
+
+    Returns:
+        Profit Factor 및 Win/Loss 관련 지표
+    """
+    start = datetime(start_date.year, start_date.month, start_date.day)
+    end = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
+
+    sells = session.execute(
+        select(Trade)
+        .where(
+            Trade.traded_at >= start,
+            Trade.traded_at < end,
+            Trade.trade_type == TradeType.SELL,
+            Trade.profit_loss_amount.isnot(None),
+        )
+    ).scalars().all()
+
+    wins = [t for t in sells if (t.profit_loss_amount or 0) > 0]
+    losses = [t for t in sells if (t.profit_loss_amount or 0) < 0]
+    breakeven = [t for t in sells if (t.profit_loss_amount or 0) == 0]
+
+    total_profit = sum(t.profit_loss_amount for t in wins) if wins else 0
+    total_loss = abs(sum(t.profit_loss_amount for t in losses)) if losses else 0
+    profit_factor = (total_profit / total_loss) if total_loss > 0 else float("inf") if total_profit > 0 else 0.0
+
+    avg_win = (total_profit / len(wins)) if wins else 0
+    avg_loss = (total_loss / len(losses)) if losses else 0
+    payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else 0.0
+
+    win_rate = (len(wins) / len(sells) * 100) if sells else 0.0
+
+    return {
+        "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else "∞",
+        "total_profit": total_profit,
+        "total_loss": total_loss,
+        "win_count": len(wins),
+        "loss_count": len(losses),
+        "breakeven_count": len(breakeven),
+        "win_rate": round(win_rate, 1),
+        "avg_win": round(avg_win),
+        "avg_loss": round(avg_loss),
+        "payoff_ratio": round(payoff_ratio, 2),
+    }
+
+
+def get_consecutive_losses(
+    session: Session, start_date: date, end_date: date,
+) -> dict[str, Any]:
+    """기간 내 최대 연속 손실/수익 횟수를 계산한다.
+
+    Args:
+        session: DB 세션
+        start_date: 시작일
+        end_date: 종료일
+
+    Returns:
+        연속 손실/수익 관련 지표
+    """
+    start = datetime(start_date.year, start_date.month, start_date.day)
+    end = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
+
+    sells = session.execute(
+        select(Trade)
+        .where(
+            Trade.traded_at >= start,
+            Trade.traded_at < end,
+            Trade.trade_type == TradeType.SELL,
+            Trade.profit_loss_amount.isnot(None),
+        )
+        .order_by(Trade.traded_at)
+    ).scalars().all()
+
+    max_win_streak = 0
+    max_loss_streak = 0
+    current_win = 0
+    current_loss = 0
+
+    for t in sells:
+        pnl = t.profit_loss_amount or 0
+        if pnl > 0:
+            current_win += 1
+            current_loss = 0
+            max_win_streak = max(max_win_streak, current_win)
+        elif pnl < 0:
+            current_loss += 1
+            current_win = 0
+            max_loss_streak = max(max_loss_streak, current_loss)
+        else:
+            current_win = 0
+            current_loss = 0
+
+    return {
+        "max_win_streak": max_win_streak,
+        "max_loss_streak": max_loss_streak,
+        "current_win_streak": current_win,
+        "current_loss_streak": current_loss,
+        "total_sells": len(sells),
     }

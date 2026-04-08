@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from src.config import settings
 from src.strategy.base import Signal, SignalType
 from src.utils.exceptions import RiskLimitError
@@ -56,6 +58,89 @@ class RiskManager:
             else settings.strategy.take_profit_ratio
         )
         self._min_confidence = settings.strategy.min_confidence
+
+        # 포트폴리오 리스크 추적
+        self._max_daily_drawdown = settings.trading.max_daily_drawdown
+        self._max_consecutive_losses = settings.trading.max_consecutive_losses
+        self._daily_peak_pnl: int = 0
+        self._daily_cumulative_pnl: int = 0
+        self._consecutive_losses: int = 0
+        self._portfolio_halted: bool = False
+
+    def record_trade_result(self, profit_loss_amount: int) -> None:
+        """매도 결과를 기록하여 포트폴리오 리스크를 업데이트한다.
+
+        Args:
+            profit_loss_amount: 실현 손익 (원)
+        """
+        self._daily_cumulative_pnl += profit_loss_amount
+
+        if self._daily_cumulative_pnl > self._daily_peak_pnl:
+            self._daily_peak_pnl = self._daily_cumulative_pnl
+
+        # 연패 추적
+        if profit_loss_amount < 0:
+            self._consecutive_losses += 1
+        elif profit_loss_amount > 0:
+            self._consecutive_losses = 0
+
+        # 포트폴리오 MDD 체크
+        drawdown = self._daily_peak_pnl - self._daily_cumulative_pnl
+        if self._daily_peak_pnl > 0:
+            drawdown_pct = drawdown / self._daily_peak_pnl
+            if drawdown_pct >= self._max_daily_drawdown:
+                self._portfolio_halted = True
+                logger.warning(
+                    "포트폴리오 MDD 한도 도달: %.1f%% >= %.1f%% (피크 %d → 현재 %d)",
+                    drawdown_pct * 100,
+                    self._max_daily_drawdown * 100,
+                    self._daily_peak_pnl,
+                    self._daily_cumulative_pnl,
+                )
+
+        # 연패 체크
+        if self._consecutive_losses >= self._max_consecutive_losses:
+            self._portfolio_halted = True
+            logger.warning(
+                "연속 손실 한도 도달: %d연패 >= %d",
+                self._consecutive_losses,
+                self._max_consecutive_losses,
+            )
+
+    @property
+    def is_portfolio_halted(self) -> bool:
+        """포트폴리오 리스크로 인한 매매 중단 여부."""
+        return self._portfolio_halted
+
+    @property
+    def consecutive_losses(self) -> int:
+        """현재 연속 손실 횟수."""
+        return self._consecutive_losses
+
+    @property
+    def daily_cumulative_pnl(self) -> int:
+        """당일 누적 손익."""
+        return self._daily_cumulative_pnl
+
+    def reset_daily_risk(self) -> None:
+        """일일 리스크 카운터를 초기화한다 (장 시작 시 호출)."""
+        self._daily_peak_pnl = 0
+        self._daily_cumulative_pnl = 0
+        self._consecutive_losses = 0
+        self._portfolio_halted = False
+
+    def is_near_market_close(self, now: datetime | None = None) -> bool:
+        """장 마감 임박 여부를 판단한다.
+
+        Returns:
+            True이면 MARKET_CLOSE_CUTOFF 이후 (기본 14:30)
+        """
+        now = now or datetime.now()
+        cutoff_hour = settings.trading.market_close_cutoff_hour
+        cutoff_minute = settings.trading.market_close_cutoff_minute
+        return (now.hour > cutoff_hour) or (
+            now.hour == cutoff_hour and now.minute >= cutoff_minute
+        )
 
     def check_max_loss(self, current_price: float, avg_price: float) -> bool:
         """최대 손실률 초과 여부를 확인한다.
@@ -190,14 +275,20 @@ class RiskManager:
             return False
 
         target_ratio = profit_ratio if profit_ratio is not None else self._take_profit_ratio
+
+        # 장 마감 임박 시 익절 기준 절반으로 하향 (빠른 실현)
+        if self.is_near_market_close():
+            target_ratio = target_ratio * 0.5
+
         current_profit = (current_price - avg_price) / avg_price
         should_profit = current_profit >= target_ratio
 
         if should_profit:
             logger.info(
-                "익절 시그널: 수익률 %.2f%% >= 목표 %.2f%%",
+                "익절 시그널: 수익률 %.2f%% >= 목표 %.2f%%%s",
                 current_profit * 100,
                 target_ratio * 100,
+                " (마감임박 조정)" if self.is_near_market_close() else "",
             )
 
         return should_profit
@@ -227,6 +318,11 @@ class RiskManager:
         """
         # HOLD 시그널은 주문 불필요
         if signal.signal_type == SignalType.HOLD:
+            return False
+
+        # 장 마감 임박 시 신규 매수 차단
+        if signal.signal_type == SignalType.BUY and self.is_near_market_close():
+            logger.info("장 마감 임박으로 신규 매수 차단")
             return False
 
         # 매수 시 잔고 확인

@@ -229,6 +229,7 @@ class TradingEngine:
         self._today_trade_count = 0
         self._cycle_count = 0
         self._daily_limit_reached = False
+        self._risk.reset_daily_risk()
         self._screened_codes.clear()
         self._daily_cache.clear()
         self._balance_cache = None
@@ -271,8 +272,12 @@ class TradingEngine:
         """장중 매매 사이클 1회 실행."""
         self._cycle_count += 1
 
-        # 일일 한도 초과 시 이후 사이클 전부 즉시 중단
+        # 일일 한도 초과 또는 포트폴리오 리스크 시 이후 사이클 전부 즉시 중단
         if self._daily_limit_reached:
+            return
+        if self._risk.is_portfolio_halted:
+            logger.info("포트폴리오 리스크 한도 도달, 당일 매매 중단 (연패=%d, 누적PnL=%d)",
+                        self._risk.consecutive_losses, self._risk.daily_cumulative_pnl)
             return
 
         logger.info("--- 장중 매매 사이클 #%d 시작 ---", self._cycle_count)
@@ -748,6 +753,7 @@ class TradingEngine:
                     avg_price = float(avg_price)
                     profit_loss_pct = float(((price - avg_price) / avg_price) * 100)
                     profit_loss_amount = int((price - avg_price) * quantity)
+                    self._risk.record_trade_result(profit_loss_amount)
 
             with get_session() as session:
                 repo = TradeRepository(session)
