@@ -549,7 +549,8 @@ class TradingEngine:
                 stock_code, current.stock_name, signal, action_taken=will_act,
             )
             await self._process_held_stock(
-                stock_code, current.current_price, holding_info, signal
+                stock_code, current.current_price, holding_info, signal,
+                stock_name=current.stock_name,
             )
             return
 
@@ -586,6 +587,7 @@ class TradingEngine:
         current_price: int,
         holding: dict[str, float],
         signal: Signal,
+        stock_name: str = "",
     ) -> None:
         """보유 종목의 매도 판단을 수행한다.
 
@@ -596,6 +598,7 @@ class TradingEngine:
             current_price: 현재가
             holding: 보유 정보
             signal: 전략 분석 시그널
+            stock_name: 종목명
         """
         avg_price = holding["avg_price"]
         quantity = int(holding["quantity"])
@@ -607,7 +610,7 @@ class TradingEngine:
             )
             await self._execute_sell(
                 stock_code, quantity, current_price,
-                reason="손절", avg_price=avg_price,
+                reason="손절", avg_price=avg_price, stock_name=stock_name,
             )
             return
 
@@ -618,7 +621,7 @@ class TradingEngine:
             )
             await self._execute_sell(
                 stock_code, quantity, current_price,
-                reason="익절", avg_price=avg_price,
+                reason="익절", avg_price=avg_price, stock_name=stock_name,
             )
             return
 
@@ -631,6 +634,7 @@ class TradingEngine:
                 stock_code, quantity, current_price,
                 reason="전략매도", avg_price=avg_price,
                 signal_type=signal.reason.split(" ")[0] if signal.reason else None,
+                stock_name=stock_name,
             )
 
     # ── 주문 실행 ─────────────────────────────────────────
@@ -672,6 +676,7 @@ class TradingEngine:
         reason: str = "",
         avg_price: float | None = None,
         signal_type: str | None = None,
+        stock_name: str = "",
     ) -> None:
         """매도 주문을 실행하고 DB에 기록한다."""
         try:
@@ -680,20 +685,20 @@ class TradingEngine:
             self._invalidate_balance_cache()
 
             logger.info(
-                "[매도 체결] %s %d주, 사유=%s, 주문번호=%s",
-                stock_code, quantity, reason, result.order_no,
+                "[매도 체결] %s(%s) %d주, 사유=%s, 주문번호=%s",
+                stock_name, stock_code, quantity, reason, result.order_no,
             )
-            log_trade(f"매도 {stock_code} {quantity}주 @ {price:,}원 ({reason})")
+            log_trade(f"매도 {stock_name}({stock_code}) {quantity}주 @ {price:,}원 ({reason})")
 
             self._record_order_to_db(
-                stock_code, "", OrderType.SELL, quantity, float(price), result.order_no
+                stock_code, stock_name, OrderType.SELL, quantity, float(price), result.order_no
             )
             self._record_trade_to_db(
-                stock_code, "", TradeType.SELL, quantity, price,
+                stock_code, stock_name, TradeType.SELL, quantity, price,
                 reason=reason, signal_type=signal_type, avg_price=avg_price,
             )
 
-            await self._notifier.notify_sell("", stock_code, quantity, price, reason)
+            await self._notifier.notify_sell(stock_name, stock_code, quantity, price, reason)
 
         except Exception:
             logger.exception("[매도 실패] %s", stock_code)
@@ -809,6 +814,12 @@ class TradingEngine:
         """전략 시그널을 signals 테이블에 기록한다. BUY/SELL만 기록한다."""
         if signal.signal_type == SignalType.HOLD:
             return
+        # 저신뢰도 + 비매매전환 시그널은 DB 저장 스킵 (노이즈 축소)
+        if (
+            not action_taken
+            and signal.confidence < settings.strategy.min_confidence
+        ):
+            return
         try:
             # 시그널 reason에서 시그널 타입 추출
             signal_type_str = "UNKNOWN"
@@ -868,40 +879,115 @@ class TradingEngine:
     # ── DB 연동 (기존) ─────────────────────────────────────
 
     def _create_calendar_event(self, balance: object, executions: list[object]) -> None:
-        """일일 매매 결과를 Google Calendar에 등록한다."""
+        """일일 매매 결과를 Google Calendar에 등록한다.
+
+        체결 건수·종목 상세는 DB Trade 테이블을 기준으로 집계한다.
+        KIS 모의투자 환경의 ``inquire-daily-ccld`` API가 빈 결과를 반환해
+        ``executions`` 인자를 신뢰할 수 없어 DB로 대체한다.
+        수익률은 ``balance.total_profit_rate`` (KIS API의 ``ASST_ICDC_ERNG_RT``,
+        전일 대비 자산증감수익률)를 그대로 사용한다.
+        """
         try:
+            today = date.today()
+            trades = self._load_today_trades(today)
+
             auth = GoogleCalendarAuth()
             service = auth.get_service()
             creator = CalendarEventCreator(service=service)
 
-            details = json.dumps(
-                [
-                    {
-                        "name": e.stock_name,
-                        "code": e.stock_code,
-                        "buy_price": e.price if e.side == "매수" else 0,
-                        "buy_qty": e.quantity if e.side == "매수" else 0,
-                        "sell_price": e.price if e.side == "매도" else 0,
-                        "sell_qty": e.quantity if e.side == "매도" else 0,
-                        "profit_loss": 0,
-                        "profit_rate": 0.0,
-                    }
-                    for e in executions
-                ],
+            details_json = json.dumps(
+                self._group_trades_for_calendar(trades),
                 ensure_ascii=False,
             )
 
             event_id = creator.create_daily_report_event(
-                trade_date=date.today(),
+                trade_date=today,
                 total_profit_loss=int(balance.total_profit_loss),
                 profit_rate=float(balance.total_profit_rate),
-                execution_count=len(executions),
-                details_json=details,
+                execution_count=len(trades),
+                details_json=details_json,
             )
-            logger.info("Google Calendar 이벤트 등록 완료: %s", event_id)
+            logger.info(
+                "Google Calendar 이벤트 등록 완료: %s (DB 체결=%d건)",
+                event_id,
+                len(trades),
+            )
 
         except Exception:
             logger.exception("Google Calendar 이벤트 등록 실패 (매매 결과에는 영향 없음)")
+
+    @staticmethod
+    def _load_today_trades(today: date) -> list:  # type: ignore[type-arg]
+        """오늘 체결된 매매 내역을 DB에서 조회한다."""
+        try:
+            with get_session() as session:
+                repo = TradeRepository(session)
+                return repo.get_trades_by_date(today)
+        except Exception:
+            logger.exception("DB 체결 내역 조회 실패 — 캘린더에는 빈 내역으로 기록")
+            return []
+
+    @staticmethod
+    def _group_trades_for_calendar(trades: list) -> list[dict]:  # type: ignore[type-arg]
+        """Trade 목록을 종목별로 집계해 캘린더 상세 형식으로 변환한다.
+
+        동일 종목을 여러 번 매수/매도한 경우 수량·금액을 합산하고,
+        매도 손익은 ``profit_loss_amount`` 합, 수익률은 금액 가중 평균으로 계산한다.
+        """
+        grouped: dict[str, dict] = {}
+
+        for t in trades:
+            code = t.stock_code
+            entry = grouped.setdefault(
+                code,
+                {
+                    "name": t.stock_name or code,
+                    "code": code,
+                    "buy_qty": 0,
+                    "buy_amount": 0,
+                    "sell_qty": 0,
+                    "sell_amount": 0,
+                    "profit_loss": 0,
+                    "_pl_base_amount": 0,  # 수익률 가중평균 계산용
+                    "_pl_weighted_pct": 0.0,
+                },
+            )
+            if t.stock_name and entry["name"] == code:
+                entry["name"] = t.stock_name
+
+            if t.trade_type == TradeType.BUY:
+                entry["buy_qty"] += t.quantity
+                entry["buy_amount"] += t.total_amount
+            else:  # SELL
+                entry["sell_qty"] += t.quantity
+                entry["sell_amount"] += t.total_amount
+                pl_amt = t.profit_loss_amount or 0
+                entry["profit_loss"] += pl_amt
+                if t.profit_loss_pct is not None and t.total_amount > 0:
+                    entry["_pl_base_amount"] += t.total_amount
+                    entry["_pl_weighted_pct"] += float(t.profit_loss_pct) * t.total_amount
+
+        result: list[dict] = []
+        for code, e in grouped.items():
+            buy_price = e["buy_amount"] // e["buy_qty"] if e["buy_qty"] > 0 else 0
+            sell_price = e["sell_amount"] // e["sell_qty"] if e["sell_qty"] > 0 else 0
+            if e["_pl_base_amount"] > 0:
+                profit_rate = e["_pl_weighted_pct"] / e["_pl_base_amount"]
+            else:
+                profit_rate = 0.0
+            result.append(
+                {
+                    "name": e["name"],
+                    "code": code,
+                    "buy_price": buy_price,
+                    "buy_qty": e["buy_qty"],
+                    "sell_price": sell_price,
+                    "sell_qty": e["sell_qty"],
+                    "profit_loss": e["profit_loss"],
+                    "profit_rate": profit_rate,
+                }
+            )
+        return result
 
     def _find_holding_from_balance(
         self, balance: Balance, stock_code: str

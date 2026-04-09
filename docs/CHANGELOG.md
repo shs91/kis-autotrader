@@ -5,6 +5,13 @@
 
 ---
 
+## [2026-04-09] 저신뢰도 시그널 DB 저장 스킵 (로깅 볼륨 축소)
+- 제안서: docs/proposals/2026-04-09_signal-low-confidence-skip-logging.md
+- 카테고리: performance
+- 변경 파일:
+  - src/engine.py: `_record_signal_to_db()`에 저신뢰도+비매매전환 시그널 필터 추가 (confidence < min_confidence && !action_taken → DB 저장 스킵)
+- 검증 결과: pytest ✅ (329 passed, 4 기존 실패) | mypy ✅ (새 에러 없음) | ruff ✅
+
 ## [2026-04-09] Phase 3 — 전략 추가 + 성과 피드백 + 대시보드 리스크 + 매매 제어
 - 카테고리: enhancement
 - 신규 파일:
