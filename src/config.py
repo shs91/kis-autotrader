@@ -46,6 +46,7 @@ def _load_overrides_from(path: Path) -> tuple[dict[str, str], dict[str, Any]]:
     if not path.exists():
         logger.debug("config_overrides.json not found, using .env only")
         return {}, {}
+    # Task 3+에서 실제 JSON 파싱으로 교체될 자리 표시자.
     return {}, {}
 
 

@@ -12,7 +12,12 @@ from src import config
 
 @pytest.fixture(autouse=True)
 def reset_overrides() -> Iterator[None]:
-    """각 테스트 전후에 모듈 전역 _overrides/_overrides_meta를 초기화한다."""
+    """각 테스트 전후에 모듈 전역 _overrides/_overrides_meta를 초기화한다.
+
+    테스트 시작 전에 기존 상태를 저장·클리어하고, 종료 후 복원한다.
+    Task 8에서 _load_overrides()가 import 시점에 모듈 전역을 채우게 되면
+    해당 상태는 이 fixture에 의해 각 테스트 경계에서 일시적으로 비워진다.
+    """
     saved_values = dict(config._overrides)
     saved_meta = dict(config._overrides_meta)
     config._overrides.clear()
