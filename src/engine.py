@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from typing import Any
 
 import pandas as pd
 
@@ -917,24 +918,24 @@ class TradingEngine:
             logger.exception("Google Calendar 이벤트 등록 실패 (매매 결과에는 영향 없음)")
 
     @staticmethod
-    def _load_today_trades(today: date) -> list:  # type: ignore[type-arg]
+    def _load_today_trades(today: date) -> list[Any]:
         """오늘 체결된 매매 내역을 DB에서 조회한다."""
         try:
             with get_session() as session:
                 repo = TradeRepository(session)
-                return repo.get_trades_by_date(today)
+                return list(repo.get_trades_by_date(today))
         except Exception:
             logger.exception("DB 체결 내역 조회 실패 — 캘린더에는 빈 내역으로 기록")
             return []
 
     @staticmethod
-    def _group_trades_for_calendar(trades: list) -> list[dict]:  # type: ignore[type-arg]
+    def _group_trades_for_calendar(trades: list[Any]) -> list[dict[str, Any]]:
         """Trade 목록을 종목별로 집계해 캘린더 상세 형식으로 변환한다.
 
         동일 종목을 여러 번 매수/매도한 경우 수량·금액을 합산하고,
         매도 손익은 ``profit_loss_amount`` 합, 수익률은 금액 가중 평균으로 계산한다.
         """
-        grouped: dict[str, dict] = {}
+        grouped: dict[str, dict[str, Any]] = {}
 
         for t in trades:
             code = t.stock_code
@@ -967,7 +968,7 @@ class TradingEngine:
                     entry["_pl_base_amount"] += t.total_amount
                     entry["_pl_weighted_pct"] += float(t.profit_loss_pct) * t.total_amount
 
-        result: list[dict] = []
+        result: list[dict[str, Any]] = []
         for code, e in grouped.items():
             buy_price = e["buy_amount"] // e["buy_qty"] if e["buy_qty"] > 0 else 0
             sell_price = e["sell_amount"] // e["sell_qty"] if e["sell_qty"] > 0 else 0

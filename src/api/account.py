@@ -146,7 +146,9 @@ class AccountAPI:
             deposit=int(_get(summary, "DNCA_TOT_AMT", "0")),
             total_eval_amount=int(_get(summary, "SCTS_EVLU_AMT", "0")),
             total_profit_loss=int(_get(summary, "EVLU_PFLS_SMTL_AMT", "0")),
-            total_profit_rate=float(_get(summary, "TOT_EVLU_PFLS_RT", "0")),
+            # KIS API 실제 응답 필드는 ASST_ICDC_ERNG_RT (자산증감수익률).
+            # TOT_EVLU_PFLS_RT 같은 필드는 응답에 존재하지 않아 항상 0이 반환되던 버그.
+            total_profit_rate=float(_get(summary, "ASST_ICDC_ERNG_RT", "0")),
             holdings=holdings,
             raw_response=response,
         )

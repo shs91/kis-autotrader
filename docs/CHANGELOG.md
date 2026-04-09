@@ -5,6 +5,31 @@
 
 ---
 
+## [2026-04-09] 캘린더 일일 결산 수익률·체결건수 오류 수정
+- 카테고리: bug_fix
+- 배경:
+  - 장 마감 후 Google Calendar 이벤트의 수익률이 항상 `+0.0%`, 체결 건수가 항상 `0건`으로 등록되는 버그
+  - 실제 DB에는 매매 3건(매수 2 / 매도 1, 손절 -45,000원) 존재했으나 캘린더에는 반영 안 됨
+- 근본 원인:
+  1. `src/api/account.py`: KIS `/inquire-balance` 응답에 존재하지 않는 필드 `TOT_EVLU_PFLS_RT`를 조회 → 기본값 `"0"` 반환 → 수익률 항상 0.0%
+  2. `src/engine.py`: 체결 내역을 KIS `/inquire-daily-ccld` API로 조회했으나 모의투자 환경에서 `output1: []` 반환 → 체결 건수 항상 0
+- 변경 파일:
+  - src/api/account.py: `TOT_EVLU_PFLS_RT` → `ASST_ICDC_ERNG_RT` (자산증감수익률) 로 교체
+  - src/engine.py:
+    - `_create_calendar_event()`가 KIS API 대신 DB Trade 테이블에서 당일 체결을 집계하도록 변경
+    - `_load_today_trades()` 헬퍼 추가 (DB 조회 + 실패 시 빈 리스트 폴백)
+    - `_group_trades_for_calendar()` 헬퍼 추가 (종목별 매수/매도 합산, 손익 합산, 수익률 금액-가중평균)
+    - `from typing import Any` import 추가
+- 검증 결과:
+  - ruff ✅ | mypy ✅ (새 에러 0, baseline 50 → 48)
+  - pytest ✅ (329 passed, 기존 실패 4건 `test_risk.py`는 본 건 무관)
+  - 라이브 KIS API 검증: `ASST_ICDC_ERNG_RT = -0.68%` 정상 반환 (이전: 0.0)
+  - 오늘 데이터 시뮬레이션: 체결 3건, 종목 2그룹, 손익 -30,000원, 수익률 -0.68% 정상 집계
+- 후속 조치:
+  - 잘못 등록된 캘린더 이벤트 `p9j8c5uo946e31un11228do6bc` 삭제
+  - 수정된 로직으로 재등록: `vi0mqsjkal3lbjqqis3g81kgks`
+- 프로세스 재시작: `launchctl stop/start com.kis.autotrader` 완료 (PID 61510 → 87736)
+
 ## [2026-04-09] 저신뢰도 시그널 DB 저장 스킵 (로깅 볼륨 축소)
 - 제안서: docs/proposals/2026-04-09_signal-low-confidence-skip-logging.md
 - 카테고리: performance
