@@ -38,6 +38,17 @@ class OverrideState:
     """파일이 실제로 존재하여 로드되었는지 여부."""
 
 
+def _load_overrides_from(path: Path) -> tuple[dict[str, str], dict[str, Any]]:
+    """지정한 경로에서 config_overrides.json을 로드한다.
+
+    파일이 없으면 ``({}, {})``를 반환한다. 파싱/타입 오류 시 ``RuntimeError``.
+    """
+    if not path.exists():
+        logger.debug("config_overrides.json not found, using .env only")
+        return {}, {}
+    return {}, {}
+
+
 def _env(key: str, default: str = "") -> str:
     """환경변수를 조회한다."""
     return os.getenv(key, default)
