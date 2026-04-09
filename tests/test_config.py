@@ -37,3 +37,14 @@ def test_no_override_file(tmp_path: Path) -> None:
 
     assert values == {}
     assert meta == {}
+
+
+def test_str_override_applied(tmp_path: Path) -> None:
+    """문자열 값이 그대로 values에 저장된다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text('{"STRATEGY_ENSEMBLE_METHOD": "majority"}', encoding="utf-8")
+
+    values, meta = config._load_overrides_from(path)
+
+    assert values == {"STRATEGY_ENSEMBLE_METHOD": "majority"}
+    assert meta == {}

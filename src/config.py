@@ -46,8 +46,22 @@ def _load_overrides_from(path: Path) -> tuple[dict[str, str], dict[str, Any]]:
     if not path.exists():
         logger.debug("config_overrides.json not found, using .env only")
         return {}, {}
-    # Task 3+에서 실제 JSON 파싱으로 교체될 자리 표시자.
-    return {}, {}
+
+    raw_text = path.read_text(encoding="utf-8")
+    data = json.loads(raw_text)
+    if not isinstance(data, dict):
+        raise RuntimeError("config_overrides.json root must be an object")
+
+    values: dict[str, str] = {}
+    meta: dict[str, Any] = {}
+
+    for key, value in data.items():
+        if key.startswith("_"):
+            continue
+        if isinstance(value, str):
+            values[key] = value
+
+    return values, meta
 
 
 def _env(key: str, default: str = "") -> str:
