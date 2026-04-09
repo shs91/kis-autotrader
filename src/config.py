@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+logger = logging.getLogger(__name__)
+
+# config_overrides.json 로드 결과. _load_overrides()가 import 시점에 채운다.
+_overrides: dict[str, str] = {}
+_overrides_meta: dict[str, Any] = {}
+
+
+@dataclass(frozen=True)
+class OverrideState:
+    """config_overrides.json 적용 상태 스냅샷."""
+
+    values: dict[str, str]
+    """적용된 key → 문자열화된 값."""
+
+    meta: dict[str, Any]
+    """_meta 내용물 (평탄화 — updated_at, updated_by 등)."""
+
+    source_path: Path
+    """config_overrides.json 절대 경로."""
+
+    loaded: bool
+    """파일이 실제로 존재하여 로드되었는지 여부."""
 
 
 def _env(key: str, default: str = "") -> str:
