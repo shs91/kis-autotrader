@@ -88,3 +88,33 @@ def test_bool_false_coerced_to_lowercase(tmp_path: Path) -> None:
     values, _ = config._load_overrides_from(path)
 
     assert values == {"TELEGRAM_ENABLED": "false"}
+
+
+def test_meta_flattened_in_state(tmp_path: Path) -> None:
+    """_meta의 내용물은 평탄화되어 meta dict에 저장되고, values에는 없다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text(
+        '{"_meta": {"updated_by": "proposal:x", "updated_at": "2026-04-10"}, '
+        '"MAX_LOSS_RATE": 0.02}',
+        encoding="utf-8",
+    )
+
+    values, meta = config._load_overrides_from(path)
+
+    assert values == {"MAX_LOSS_RATE": "0.02"}
+    assert meta == {"updated_by": "proposal:x", "updated_at": "2026-04-10"}
+
+
+def test_unknown_underscore_key_ignored(tmp_path: Path) -> None:
+    """_meta가 아닌 _ 접두사 키는 조용히 무시된다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text(
+        '{"_other": 1, "_scratch": "x", "MAX_LOSS_RATE": 0.02}',
+        encoding="utf-8",
+    )
+
+    values, meta = config._load_overrides_from(path)
+
+    assert values == {"MAX_LOSS_RATE": "0.02"}
+    assert "_other" not in meta
+    assert "_scratch" not in meta

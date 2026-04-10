@@ -56,6 +56,10 @@ def _load_overrides_from(path: Path) -> tuple[dict[str, str], dict[str, Any]]:
     meta: dict[str, Any] = {}
 
     for key, value in data.items():
+        if key == "_meta":
+            if isinstance(value, dict):
+                meta.update(value)
+            continue
         if key.startswith("_"):
             continue
         # bool은 int의 하위 타입이므로 반드시 먼저 체크한다.
