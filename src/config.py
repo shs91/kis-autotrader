@@ -58,9 +58,10 @@ def _load_overrides_from(path: Path) -> tuple[dict[str, str], dict[str, Any]]:
     for key, value in data.items():
         if key.startswith("_"):
             continue
-        # NOTE: bool은 int의 하위 타입이므로 반드시 bool 체크를 먼저 해야 한다.
-        # 이 태스크에서는 아직 bool을 다루지 않으므로, 다음 태스크에서 분기를 추가한다.
-        if isinstance(value, str):
+        # bool은 int의 하위 타입이므로 반드시 먼저 체크한다.
+        if isinstance(value, bool):
+            values[key] = "true" if value else "false"
+        elif isinstance(value, str):
             values[key] = value
         elif isinstance(value, (int, float)):
             values[key] = str(value)

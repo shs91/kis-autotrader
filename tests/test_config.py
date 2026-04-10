@@ -68,3 +68,23 @@ def test_float_override_coerced_to_str(tmp_path: Path) -> None:
     values, _ = config._load_overrides_from(path)
 
     assert values == {"MAX_LOSS_RATE": "0.025"}
+
+
+def test_bool_true_coerced_to_lowercase(tmp_path: Path) -> None:
+    """True는 'true' 소문자 문자열로 저장된다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text('{"HEALTH_ENABLED": true}', encoding="utf-8")
+
+    values, _ = config._load_overrides_from(path)
+
+    assert values == {"HEALTH_ENABLED": "true"}
+
+
+def test_bool_false_coerced_to_lowercase(tmp_path: Path) -> None:
+    """False는 'false' 소문자 문자열로 저장된다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text('{"TELEGRAM_ENABLED": false}', encoding="utf-8")
+
+    values, _ = config._load_overrides_from(path)
+
+    assert values == {"TELEGRAM_ENABLED": "false"}
