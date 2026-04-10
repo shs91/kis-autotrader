@@ -99,6 +99,17 @@ def _load_overrides() -> None:
 _load_overrides()
 
 
+def _build_override_state() -> OverrideState:
+    """현재 모듈 전역 _overrides/_overrides_meta를 기반으로 스냅샷을 만든다."""
+    source_path = _PROJECT_ROOT / "config_overrides.json"
+    return OverrideState(
+        values=dict(_overrides),
+        meta=dict(_overrides_meta),
+        source_path=source_path,
+        loaded=source_path.exists(),
+    )
+
+
 def _env(key: str, default: str = "") -> str:
     """환경변수를 조회한다. config_overrides.json 값이 있으면 우선한다."""
     if key in _overrides:
@@ -384,6 +395,15 @@ class Settings:
     screening: ScreeningConfig = field(default_factory=ScreeningConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    overrides: OverrideState = field(default_factory=_build_override_state)
 
 
 settings = Settings()
+
+
+def get_active_overrides() -> OverrideState:
+    """현재 프로세스에 적용된 config override 상태를 반환한다.
+
+    대시보드/디버깅 용도. ``settings.overrides``와 동일한 객체를 반환한다.
+    """
+    return settings.overrides

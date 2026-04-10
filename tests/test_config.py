@@ -215,3 +215,21 @@ def test_env_float_honors_override(monkeypatch: pytest.MonkeyPatch) -> None:
     config._overrides["MAX_LOSS_RATE"] = "0.025"
 
     assert config._env_float("MAX_LOSS_RATE") == 0.025
+
+
+def test_get_active_overrides_returns_settings_overrides() -> None:
+    """get_active_overrides()는 settings.overrides와 동일 객체를 반환한다."""
+    state = config.get_active_overrides()
+
+    assert state is config.settings.overrides
+    assert isinstance(state, config.OverrideState)
+
+
+def test_override_state_has_expected_shape() -> None:
+    """OverrideState는 values/meta/source_path/loaded를 노출한다."""
+    state = config.get_active_overrides()
+
+    assert isinstance(state.values, dict)
+    assert isinstance(state.meta, dict)
+    assert state.source_path.name == "config_overrides.json"
+    assert isinstance(state.loaded, bool)
