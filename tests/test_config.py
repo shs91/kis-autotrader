@@ -154,3 +154,20 @@ def test_null_value_raises(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="unsupported type for FOO"):
         config._load_overrides_from(path)
+
+
+def test_load_overrides_populates_module_globals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_load_overrides()는 _PROJECT_ROOT를 기반으로 모듈 전역을 채운다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text(
+        '{"_meta": {"updated_by": "test"}, "MAX_LOSS_RATE": 0.04}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_PROJECT_ROOT", tmp_path)
+
+    config._load_overrides()
+
+    assert config._overrides == {"MAX_LOSS_RATE": "0.04"}
+    assert config._overrides_meta == {"updated_by": "test"}

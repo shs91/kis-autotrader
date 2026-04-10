@@ -83,6 +83,22 @@ def _load_overrides_from(path: Path) -> tuple[dict[str, str], dict[str, Any]]:
     return values, meta
 
 
+def _load_overrides() -> None:
+    """프로젝트 루트의 config_overrides.json을 로드하여 모듈 전역을 채운다."""
+    values, meta = _load_overrides_from(_PROJECT_ROOT / "config_overrides.json")
+    _overrides.update(values)
+    _overrides_meta.update(meta)
+    if values:
+        logger.info(
+            "config_overrides loaded: %d keys (source=%s)",
+            len(values),
+            meta.get("updated_by", "unknown"),
+        )
+
+
+_load_overrides()
+
+
 def _env(key: str, default: str = "") -> str:
     """환경변수를 조회한다."""
     return os.getenv(key, default)
