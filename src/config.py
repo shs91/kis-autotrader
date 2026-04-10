@@ -48,7 +48,12 @@ def _load_overrides_from(path: Path) -> tuple[dict[str, str], dict[str, Any]]:
         return {}, {}
 
     raw_text = path.read_text(encoding="utf-8")
-    data = json.loads(raw_text)
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"config_overrides.json parse failed: {exc}"
+        ) from exc
     if not isinstance(data, dict):
         raise RuntimeError("config_overrides.json root must be an object")
 

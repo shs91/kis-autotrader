@@ -118,3 +118,39 @@ def test_unknown_underscore_key_ignored(tmp_path: Path) -> None:
     assert values == {"MAX_LOSS_RATE": "0.02"}
     assert "_other" not in meta
     assert "_scratch" not in meta
+
+
+def test_malformed_json_raises(tmp_path: Path) -> None:
+    """깨진 JSON은 RuntimeError를 발생시킨다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text("{not json}", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="parse failed"):
+        config._load_overrides_from(path)
+
+
+def test_root_not_object_raises(tmp_path: Path) -> None:
+    """최상위가 객체가 아니면 RuntimeError를 발생시킨다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="root must be an object"):
+        config._load_overrides_from(path)
+
+
+def test_unsupported_list_value_raises(tmp_path: Path) -> None:
+    """list 값은 지원하지 않으므로 RuntimeError."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text('{"FOO": [1, 2]}', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="unsupported type for FOO"):
+        config._load_overrides_from(path)
+
+
+def test_null_value_raises(tmp_path: Path) -> None:
+    """null 값은 지원하지 않으므로 RuntimeError."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text('{"FOO": null}', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="unsupported type for FOO"):
+        config._load_overrides_from(path)
