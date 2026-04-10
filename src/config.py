@@ -245,7 +245,7 @@ class StrategyConfig:
     """전략 관련 설정."""
 
     default: str = field(
-        default_factory=lambda: _env("STRATEGY_DEFAULT", "moving_average")
+        default_factory=lambda: _env("STRATEGY_DEFAULT", "ensemble")
     )
     mappings_raw: str = field(
         default_factory=lambda: _env("STRATEGY_MAPPINGS", "")

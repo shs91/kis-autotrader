@@ -828,8 +828,14 @@ class TradingEngine:
                 signal_type_str = "GOLDEN_CROSS"
             elif "데드크로스" in signal.reason:
                 signal_type_str = "DEAD_CROSS"
-            elif "RSI" in signal.reason.upper():
+            elif "RSI" in signal.reason.upper() or "과매도" in signal.reason or "과매수" in signal.reason:
                 signal_type_str = "RSI_SIGNAL"
+            elif "MACD" in signal.reason.upper():
+                signal_type_str = "MACD_SIGNAL"
+            elif "볼린저" in signal.reason:
+                signal_type_str = "BOLLINGER_SIGNAL"
+            elif "앙상블" in signal.reason or "ensemble" in signal.reason.lower():
+                signal_type_str = "ENSEMBLE"
             else:
                 signal_type_str = signal.reason[:50] if signal.reason else "UNKNOWN"
 

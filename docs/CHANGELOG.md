@@ -5,6 +5,15 @@
 
 ---
 
+## [2026-04-10] 기본 전략을 앙상블로 변경하여 다중 전략 활성화
+- 제안서: docs/proposals/2026-04-10_default-strategy-to-ensemble.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/strategy/selector.py: 기본 전략 `"moving_average"` → `"ensemble"` 변경, fallback도 동일 적용
+  - src/config.py: `StrategyConfig.default` 기본값 `"moving_average"` → `"ensemble"` 변경
+  - src/engine.py: signal_type 매핑에 MACD_SIGNAL, BOLLINGER_SIGNAL, ENSEMBLE 추가 + RSI 과매도/과매수 키워드 보완
+- 검증 결과: pytest ✅ (349 passed, 기존 실패 4건 `test_risk.py`는 본 건 무관) | mypy ✅ (새 에러 없음) | ruff ✅ (새 에러 없음)
+
 ## [2026-04-09] 캘린더 일일 결산 수익률·체결건수 오류 수정
 - 카테고리: bug_fix
 - 배경:

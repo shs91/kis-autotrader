@@ -29,7 +29,7 @@ class StrategySelector:
     def __init__(
         self,
         registry: StrategyRegistry,
-        default_strategy: str = "moving_average",
+        default_strategy: str = "ensemble",
         mappings: list[StockStrategyMapping] | None = None,
     ) -> None:
         """셀렉터를 초기화한다.
@@ -135,9 +135,9 @@ class StrategySelector:
         default = config.default
         if not registry.has(default):
             logger.warning(
-                "기본 전략 '%s'가 레지스트리에 없습니다. 'moving_average'로 대체.",
+                "기본 전략 '%s'가 레지스트리에 없습니다. 'ensemble'로 대체.",
                 default,
             )
-            default = "moving_average"
+            default = "ensemble"
 
         return cls(registry=registry, default_strategy=default, mappings=mappings)
