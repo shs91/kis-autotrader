@@ -48,3 +48,23 @@ def test_str_override_applied(tmp_path: Path) -> None:
 
     assert values == {"STRATEGY_ENSEMBLE_METHOD": "majority"}
     assert meta == {}
+
+
+def test_int_override_coerced_to_str(tmp_path: Path) -> None:
+    """정수 값은 문자열로 변환되어 저장된다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text('{"SCREENING_TOP_N": 15}', encoding="utf-8")
+
+    values, _ = config._load_overrides_from(path)
+
+    assert values == {"SCREENING_TOP_N": "15"}
+
+
+def test_float_override_coerced_to_str(tmp_path: Path) -> None:
+    """실수 값은 문자열로 변환되어 저장된다."""
+    path = tmp_path / "config_overrides.json"
+    path.write_text('{"MAX_LOSS_RATE": 0.025}', encoding="utf-8")
+
+    values, _ = config._load_overrides_from(path)
+
+    assert values == {"MAX_LOSS_RATE": "0.025"}
