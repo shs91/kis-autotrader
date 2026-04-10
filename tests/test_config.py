@@ -171,3 +171,47 @@ def test_load_overrides_populates_module_globals(
 
     assert config._overrides == {"MAX_LOSS_RATE": "0.04"}
     assert config._overrides_meta == {"updated_by": "test"}
+
+
+def test_env_helper_returns_override_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_env는 _overrides에 값이 있으면 os.getenv보다 우선한다."""
+    monkeypatch.setenv("MAX_LOSS_RATE", "0.01")
+    config._overrides["MAX_LOSS_RATE"] = "0.04"
+
+    assert config._env("MAX_LOSS_RATE") == "0.04"
+
+
+def test_env_helper_falls_back_to_os_getenv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_overrides에 없으면 os.getenv에서 읽는다."""
+    monkeypatch.setenv("MAX_LOSS_RATE", "0.02")
+
+    assert config._env("MAX_LOSS_RATE") == "0.02"
+
+
+def test_env_helper_uses_default_when_nothing_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """override와 env 모두 없으면 default를 반환한다."""
+    monkeypatch.delenv("NONEXISTENT_KEY", raising=False)
+
+    assert config._env("NONEXISTENT_KEY", "fallback") == "fallback"
+
+
+def test_env_int_honors_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_env_int도 override를 반영한다."""
+    monkeypatch.setenv("SCREENING_TOP_N", "10")
+    config._overrides["SCREENING_TOP_N"] = "25"
+
+    assert config._env_int("SCREENING_TOP_N") == 25
+
+
+def test_env_float_honors_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_env_float도 override를 반영한다."""
+    monkeypatch.setenv("MAX_LOSS_RATE", "0.03")
+    config._overrides["MAX_LOSS_RATE"] = "0.025"
+
+    assert config._env_float("MAX_LOSS_RATE") == 0.025

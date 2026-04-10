@@ -100,18 +100,20 @@ _load_overrides()
 
 
 def _env(key: str, default: str = "") -> str:
-    """환경변수를 조회한다."""
+    """환경변수를 조회한다. config_overrides.json 값이 있으면 우선한다."""
+    if key in _overrides:
+        return _overrides[key]
     return os.getenv(key, default)
 
 
 def _env_int(key: str, default: int = 0) -> int:
-    """환경변수를 정수로 조회한다."""
-    return int(os.getenv(key, str(default)))
+    """환경변수를 정수로 조회한다. override를 반영한다."""
+    return int(_env(key, str(default)))
 
 
 def _env_float(key: str, default: float = 0.0) -> float:
-    """환경변수를 실수로 조회한다."""
-    return float(os.getenv(key, str(default)))
+    """환경변수를 실수로 조회한다. override를 반영한다."""
+    return float(_env(key, str(default)))
 
 
 @dataclass(frozen=True)
