@@ -67,8 +67,10 @@ def _init_root_logger() -> None:
     root.addHandler(size_handler)
 
     # 콘솔 핸들러 (launchd stdout 캡처용)
+    # INFO 로그는 파일 핸들러가 이미 기록하므로 stdout에는 WARNING 이상만 출력.
+    # 이렇게 하면 Telegram 폴링 등 반복 로그가 out.log를 비대화시키지 않는다.
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(formatter)
     root.addHandler(console_handler)
 

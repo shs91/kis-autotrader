@@ -5,6 +5,16 @@
 
 ---
 
+## [2026-04-13] watchdog 주말/공휴일 체크 추가 + stdout 로그 비대화 방지
+- 카테고리: bug_fix
+- 배경:
+  - 4/11(토) watchdog가 주말을 감지하지 못해 장중 미작동으로 오판 → 13회 무한 재시작 루프 발생
+  - `autotrader.out.log`가 101MB로 비대화 (Telegram 폴링 로그가 매 30초 stdout에 출력)
+- 변경 파일:
+  - scripts/watchdog.sh: 주말(토/일) 및 공휴일(holidays.json) 체크 추가, 해당 시 즉시 종료
+  - src/utils/logger.py: 콘솔 핸들러 레벨 INFO → WARNING 변경 (파일 핸들러는 INFO 유지)
+- 영향: 주말/공휴일 불필요한 재시작 방지, out.log 크기 대폭 축소
+
 ## [2026-04-10] 기본 전략을 앙상블로 변경하여 다중 전략 활성화
 - 제안서: docs/proposals/2026-04-10_default-strategy-to-ensemble.md
 - 카테고리: bug_fix

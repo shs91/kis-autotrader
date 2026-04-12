@@ -50,6 +50,23 @@ restart_service() {
     fi
 }
 
+# 주말 체크 (토요일=6, 일요일=7)
+DAY_OF_WEEK=$(date +%u)  # 1=월 ~ 7=일
+if [ "$DAY_OF_WEEK" -ge 6 ]; then
+    rm -f "$WATCHDOG_STATE"
+    exit 0
+fi
+
+# 공휴일(휴장일) 체크
+TODAY=$(date +%Y-%m-%d)
+HOLIDAYS_FILE="$PROJECT_DIR/holidays.json"
+if [ -f "$HOLIDAYS_FILE" ]; then
+    if python3 -c "import json,sys; sys.exit(0 if '$TODAY' in json.load(open('$HOLIDAYS_FILE'))['holidays'] else 1)" 2>/dev/null; then
+        rm -f "$WATCHDOG_STATE"
+        exit 0
+    fi
+fi
+
 # 장중 시간 체크 (09:05~15:25)
 HOUR=$(date +%-H)
 MINUTE=$(date +%-M)
