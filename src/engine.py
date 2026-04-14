@@ -540,9 +540,13 @@ class TradingEngine:
         # 2. 현재가 조회 (실시간)
         current = await self._quote.get_current_price(stock_code)
 
-        # 2-1. 종목명이 코드와 동일하면 API 응답의 실제 이름으로 갱신
+        # 2-1. 종목명 해결: API 응답 → DB 조회 → 코드 fallback
         if current.stock_name and current.stock_name != stock_code:
             self._update_stock_name_if_needed(stock_code, current.stock_name)
+        else:
+            resolved = self._resolve_stock_name(stock_code)
+            if resolved:
+                current.stock_name = resolved
 
         # 3. 전략 분석 (보유/미보유 모두 실행)
         strategy = self._selector.get_strategy(stock_code)
@@ -1035,13 +1039,27 @@ class TradingEngine:
                 }
         return None
 
-    def _update_stock_name_if_needed(self, stock_code: str, stock_name: str) -> None:
-        """DB의 종목명이 코드와 동일할 경우 실제 이름으로 갱신한다."""
+    def _resolve_stock_name(self, stock_code: str) -> str:
+        """DB에서 종목명을 조회한다. 코드와 동일하거나 없으면 빈 문자열 반환."""
         try:
             with get_session() as session:
                 stock_repo = StockRepository(session)
                 stock = stock_repo.get_by_code(stock_code)
-                if stock is not None and stock.name == stock.code:
+                if stock is not None and stock.name and stock.name != stock.code:
+                    return stock.name
+        except Exception:
+            pass
+        return ""
+
+    def _update_stock_name_if_needed(self, stock_code: str, stock_name: str) -> None:
+        """DB의 종목명이 코드와 동일하거나 빈 문자열일 경우 실제 이름으로 갱신한다."""
+        try:
+            with get_session() as session:
+                stock_repo = StockRepository(session)
+                stock = stock_repo.get_by_code(stock_code)
+                if stock is not None and (
+                    stock.name == stock.code or not stock.name
+                ):
                     stock_repo.update_name(stock_code, stock_name)
         except Exception:
             logger.debug("종목명 갱신 실패: %s", stock_code)

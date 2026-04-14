@@ -5,6 +5,25 @@
 
 ---
 
+## [2026-04-14] signals/trades/stocks 테이블 종목명 누락 수정
+- 카테고리: bug_fix
+- 배경:
+  - signals, trades 테이블에 stock_name이 빈 문자열로 저장되는 문제 (signals 2,323건, trades 4건)
+  - stocks 테이블에 name이 종목코드 그대로 저장된 경우 존재 (034220 → "034220")
+- 근본 원인:
+  - 현재가 API(`HTS_KOR_ISNM`)가 간헐적으로 빈 문자열 반환 → 그대로 DB에 저장
+  - DB fallback 없이 API 응답만 의존
+- 변경 파일:
+  - src/engine.py:
+    - `_resolve_stock_name()` 신규: API에서 이름 못 받으면 stocks 테이블에서 조회
+    - `_process_stock()`: current.stock_name이 비어있으면 DB fallback 적용
+    - `_update_stock_name_if_needed()`: stock.name이 빈 문자열인 경우도 갱신 대상에 포함
+- 기존 데이터 수정:
+  - signals: 2,323건 종목명 복원 (000660 SK하이닉스, 034020 두산에너빌리티, 034220 LG디스플레이)
+  - trades: 4건 종목명 복원
+  - stocks: 034220 "034220" → "LG디스플레이"
+- 프로세스 재시작: 완료 (DB fallback 정상 동작 확인)
+
 ## [2026-04-14] Telegram 알림 메시지 구조 개선 (매수/매도/결산)
 - 카테고리: enhancement
 - 배경:
