@@ -5,6 +5,17 @@
 
 ---
 
+## [2026-04-14] 앙상블 전략 미등록 + .env 기본전략 불일치 수정
+- 카테고리: bug_fix
+- 배경:
+  - 앙상블 전략이 기본 전략으로 설정(2026-04-10)되었으나, 실제로는 이동평균만 실행됨
+  - 원인 1: `StrategyRegistry.create_default()`에서 ensemble 전략을 등록하지 않음 (4종만 등록)
+  - 원인 2: `.env`에 `STRATEGY_DEFAULT=moving_average`가 하드코딩되어 config.py 기본값 무시
+- 변경 파일:
+  - src/strategy/registry.py: `create_default()`에 EnsembleStrategy 등록 추가 (하위전략 4종 포함)
+  - .env: `STRATEGY_DEFAULT=moving_average` → `ensemble` 변경
+- 검증 결과: pytest ✅ (114 passed in test_strategy/) | 프로세스 재시작 후 앙상블 전략 정상 동작 확인
+
 ## [2026-04-14] CLAUDE.md 전면 현행화 — 실제 소스 구조·설정 기준 재작성
 - 카테고리: docs
 - 배경:

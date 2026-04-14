@@ -51,15 +51,30 @@ class StrategyRegistry:
         """기본 전략들이 등록된 레지스트리를 생성한다.
 
         전략 파라미터는 settings.strategy에서 자동으로 로드된다.
+        앙상블 전략은 개별 전략 4종을 하위 전략으로 포함한다.
         """
+        from src.config import settings
         from src.strategy.bollinger import BollingerBandStrategy
+        from src.strategy.ensemble import EnsembleStrategy
         from src.strategy.macd import MACDStrategy
         from src.strategy.moving_average import MovingAverageStrategy
         from src.strategy.rsi import RSIStrategy
 
+        ma = MovingAverageStrategy()
+        rsi = RSIStrategy()
+        macd = MACDStrategy()
+        bollinger = BollingerBandStrategy()
+
         registry = cls()
-        registry.register("moving_average", MovingAverageStrategy())
-        registry.register("rsi", RSIStrategy())
-        registry.register("macd", MACDStrategy())
-        registry.register("bollinger", BollingerBandStrategy())
+        registry.register("moving_average", ma)
+        registry.register("rsi", rsi)
+        registry.register("macd", macd)
+        registry.register("bollinger", bollinger)
+        registry.register(
+            "ensemble",
+            EnsembleStrategy(
+                strategies=[ma, rsi, macd, bollinger],
+                method=settings.strategy.ensemble_method,
+            ),
+        )
         return registry
