@@ -5,6 +5,45 @@
 
 ---
 
+## [2026-04-14] Telegram 알림 메시지 구조 개선 (매수/매도/결산)
+- 카테고리: enhancement
+- 배경:
+  - 초기 개발 버전의 Telegram 알림이 최소한의 정보만 표시 (종목명, 수량, 가격)
+  - 매수 시 전략/시그널 정보, 매도 시 손익/수익률, 결산 시 체결 내역/계좌 현황이 누락
+- 변경 파일:
+  - src/notify/formatter.py: 전면 개편
+    - format_buy(): 총 금액, 전략명, 시그널 근거/신뢰도 표시, BuyDetail 데이터 클래스 추가
+    - format_sell(): 매입가, 실현 손익/수익률 표시, SellDetail 데이터 클래스 추가, 익절/손절/전략매도 이모지 분리
+    - format_daily_summary(): 매수/매도 건수, 체결 내역(최대 10건), 계좌 현황(예수금/평가금/평가손익/보유종목) 표시
+    - format_system(): 시스템 이모지 추가
+  - src/notify/telegram.py: 인터페이스 확장
+    - notify_buy(): strategy, reason, confidence 키워드 인자 추가
+    - notify_sell(): avg_price 키워드 인자 추가 → 자동 손익 계산
+    - notify_daily_summary(): buy_count, sell_count, executions, balance 키워드 인자 추가
+  - src/engine.py: 알림에 풍부한 데이터 전달
+    - _execute_buy(): strategy_name 파라미터 추가, 시그널 정보(reason, confidence) 함께 전달
+    - _execute_sell(): avg_price 전달
+    - post_market(): executions, balance, buy_count, sell_count 전달
+  - tests/test_notify/test_formatter.py: 테스트 8→17건 확대 (BuyDetail, SellDetail, executions, balance 케이스)
+  - tests/test_notify/test_telegram.py: 테스트 11→15건 확대 (전략 정보, 매입가/손익, 상세 결산 케이스)
+- 검증 결과: pytest ✅ (39 passed in test_notify/) | mypy ✅ (새 에러 없음) | ruff ✅
+
+## [2026-04-14] 서킷 브레이커 점진적 백오프 + 엔진 연동 강화
+- 카테고리: bug_fix
+- 배경:
+  - KIS API 500 에러 연속 발생 시 서킷 브레이커 리셋이 30초로 고정되어 무한 재시도 루프 발생
+  - 매매 사이클이 종료되지 않아 후속 스케줄러 작업(post_market, summarize 등) 전부 스킵
+  - 오늘(4/14) 11:20~11:23 구간에서 11,310건의 500 에러 발생
+- 변경 파일:
+  - src/api/client.py: CircuitBreaker에 exponential backoff 적용
+    - 반복 트립 시 리셋 대기 시간 점진 증가 (30s → 60s → 120s → 240s → 300s 최대)
+    - 성공 시 트립 카운트/백오프 전부 초기화
+    - trip_count 추적으로 반복 장애 감지
+  - src/engine.py: 서킷 브레이커 상태 확인 추가
+    - run_trading_cycle() 시작 시 서킷 브레이커 열림 확인 → 즉시 스킵
+    - 종목 처리 루프 중 서킷 브레이커 열림 확인 → 나머지 종목 스킵, 사이클 조기 종료
+- 영향: API 장애 시 불필요한 재시도 대폭 감소, 스케줄러 정상 동작 보장
+
 ## [2026-04-13] watchdog 주말/공휴일 체크 추가 + stdout 로그 비대화 방지
 - 카테고리: bug_fix
 - 배경:

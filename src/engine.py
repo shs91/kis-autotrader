@@ -294,6 +294,12 @@ class TradingEngine:
         held_codes: set[str] = set()
         targets: list[str] = []
         try:
+            # 서킷 브레이커가 열려있으면 사이클 즉시 스킵
+            if self._client.circuit_breaker.is_open:
+                logger.warning("서킷 브레이커 열림 — 사이클 #%d 즉시 스킵", self._cycle_count)
+                exit_reason = "circuit_breaker_open"
+                return
+
             if self._risk.check_daily_trade_limit(self._today_trade_count):
                 logger.warning("일일 매매 횟수 한도 도달, 사이클 스킵")
                 exit_reason = "trade_limit"
@@ -331,6 +337,14 @@ class TradingEngine:
             )
 
             for stock_code in targets:
+                # 서킷 브레이커가 열려있으면 사이클 즉시 중단
+                if self._client.circuit_breaker.is_open:
+                    logger.warning(
+                        "서킷 브레이커 열림 — 나머지 %d종목 스킵, 사이클 조기 종료",
+                        len(targets) - targets.index(stock_code),
+                    )
+                    exit_reason = "circuit_breaker_open"
+                    return
                 try:
                     is_held = stock_code in held_codes
                     holding_info = self._find_holding_from_balance(balance, stock_code)
@@ -393,16 +407,20 @@ class TradingEngine:
             # Google Calendar 이벤트 등록
             self._create_calendar_event(balance, executions)
 
+            buy_count = sum(1 for e in executions if e.side == "매수")
+            sell_count = sum(1 for e in executions if e.side == "매도")
+
             # Telegram 일일 결산 알림
             await self._notifier.notify_daily_summary(
                 trade_date=date.today().isoformat(),
                 count=len(executions),
                 profit_loss=int(balance.total_profit_loss),
                 rate=float(balance.total_profit_rate),
+                buy_count=buy_count,
+                sell_count=sell_count,
+                executions=executions,
+                balance=balance,
             )
-
-            buy_count = sum(1 for e in executions if e.side == "매수")
-            sell_count = sum(1 for e in executions if e.side == "매도")
 
             self._client._limiter.log_daily_count()
             logger.info(
@@ -575,7 +593,8 @@ class TradingEngine:
                 stock_code, current.stock_name, signal, action_taken=True,
             )
             await self._execute_buy(
-                stock_code, current.stock_name, quantity, current.current_price, signal=signal,
+                stock_code, current.stock_name, quantity, current.current_price,
+                signal=signal, strategy_name=strategy.name,
             )
         elif signal.signal_type != SignalType.HOLD:
             self._record_signal_to_db(
@@ -642,7 +661,7 @@ class TradingEngine:
 
     async def _execute_buy(
         self, stock_code: str, stock_name: str, quantity: int, price: int,
-        signal: Signal | None = None,
+        signal: Signal | None = None, strategy_name: str = "",
     ) -> None:
         """매수 주문을 실행하고 DB에 기록한다."""
         try:
@@ -664,7 +683,12 @@ class TradingEngine:
                 signal=signal,
             )
 
-            await self._notifier.notify_buy(stock_name, stock_code, quantity, price)
+            await self._notifier.notify_buy(
+                stock_name, stock_code, quantity, price,
+                strategy=strategy_name,
+                reason=signal.reason if signal else "",
+                confidence=signal.confidence if signal else 0.0,
+            )
 
         except Exception:
             logger.exception("[매수 실패] %s(%s)", stock_name, stock_code)
@@ -699,7 +723,10 @@ class TradingEngine:
                 reason=reason, signal_type=signal_type, avg_price=avg_price,
             )
 
-            await self._notifier.notify_sell(stock_name, stock_code, quantity, price, reason)
+            await self._notifier.notify_sell(
+                stock_name, stock_code, quantity, price, reason,
+                avg_price=avg_price or 0.0,
+            )
 
         except Exception:
             logger.exception("[매도 실패] %s", stock_code)

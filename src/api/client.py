@@ -26,7 +26,13 @@ CIRCUIT_RESET_TIMEOUT: float = 30.0
 
 
 class CircuitBreaker:
-    """연속 실패 시 요청을 차단하는 서킷 브레이커."""
+    """연속 실패 시 요청을 차단하는 서킷 브레이커.
+
+    반개방 후 재실패 시 리셋 대기 시간이 점진적으로 증가한다 (exponential backoff).
+    최대 대기 시간은 5분(300초)이며, 성공 시 모든 상태가 초기화된다.
+    """
+
+    MAX_RESET_TIMEOUT: float = 300.0  # 최대 5분
 
     def __init__(
         self,
@@ -37,18 +43,22 @@ class CircuitBreaker:
 
         Args:
             failure_threshold: 차단까지 허용하는 연속 실패 횟수
-            reset_timeout: 차단 후 재시도까지 대기 시간(초)
+            reset_timeout: 차단 후 재시도까지 기본 대기 시간(초)
         """
         self._failure_threshold = failure_threshold
-        self._reset_timeout = reset_timeout
+        self._base_reset_timeout = reset_timeout
+        self._current_reset_timeout = reset_timeout
         self._failure_count = 0
         self._last_failure_time: float = 0.0
         self._is_open = False
+        self._trip_count = 0  # 서킷이 열린 누적 횟수
 
     def record_success(self) -> None:
-        """성공을 기록하고 서킷을 닫는다."""
+        """성공을 기록하고 서킷을 닫는다. 백오프도 초기화."""
         self._failure_count = 0
         self._is_open = False
+        self._trip_count = 0
+        self._current_reset_timeout = self._base_reset_timeout
 
     def record_failure(self) -> None:
         """실패를 기록하고 임계값 초과 시 서킷을 연다."""
@@ -56,10 +66,17 @@ class CircuitBreaker:
         self._last_failure_time = time.monotonic()
         if self._failure_count >= self._failure_threshold:
             self._is_open = True
+            self._trip_count += 1
+            # 반복 트립 시 대기 시간 점진 증가 (30s → 60s → 120s → 240s → 300s)
+            self._current_reset_timeout = min(
+                self._base_reset_timeout * (2 ** (self._trip_count - 1)),
+                self.MAX_RESET_TIMEOUT,
+            )
             logger.warning(
-                "서킷 브레이커 작동: 연속 %d회 실패, %.0f초간 요청 차단",
+                "서킷 브레이커 작동: 연속 %d회 실패, %.0f초간 요청 차단 (트립 #%d)",
                 self._failure_count,
-                self._reset_timeout,
+                self._current_reset_timeout,
+                self._trip_count,
             )
 
     def is_available(self) -> bool:
@@ -67,10 +84,15 @@ class CircuitBreaker:
         if not self._is_open:
             return True
 
-        # reset_timeout이 지났으면 반개방 상태로 전환
+        # current_reset_timeout이 지났으면 반개방 상태로 전환
         elapsed = time.monotonic() - self._last_failure_time
-        if elapsed >= self._reset_timeout:
-            logger.info("서킷 브레이커 반개방: 재시도 허용")
+        if elapsed >= self._current_reset_timeout:
+            logger.info(
+                "서킷 브레이커 반개방: %.0f초 경과, 재시도 허용 (트립 #%d)",
+                elapsed,
+                self._trip_count,
+            )
+            self._failure_count = 0
             return True
 
         return False
