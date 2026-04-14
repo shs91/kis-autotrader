@@ -5,6 +5,25 @@
 
 ---
 
+## [2026-04-14] CLAUDE.md 전면 현행화 — 실제 소스 구조·설정 기준 재작성
+- 카테고리: docs
+- 배경:
+  - CLAUDE.md가 초기 설계 시점 기준으로 작성되어 실제 코드베이스와 다수 불일치
+  - 누락: src/engine.py, src/backtest/, scripts/, Docker 파일, test_notify/ 등
+  - 부정확: Rate Limit 기본값(3→virtual=5/real=20), 일일 한도(10,000→50,000)
+  - 미비: 예외 클래스, 로깅 규약, 테스트 규칙, 실행 방법, Circuit Breaker 상세 등
+- 변경 파일:
+  - CLAUDE.md: 전면 재작성 (두 브랜치 fix/claude-md-overhaul + chore/update-claude-md 최선 컴바인)
+- 주요 변경:
+  - 기술 스택: httpx, websockets, pandas, pydantic, respx, Streamlit 추가
+  - 디렉토리 구조: engine.py, backtest/, scripts/, docs/ 등 누락 항목 전부 추가
+  - 코딩 컨벤션: future annotations, frozen dataclass, ruff/mypy 설정 구체화
+  - 신규 섹션: 커스텀 예외 테이블, 로깅 규약, 테스트 조직 규칙, Alembic 워크플로우, 실행 방법
+  - 설정 시스템: config_overrides.json 오버라이드, 환경별 기본값 테이블
+  - Circuit Breaker: 별도 섹션으로 분리, 백오프 수치 명시
+  - 모듈 경계: 의존성 방향 다이어그램 추가, 제약 완화 (단독 작업 시 참고용)
+  - 환경변수: Strategy, Screening, Telegram, Docker, Health Check 전체 반영
+
 ## [2026-04-14] signals/trades/stocks 테이블 종목명 누락 수정
 - 카테고리: bug_fix
 - 배경:
