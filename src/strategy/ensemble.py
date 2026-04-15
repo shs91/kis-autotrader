@@ -57,14 +57,32 @@ class EnsembleStrategy(BaseStrategy):
         self._strategy_weights = weights
         logger.info("앙상블 가중치 업데이트: %s", weights)
 
+    def _build_vote_meta(self, signals: list[Signal]) -> dict[str, object]:
+        """투표 집계 상세를 meta dict로 구성한다."""
+        return {
+            "method": self._method,
+            "votes": [
+                {
+                    "strategy": s.name,
+                    "action": sig.signal_type.value,
+                    "confidence": round(sig.confidence, 4),
+                }
+                for s, sig in zip(self._strategies, signals)
+            ],
+        }
+
     def analyze(self, market_data: pd.DataFrame) -> Signal:
         """모든 하위 전략의 시그널을 수집하여 투표로 결정한다."""
         signals = [s.analyze(market_data) for s in self._strategies]
         if self._method == MAJORITY:
-            return self._majority_vote(signals)
-        if self._method == PERFORMANCE:
-            return self._performance_vote(signals)
-        return self._weighted_vote(signals)
+            result = self._majority_vote(signals)
+        elif self._method == PERFORMANCE:
+            result = self._performance_vote(signals)
+        else:
+            result = self._weighted_vote(signals)
+        if result.signal_type == SignalType.HOLD:
+            result.meta = self._build_vote_meta(signals)
+        return result
 
     def _majority_vote(self, signals: list[Signal]) -> Signal:
         """다수결 투표를 수행한다."""

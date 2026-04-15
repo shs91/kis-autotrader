@@ -5,6 +5,18 @@
 
 ---
 
+## [2026-04-15] ENSEMBLE 시그널 매매 전환율 0% 원인 조사 — observability 강화
+- 제안서: docs/proposals/2026-04-15_ensemble-zero-conversion-investigation.md
+- 카테고리: bug_fix (observability)
+- 변경 파일:
+  - src/strategy/base.py: Signal dataclass에 `meta: dict[str, Any]` 필드 추가
+  - src/strategy/ensemble.py: HOLD 수렴 시 투표 집계 상세(method, votes)를 meta에 기록
+  - src/engine.py: 시그널 skip 사유(hold_action, sell_without_position, risk_rejected, zero_quantity, low_confidence_sell)를 SIGNAL_SKIP 메트릭 + signal_value.skip_reason으로 기록. `_record_signal_skip()` 메서드 추가
+  - tests/test_strategy/test_ensemble.py: HOLD meta 기록 검증 테스트 3개 추가
+- 검증 결과: pytest ✅ (387 passed, 기존 실패 4건 동일) | mypy ✅ (신규 에러 없음) | ruff ✅
+
+---
+
 ## [2026-04-15] Worker 분리 — 매매 엔진 I/O 비동기화 (Phase 1~3)
 - 카테고리: feature (architecture)
 - 배경:

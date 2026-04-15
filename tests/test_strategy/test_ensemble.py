@@ -159,6 +159,54 @@ def test_init_invalid_method() -> None:
 # --- name format test ---
 
 
+def test_hold_meta_all_hold() -> None:
+    """모든 전략이 HOLD일 때 투표 meta가 채워진다."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="majority",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    assert "method" in result.meta
+    assert result.meta["method"] == "majority"
+    assert len(result.meta["votes"]) == 2
+    assert result.meta["votes"][0]["action"] == "HOLD"
+
+
+def test_hold_meta_tie() -> None:
+    """동수 투표로 HOLD 수렴 시 투표 meta가 채워진다."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.7),
+            FixedStrategy(SignalType.SELL, 0.5),
+        ],
+        method="majority",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    assert result.meta["method"] == "majority"
+    assert result.meta["votes"][0]["action"] == "BUY"
+    assert result.meta["votes"][1]["action"] == "SELL"
+
+
+def test_buy_signal_no_hold_meta() -> None:
+    """BUY 시그널에는 투표 meta가 비어있다."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.7),
+            FixedStrategy(SignalType.BUY, 0.5),
+            FixedStrategy(SignalType.SELL, 0.3),
+        ],
+        method="majority",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+    assert result.meta == {}
+
+
 def test_name_format() -> None:
     """앙상블 이름에 '앙상블' 문자열이 포함되어야 한다."""
     ensemble = EnsembleStrategy(

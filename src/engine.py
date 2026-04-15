@@ -529,12 +529,16 @@ class TradingEngine:
 
         # 3-1. 시그널 DB 기록 (BUY/SELL만, action_taken은 아래서 결정)
         will_act = False
+        skip_reason: str | None = None
 
         # 4. 보유 종목 처리
         if is_held and holding_info is not None:
             will_act = signal.signal_type == SignalType.SELL and signal.confidence >= 0.1
+            if not will_act and signal.signal_type == SignalType.SELL:
+                skip_reason = "low_confidence_sell"
             self._record_signal_to_db(
                 stock_code, current.stock_name, signal, action_taken=will_act,
+                skip_reason=skip_reason,
             )
             await self._process_held_stock(
                 stock_code, current.current_price, holding_info, signal,
@@ -542,33 +546,48 @@ class TradingEngine:
             )
             return
 
-        # 5. 미보유 종목 — 매수 시그널 처리
-        if signal.signal_type == SignalType.BUY:
-            if not self._risk.validate_order(signal, float(deposit), 0):
-                self._record_signal_to_db(
-                    stock_code, current.stock_name, signal, action_taken=False,
-                )
-                return
-            quantity = self._risk.calculate_position_size(
-                float(deposit), float(current.current_price)
+        # 5. 미보유 종목 — 시그널 처리
+        if signal.signal_type == SignalType.HOLD:
+            skip_reason = "hold_action"
+            self._record_signal_skip(
+                stock_code, current.stock_name, signal, skip_reason,
             )
-            if quantity <= 0:
-                logger.info("[%s] 매수 가능 수량 0, 스킵", stock_code)
-                self._record_signal_to_db(
-                    stock_code, current.stock_name, signal, action_taken=False,
-                )
-                return
-            self._record_signal_to_db(
-                stock_code, current.stock_name, signal, action_taken=True,
-            )
-            await self._execute_buy(
-                stock_code, current.stock_name, quantity, current.current_price,
-                signal=signal, strategy_name=strategy.name,
-            )
-        elif signal.signal_type != SignalType.HOLD:
+            return
+
+        if signal.signal_type == SignalType.SELL:
+            skip_reason = "sell_without_position"
             self._record_signal_to_db(
                 stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason=skip_reason,
             )
+            return
+
+        # BUY 시그널 처리
+        if not self._risk.validate_order(signal, float(deposit), 0):
+            skip_reason = "risk_rejected"
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason=skip_reason,
+            )
+            return
+        quantity = self._risk.calculate_position_size(
+            float(deposit), float(current.current_price)
+        )
+        if quantity <= 0:
+            skip_reason = "zero_quantity"
+            logger.info("[%s] 매수 가능 수량 0, 스킵", stock_code)
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason=skip_reason,
+            )
+            return
+        self._record_signal_to_db(
+            stock_code, current.stock_name, signal, action_taken=True,
+        )
+        await self._execute_buy(
+            stock_code, current.stock_name, quantity, current.current_price,
+            signal=signal, strategy_name=strategy.name,
+        )
 
     async def _process_held_stock(
         self,
@@ -828,12 +847,35 @@ class TradingEngine:
         except Exception:
             logger.exception("스크리닝 DB 적재 실패")
 
+    def _record_signal_skip(
+        self,
+        stock_code: str,
+        stock_name: str,
+        signal: Signal,
+        skip_reason: str,
+    ) -> None:
+        """HOLD 등 DB 미기록 시그널의 skip 사유를 메트릭으로 기록한다."""
+        logger.debug(
+            "[%s %s] 시그널 skip: reason=%s, type=%s, conf=%.2f, meta=%s",
+            stock_code, stock_name, skip_reason,
+            signal.signal_type.value, signal.confidence,
+            json.dumps(signal.meta, ensure_ascii=False) if signal.meta else "{}",
+        )
+        self._record_metric("SIGNAL_SKIP", {
+            "stock_code": stock_code,
+            "skip_reason": skip_reason,
+            "signal_type": signal.signal_type.value,
+            "confidence": round(signal.confidence, 4),
+            "vote_meta": signal.meta if signal.meta else None,
+        })
+
     def _record_signal_to_db(
         self,
         stock_code: str,
         stock_name: str,
         signal: Signal,
         action_taken: bool = False,
+        skip_reason: str | None = None,
     ) -> None:
         """전략 시그널을 signals 테이블에 기록한다. BUY/SELL만 기록한다."""
         if signal.signal_type == SignalType.HOLD:
@@ -883,6 +925,7 @@ class TradingEngine:
                         "confidence": conf,
                         "target_price": target,
                         "reason": signal.reason,
+                        **({"skip_reason": skip_reason} if skip_reason else {}),
                     },
                     "confidence": conf,
                     "action_taken": action_taken,

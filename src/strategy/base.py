@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 import pandas as pd
 
@@ -34,6 +35,7 @@ class Signal:
     target_price: float | None = None
     stop_loss_price: float | None = None
     reason: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """신뢰도 값의 유효성을 검증한다."""
