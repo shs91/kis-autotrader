@@ -30,6 +30,18 @@ from src.notify.bot import TelegramBot
 from src.notify.telegram import TelegramNotifier
 from src.scheduler.jobs import TradingScheduler
 from src.utils.logger import setup_logger
+from src.worker.handlers import (
+    CalendarEventHandler,
+    DailyPerformanceHandler,
+    DailySummaryHandler,
+    RecordMetricHandler,
+    RecordSignalHandler,
+    RecordTradeHandler,
+    SyncPortfolioHandler,
+    TelegramNotifyHandler,
+)
+from src.worker.runner import WorkerRunner
+from src.worker.screener import ScreeningWorker
 
 logger = setup_logger(__name__)
 
@@ -565,6 +577,30 @@ async def main() -> None:
     _register_bot_commands(bot, engine, scheduler, notifier)
     await bot.start()
 
+    # Worker 시작 (비동기 태스크 처리)
+    worker: WorkerRunner | None = None
+    worker_task: asyncio.Task[None] | None = None
+    if settings.worker.enabled:
+        worker = WorkerRunner()
+        worker.register_handler("calendar_event", CalendarEventHandler())
+        worker.register_handler("telegram_notify", TelegramNotifyHandler())
+        worker.register_handler("daily_summary", DailySummaryHandler())
+        worker.register_handler("sync_portfolio", SyncPortfolioHandler())
+        worker.register_handler("daily_performance", DailyPerformanceHandler())
+        worker.register_handler("record_trade", RecordTradeHandler())
+        worker.register_handler("record_signal", RecordSignalHandler())
+        worker.register_handler("record_metric", RecordMetricHandler())
+        worker_task = asyncio.create_task(worker.run())
+        logger.info("Worker 프로세스 시작")
+
+    # Screening Worker 시작 (스크리닝 API 분리)
+    screener_worker: ScreeningWorker | None = None
+    screener_task: asyncio.Task[None] | None = None
+    if settings.worker.enabled:
+        screener_worker = ScreeningWorker()
+        screener_task = asyncio.create_task(screener_worker.run())
+        logger.info("Screening Worker 시작")
+
     await notifier.notify_system(f"자동매매 시스템 가동 ({settings.kis.env})")
     log_system(f"시스템 시작 ({settings.kis.env})")
 
@@ -584,6 +620,22 @@ async def main() -> None:
         await stop_event.wait()
     finally:
         logger.info("시스템 종료 중...")
+        if screener_worker:
+            screener_worker.stop()
+        if screener_task:
+            screener_task.cancel()
+            try:
+                await screener_task
+            except asyncio.CancelledError:
+                pass
+        if worker:
+            worker.stop()
+        if worker_task:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except asyncio.CancelledError:
+                pass
         await bot.stop()
         if health_server:
             await health_server.stop()

@@ -8,14 +8,15 @@
 - **자동 매매** — 이동평균 교차, RSI, MACD, 볼린저밴드, 앙상블 전략 기반 자동 매수/매도
 - **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 손절/익절 자동 판단, 당일 MDD/연패 감시
 - **실시간 시세** — 웹소켓 기반 실시간 호가/체결 수신 (상태 머신 + 자동 재연결)
-- **API 안전장치** — Token Bucket Rate Limiter, Circuit Breaker, exponential backoff 재시도
+- **API 안전장치** — Token Bucket Rate Limiter, Redis 분산 Rate Limiter, Circuit Breaker, exponential backoff 재시도
+- **Worker 비동기 처리** — PostgreSQL Outbox 패턴으로 외부 I/O(Calendar, Telegram, DB 기록)를 별도 Worker에서 처리. 네트워크 장애 시 자동 재시도
 - **스케줄링** — 장 시작 전 토큰 갱신 → 장중 주기적 매매 → 장 마감 후 결산 자동 실행 (휴장일 자동 감지)
-- **Google Calendar 연동** — 일일 매매 결과를 캘린더 이벤트로 자동 등록
-- **Telegram 알림** — 매매 체결(전략/손익 상세), 일일 결산(체결내역/계좌현황), 시스템 상태 알림 + Bot 명령어 16종
+- **Google Calendar 연동** — 일일 매매 결과를 캘린더 이벤트로 자동 등록 (Worker 경유, 재시도 지원)
+- **Telegram 알림** — 매매 체결(전략/손익 상세), 일일 결산(체결내역/계좌현황), 시스템 상태 알림 + Bot 명령어 16종 (Worker 경유)
 - **백테스트** — 과거 데이터 기반 전략 시뮬레이션, 성과 리포트 자동 생성
 - **헬스체크** — 경량 HTTP 서버로 프로세스/DB/스케줄러 상태 모니터링
 - **DB 영속성** — PostgreSQL + SQLAlchemy ORM + Alembic 마이그레이션 + 매매 분석 쿼리
-- **종목 스크리닝** — 거래량 상위 종목 자동 발굴 (사전필터 + 가중 스코어링), 매매 후보 동적 추가
+- **종목 스크리닝** — 별도 ScreeningWorker가 거래량 상위 종목 자동 발굴 (Redis Rate Limiter로 API 할당량 분리)
 - **대시보드** — Streamlit 기반 웹 대시보드 (매매 분석, 성과 분석, 시그널 분석, 리스크 분석)
 - **프로세스 감시** — watchdog 스크립트로 hang 감지 + 자동 재시작 (휴장일/주말 자동 스킵)
 - **자동 개선 파이프라인** — Cowork(분석/제안) + Claude Code(구현) 스케줄 자동화
@@ -28,6 +29,7 @@
 | HTTP Client | httpx (async) |
 | WebSocket | websockets |
 | Database | PostgreSQL + SQLAlchemy 2.0 + Alembic |
+| Cache/Queue | Redis 7 (Rate Limiter 공유 + Worker 보조) |
 | Scheduler | APScheduler |
 | Data Analysis | pandas |
 | Calendar | Google Calendar API |
@@ -50,7 +52,7 @@ kis-autotrader/
 │   ├── config.py                  # 환경변수/설정 통합 관리
 │   ├── engine.py                  # 매매 엔진 (시세→전략→리스크→주문→DB)
 │   ├── api/
-│   │   ├── rate_limiter.py        # Token Bucket Rate Limiter
+│   │   ├── rate_limiter.py        # Rate Limiter (Token Bucket + Redis 분산)
 │   │   ├── auth.py                # OAuth 토큰 발급/자동갱신
 │   │   ├── client.py              # HTTP 클라이언트 (재시도, Circuit Breaker)
 │   │   ├── order.py               # 주문 API (매수/매도/정정/취소)
@@ -83,6 +85,11 @@ kis-autotrader/
 │   ├── scheduler/
 │   │   ├── jobs.py                # APScheduler 작업 정의
 │   │   └── holidays.py            # 한국 증시 휴장일 관리
+│   ├── worker/
+│   │   ├── queue.py               # PostgreSQL Outbox 태스크 큐
+│   │   ├── runner.py              # Worker 메인 루프 (30초 폴링)
+│   │   ├── handlers.py            # 태스크 핸들러 8종
+│   │   └── screener.py            # 스크리닝 전용 Worker
 │   ├── notify/
 │   │   ├── telegram.py            # Telegram Bot API 전송
 │   │   ├── bot.py                 # Telegram Bot 명령어 처리

@@ -15,7 +15,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -339,6 +338,57 @@ class SystemMetric(Base):
 
     def __repr__(self) -> str:
         return f"<SystemMetric(id={self.id}, type={self.metric_type!r})>"
+
+
+class TaskStatus(enum.Enum):
+    """비동기 태스크 상태."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    DEAD = "DEAD"
+
+
+class TaskQueue(Base):
+    """비동기 태스크 큐 테이블 (Outbox 패턴)."""
+
+    __tablename__ = "task_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[TaskStatus] = mapped_column(
+        SAEnum(TaskStatus, name="task_status_enum"),
+        default=TaskStatus.PENDING,
+        index=True,
+        nullable=False,
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True
+    )
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_retries: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<TaskQueue(id={self.id}, type={self.task_type!r}, "
+            f"status={self.status.value})>"
+        )
 
 
 class DailySummary(Base):

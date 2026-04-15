@@ -825,6 +825,27 @@ class ScreeningResultRepository:
         )
         return list(self._session.execute(stmt).scalars().all())
 
+    def get_by_date(self, target_date: date) -> list[ScreeningResult]:
+        """특정 날짜의 스크리닝 결과를 조회한다.
+
+        Args:
+            target_date: 조회 날짜
+
+        Returns:
+            스크리닝 결과 리스트
+        """
+        start = datetime.combine(target_date, datetime.min.time())
+        end = start + timedelta(days=1)
+        stmt = (
+            select(ScreeningResult)
+            .where(
+                ScreeningResult.screened_at >= start,
+                ScreeningResult.screened_at < end,
+            )
+            .order_by(ScreeningResult.screening_rank)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
 
 class SystemMetricRepository:
     """시스템 메트릭 데이터 접근 클래스."""

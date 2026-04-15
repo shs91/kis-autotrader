@@ -5,6 +5,36 @@
 
 ---
 
+## [2026-04-15] Worker 분리 — 매매 엔진 I/O 비동기화 (Phase 1~3)
+- 카테고리: feature (architecture)
+- 배경:
+  - 2026-04-14 네트워크 단절로 Google Calendar 등록 실패
+  - post_market에서 Calendar/Telegram/DB 집계가 순차 실행되어 장 마감 후 작업 지연
+  - 스크리닝 API 호출이 매매 사이클과 rate limiter를 공유하여 경합 발생
+- 변경 내용:
+  - **Phase 1**: PostgreSQL Outbox 패턴 task_queue 테이블 + Worker 프로세스
+    - Calendar, Telegram, 일일집계, 포트폴리오, 일일성과를 Queue 경유로 전환
+    - 실패 시 exponential backoff 재시도 (최대 5회), DEAD 시 Telegram 알림
+  - **Phase 2**: 매매/시그널/메트릭 DB 기록 Queue화
+    - record_trade(priority=10), record_signal(5), record_metric(3)
+    - 매매 체결 후 즉시 다음 종목으로 이동 (DB 대기 제거)
+  - **Phase 3**: Redis Rate Limiter + ScreeningWorker 분리
+    - RedisRateLimiter(INCR 기반) + HybridRateLimiter(Redis 폴백)
+    - 시간대별 할당량 동적 전환 (08:25 스크리닝100%, 08:55 장중80/20, 15:25 메인100%)
+    - ScreeningWorker가 300초 주기로 독립 실행, 메인 엔진은 DB 결과만 읽기
+- 신규 파일:
+  - src/worker/__init__.py, queue.py, runner.py, handlers.py, screener.py
+  - alembic/versions/702dbb24bf59_add_task_queue_table.py
+  - tests/test_worker/ (test_queue, test_handlers, test_runner, test_rate_limiter, test_screener)
+- 수정 파일:
+  - src/db/models.py, src/db/repository.py, src/config.py, src/engine.py
+  - src/api/rate_limiter.py, src/scheduler/jobs.py, src/utils/exceptions.py
+  - main.py, docker-compose.yml, .env.example, tests/test_engine_db_integration.py
+- 인프라 추가:
+  - Redis 7-alpine (Docker, port 6380, --restart unless-stopped)
+  - 대시보드 launchd 등록 (com.kis.dashboard)
+- 검증 결과: pytest ✅ (388 passed) | Match Rate 97% | 프로세스 재시작 후 정상 동작 확인
+
 ## [2026-04-14] 앙상블 전략 미등록 + .env 기본전략 불일치 수정
 - 카테고리: bug_fix
 - 배경:

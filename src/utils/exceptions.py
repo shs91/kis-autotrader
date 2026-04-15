@@ -53,3 +53,11 @@ class DatabaseError(KISAutoTraderError):
 
 class CalendarError(KISAutoTraderError):
     """Google Calendar 관련 에러."""
+
+
+class WorkerError(KISAutoTraderError):
+    """Worker 프로세스 관련 에러."""
+
+
+class TaskExecutionError(WorkerError):
+    """태스크 실행 실패 에러."""

@@ -23,9 +23,7 @@ from src.db.repository import (
     OrderRepository,
     PortfolioRepository,
     ScreeningResultRepository,
-    SignalRepository,
     StockRepository,
-    SystemMetricRepository,
     TradeRepository,
     WatchlistRepository,
 )
@@ -38,6 +36,7 @@ from src.strategy.screener import StockScreener
 from src.strategy.selector import StrategySelector
 from src.utils.exceptions import DailyLimitExceededError
 from src.utils.logger import setup_logger
+from src.worker.queue import TaskQueueService
 
 logger = setup_logger(__name__)
 
@@ -83,6 +82,7 @@ class TradingEngine:
         self._risk = RiskManager()
         self._notifier = TelegramNotifier()
         self._screener = StockScreener()
+        self._task_queue = TaskQueueService()
 
         # 관심종목: 직접 지정 시 고정, 미지정 시 DB에서 매 사이클 조회
         self._fixed_watchlist: list[str] | None = watchlist
@@ -400,26 +400,17 @@ class TradingEngine:
                 balance.total_profit_rate,
             )
 
-            self._save_daily_performance(balance, executions)
-            self._sync_portfolio(balance)
-            self._upsert_daily_summary()
-
-            # Google Calendar 이벤트 등록
-            self._create_calendar_event(balance, executions)
-
             buy_count = sum(1 for e in executions if e.side == "매수")
             sell_count = sum(1 for e in executions if e.side == "매도")
 
-            # Telegram 일일 결산 알림
-            await self._notifier.notify_daily_summary(
-                trade_date=date.today().isoformat(),
-                count=len(executions),
-                profit_loss=int(balance.total_profit_loss),
-                rate=float(balance.total_profit_rate),
-                buy_count=buy_count,
-                sell_count=sell_count,
-                executions=executions,
-                balance=balance,
+            # Worker Queue 경유: 일일 성과·포트폴리오·집계·캘린더·텔레그램
+            today_str = date.today().isoformat()
+            self._enqueue_daily_performance(balance, executions)
+            self._enqueue_sync_portfolio(balance)
+            self._enqueue_daily_summary(today_str)
+            self._enqueue_calendar_event(balance)
+            self._enqueue_telegram_daily_summary(
+                balance, buy_count, sell_count, executions,
             )
 
             self._client._limiter.log_daily_count()
@@ -443,75 +434,44 @@ class TradingEngine:
     # ── 종목 스크리닝 ─────────────────────────────────────
 
     async def _screen_stocks(self) -> None:
-        """거래량 상위 종목을 필터링·스코어링하여 매수 후보를 발굴한다."""
+        """screening_results 테이블에서 ScreeningWorker의 최신 결과를 읽는다.
+
+        실제 스크리닝(API 호출 + 전략 분석)은 ScreeningWorker가 별도로 수행한다.
+        메인 엔진은 DB 결과만 읽어 매매 대상에 추가한다.
+        """
         scfg = self._screener.config
         if len(self._screened_codes) >= scfg.max_screened:
-            logger.info("스크리닝 발굴 종목 상한 도달 (%d종목), 스킵", len(self._screened_codes))
             return
-
-        logger.info("=== 종목 스크리닝 시작 ===")
 
         try:
-            ranked = await self._quote.get_volume_rank(top_n=scfg.top_n)
-        except Exception:
-            logger.exception("거래량 순위 조회 실패")
-            return
+            today = date.today()
+            with get_session() as session:
+                repo = ScreeningResultRepository(session)
+                results = repo.get_by_date(today)
 
-        # 1단계: 사전 필터 (가격/시총/등락률/거래량)
-        watchlist_set = set(self._get_watchlist_codes())
-        exclude_codes = watchlist_set | self._screened_codes
-        filtered = self._screener.filter_candidates(ranked, exclude_codes)
-
-        # 2단계: 전략 분석 + 스코어링
-        from src.strategy.screener import ScoredCandidate
-
-        scored: list[ScoredCandidate] = []
-        for rank_idx, item in enumerate(filtered):
-            try:
-                df = await self._get_daily_df(item.stock_code)
-                if df is None:
+            new_codes: list[str] = []
+            watchlist_set = set(self._get_watchlist_codes())
+            for r in results:
+                if not r.converted_to_trade:
                     continue
+                if r.stock_code in self._screened_codes:
+                    continue
+                if r.stock_code in watchlist_set:
+                    continue
+                new_codes.append(r.stock_code)
 
-                strategy = self._selector.get_strategy(item.stock_code)
-                signal = strategy.analyze(df)
-
-                candidate = self._screener.score_candidate(
-                    item, rank_idx, len(filtered), signal,
+            remaining = scfg.max_screened - len(self._screened_codes)
+            added = new_codes[:remaining]
+            if added:
+                self._screened_codes.update(added)
+                logger.info(
+                    "스크리닝 결과 반영: 신규 %d종목 (누적 %d/%d)",
+                    len(added),
+                    len(self._screened_codes),
+                    scfg.max_screened,
                 )
-                scored.append(candidate)
-
-            except Exception:
-                logger.debug("스크리닝 분석 실패: %s", item.stock_code)
-
-        # 3단계: 종합 점수 정렬 + 최소 점수 컷
-        top_candidates = self._screener.rank_candidates(scored)
-
-        # 4단계: 슬롯 수만큼 발굴
-        remaining_slots = scfg.max_screened - len(self._screened_codes)
-        new_candidates: list[str] = []
-
-        for candidate in top_candidates[:remaining_slots]:
-            new_candidates.append(candidate.stock_code)
-            logger.info(
-                "[스크리닝 발굴] %s(%s) 종합=%.2f "
-                "(거래량=%.2f, 등락률=%.2f, 전략=%.2f) — %s",
-                candidate.stock_name,
-                candidate.stock_code,
-                candidate.total_score,
-                candidate.volume_rank_score,
-                candidate.change_rate_score,
-                candidate.strategy_score,
-                candidate.signal.reason,
-            )
-
-        self._screened_codes.update(new_candidates)
-        self._record_screening_to_db(ranked, new_candidates)
-        logger.info(
-            "=== 종목 스크리닝 완료: 신규 %d종목 발굴 (누적 %d/%d종목) ===",
-            len(new_candidates),
-            len(self._screened_codes),
-            scfg.max_screened,
-        )
+        except Exception:
+            logger.exception("스크리닝 결과 DB 조회 실패")
 
     # ── 개별 종목 처리 ────────────────────────────────────
 
@@ -687,11 +647,21 @@ class TradingEngine:
                 signal=signal,
             )
 
-            await self._notifier.notify_buy(
-                stock_name, stock_code, quantity, price,
-                strategy=strategy_name,
-                reason=signal.reason if signal else "",
-                confidence=signal.confidence if signal else 0.0,
+            self._task_queue.enqueue(
+                task_type="telegram_notify",
+                payload={
+                    "notify_type": "buy",
+                    "message_data": {
+                        "stock_name": stock_name,
+                        "stock_code": stock_code,
+                        "quantity": quantity,
+                        "price": price,
+                        "strategy": strategy_name,
+                        "reason": signal.reason if signal else "",
+                        "confidence": signal.confidence if signal else 0.0,
+                    },
+                },
+                priority=3,
             )
 
         except Exception:
@@ -727,9 +697,20 @@ class TradingEngine:
                 reason=reason, signal_type=signal_type, avg_price=avg_price,
             )
 
-            await self._notifier.notify_sell(
-                stock_name, stock_code, quantity, price, reason,
-                avg_price=avg_price or 0.0,
+            self._task_queue.enqueue(
+                task_type="telegram_notify",
+                payload={
+                    "notify_type": "sell",
+                    "message_data": {
+                        "stock_name": stock_name,
+                        "stock_code": stock_code,
+                        "quantity": quantity,
+                        "price": price,
+                        "reason": reason,
+                        "avg_price": avg_price or 0.0,
+                    },
+                },
+                priority=3,
             )
 
         except Exception:
@@ -773,7 +754,11 @@ class TradingEngine:
         signal_type: str | None = None,
         avg_price: float | None = None,
     ) -> None:
-        """매매 체결 내역을 trades 테이블에 기록한다. 실패 시 로그만 남긴다."""
+        """매매 체결 내역을 Worker Queue에 적재한다.
+
+        비즈니스 로직(buy_reason 판별, profit_loss 계산)은 엔진에서 처리하고,
+        DB INSERT만 Worker에게 위임한다.
+        """
         try:
             buy_reason: BuyReason | None = None
             sell_reason: SellReason | None = None
@@ -792,25 +777,27 @@ class TradingEngine:
                     profit_loss_amount = int((price - avg_price) * quantity)
                     self._risk.record_trade_result(profit_loss_amount)
 
-            with get_session() as session:
-                repo = TradeRepository(session)
-                repo.record_trade(
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    trade_type=trade_type,
-                    quantity=quantity,
-                    price=price,
-                    total_amount=price * quantity,
-                    traded_at=datetime.now(),
-                    cycle_number=self._cycle_count,
-                    buy_reason=buy_reason,
-                    sell_reason=sell_reason,
-                    signal_type=signal_type,
-                    profit_loss_pct=profit_loss_pct,
-                    profit_loss_amount=profit_loss_amount,
-                )
+            self._task_queue.enqueue(
+                task_type="record_trade",
+                payload={
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "trade_type": trade_type.value,
+                    "quantity": quantity,
+                    "price": price,
+                    "total_amount": price * quantity,
+                    "traded_at": datetime.now().isoformat(),
+                    "cycle_number": self._cycle_count,
+                    "buy_reason": buy_reason.value if buy_reason else None,
+                    "sell_reason": sell_reason.value if sell_reason else None,
+                    "signal_type": signal_type,
+                    "profit_loss_pct": profit_loss_pct,
+                    "profit_loss_amount": profit_loss_amount,
+                },
+                priority=10,
+            )
         except Exception:
-            logger.exception("매매 DB 적재 실패: %s %s", stock_code, trade_type.value)
+            logger.exception("매매 큐 적재 실패: %s %s", stock_code, trade_type.value)
 
     def _record_screening_to_db(
         self,
@@ -859,7 +846,11 @@ class TradingEngine:
                 signal_type_str = "GOLDEN_CROSS"
             elif "데드크로스" in signal.reason:
                 signal_type_str = "DEAD_CROSS"
-            elif "RSI" in signal.reason.upper() or "과매도" in signal.reason or "과매수" in signal.reason:
+            elif (
+                "RSI" in signal.reason.upper()
+                or "과매도" in signal.reason
+                or "과매수" in signal.reason
+            ):
                 signal_type_str = "RSI_SIGNAL"
             elif "MACD" in signal.reason.upper():
                 signal_type_str = "MACD_SIGNAL"
@@ -872,38 +863,151 @@ class TradingEngine:
 
             # numpy float → Python float 변환 (PostgreSQL JSONB 호환)
             conf = float(signal.confidence)
-            target = float(signal.target_price) if signal.target_price is not None else None
+            target = (
+                float(signal.target_price) if signal.target_price is not None else None
+            )
 
-            with get_session() as session:
-                repo = SignalRepository(session)
-                repo.record_signal(
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    signal_type=signal_type_str,
-                    detected_at=datetime.now(),
-                    signal_value={
+            self._task_queue.enqueue(
+                task_type="record_signal",
+                payload={
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "signal_type": signal_type_str,
+                    "detected_at": datetime.now().isoformat(),
+                    "signal_value": {
                         "confidence": conf,
                         "target_price": target,
                         "reason": signal.reason,
                     },
-                    confidence=conf,
-                    action_taken=action_taken,
-                )
+                    "confidence": conf,
+                    "action_taken": action_taken,
+                },
+                priority=5,
+            )
         except Exception:
-            logger.exception("시그널 DB 적재 실패: %s", stock_code)
+            logger.exception("시그널 큐 적재 실패: %s", stock_code)
 
     def _record_metric(self, metric_type: str, detail: dict | None = None) -> None:
-        """시스템 메트릭을 system_metrics 테이블에 기록한다."""
+        """시스템 메트릭을 Worker Queue에 적재한다."""
         try:
-            with get_session() as session:
-                repo = SystemMetricRepository(session)
-                repo.record_metric(
-                    metric_type=metric_type,
-                    detail=detail,
-                    recorded_at=datetime.now(),
-                )
+            self._task_queue.enqueue(
+                task_type="record_metric",
+                payload={
+                    "metric_type": metric_type,
+                    "detail": detail,
+                    "recorded_at": datetime.now().isoformat(),
+                },
+                priority=3,
+            )
         except Exception:
-            logger.exception("시스템 메트릭 DB 적재 실패: %s", metric_type)
+            logger.exception("메트릭 큐 적재 실패: %s", metric_type)
+
+    # ── Worker Queue enqueue 메서드 ──────────────────────────
+
+    def _enqueue_calendar_event(self, balance: Balance) -> None:
+        """캘린더 이벤트 등록을 Worker Queue에 적재한다."""
+        today = date.today()
+        trades = self._load_today_trades(today)
+        details_json = json.dumps(
+            self._group_trades_for_calendar(trades),
+            ensure_ascii=False,
+        )
+        self._task_queue.enqueue(
+            task_type="calendar_event",
+            payload={
+                "trade_date": today.isoformat(),
+                "total_profit_loss": int(balance.total_profit_loss),
+                "profit_rate": float(balance.total_profit_rate),
+                "execution_count": len(trades),
+                "details_json": details_json,
+            },
+            priority=1,
+            idempotency_key=f"calendar_{today.isoformat()}",
+        )
+
+    def _enqueue_telegram_daily_summary(
+        self,
+        balance: Balance,
+        buy_count: int,
+        sell_count: int,
+        executions: list[object],
+    ) -> None:
+        """Telegram 일일 결산 알림을 Worker Queue에 적재한다."""
+        self._task_queue.enqueue(
+            task_type="telegram_notify",
+            payload={
+                "notify_type": "daily_summary",
+                "message_data": {
+                    "trade_date": date.today().isoformat(),
+                    "count": len(executions),
+                    "profit_loss": int(balance.total_profit_loss),
+                    "rate": float(balance.total_profit_rate),
+                    "buy_count": buy_count,
+                    "sell_count": sell_count,
+                },
+            },
+            priority=3,
+            idempotency_key=f"telegram_summary_{date.today().isoformat()}",
+        )
+
+    def _enqueue_daily_summary(self, today_str: str) -> None:
+        """일일 요약 집계를 Worker Queue에 적재한다."""
+        self._task_queue.enqueue(
+            task_type="daily_summary",
+            payload={"report_date": today_str},
+            priority=1,
+            idempotency_key=f"daily_summary_{today_str}",
+        )
+
+    def _enqueue_sync_portfolio(self, balance: Balance) -> None:
+        """포트폴리오 동기화를 Worker Queue에 적재한다."""
+        holdings = []
+        for h in balance.holdings:
+            holdings.append({
+                "stock_code": h.stock_code,
+                "stock_name": getattr(h, "stock_name", h.stock_code),
+                "quantity": h.quantity,
+                "avg_price": float(h.avg_price),
+                "current_price": float(h.current_price),
+            })
+        self._task_queue.enqueue(
+            task_type="sync_portfolio",
+            payload={"holdings": holdings},
+            priority=1,
+            idempotency_key=f"sync_portfolio_{date.today().isoformat()}",
+        )
+
+    def _enqueue_daily_performance(
+        self, balance: Balance, executions: list[object]
+    ) -> None:
+        """일일 성과 저장을 Worker Queue에 적재한다."""
+        details = json.dumps(
+            [
+                {
+                    "stock_code": getattr(e, "stock_code", ""),
+                    "stock_name": getattr(e, "stock_name", ""),
+                    "side": getattr(e, "side", ""),
+                    "quantity": getattr(e, "quantity", 0),
+                    "price": getattr(e, "price", 0),
+                }
+                for e in executions
+            ],
+            ensure_ascii=False,
+        )
+        self._task_queue.enqueue(
+            task_type="daily_performance",
+            payload={
+                "trade_date": date.today().isoformat(),
+                "total_profit_loss": float(balance.total_profit_loss),
+                "profit_rate": float(balance.total_profit_rate),
+                "execution_count": len(executions),
+                "details": details,
+            },
+            priority=5,
+            idempotency_key=f"daily_perf_{date.today().isoformat()}",
+        )
+
+    # ── 레거시 직접 호출 (Worker 미가동 시 폴백) ─────────
 
     def _upsert_daily_summary(self) -> None:
         """일일 요약을 집계하여 daily_summary 테이블에 UPSERT한다."""

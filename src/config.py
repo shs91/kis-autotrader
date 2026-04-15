@@ -383,6 +383,36 @@ class TelegramConfig:
 
 
 @dataclass(frozen=True)
+class WorkerConfig:
+    """Worker 프로세스 설정."""
+
+    poll_interval: int = field(
+        default_factory=lambda: _env_int("WORKER_POLL_INTERVAL", 30)
+    )
+    max_retries: int = field(
+        default_factory=lambda: _env_int("WORKER_MAX_RETRIES", 5)
+    )
+    retry_base_delay: int = field(
+        default_factory=lambda: _env_int("WORKER_RETRY_BASE_DELAY", 60)
+    )
+    batch_size: int = field(
+        default_factory=lambda: _env_int("WORKER_BATCH_SIZE", 10)
+    )
+    enabled: bool = field(
+        default_factory=lambda: _env("WORKER_ENABLED", "true").lower() == "true"
+    )
+
+
+@dataclass(frozen=True)
+class RedisConfig:
+    """Redis 연결 설정."""
+
+    url: str = field(
+        default_factory=lambda: _env("REDIS_URL", "redis://localhost:6379/0")
+    )
+
+
+@dataclass(frozen=True)
 class Settings:
     """전체 설정을 통합 관리한다."""
 
@@ -395,6 +425,8 @@ class Settings:
     screening: ScreeningConfig = field(default_factory=ScreeningConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    worker: WorkerConfig = field(default_factory=WorkerConfig)
+    redis: RedisConfig = field(default_factory=RedisConfig)
     overrides: OverrideState = field(default_factory=_build_override_state)
 
 

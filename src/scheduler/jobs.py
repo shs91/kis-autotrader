@@ -14,6 +14,13 @@ from src.config import settings
 from src.scheduler.holidays import is_market_closed
 from src.utils.logger import setup_logger
 
+QUOTA_PRE_MARKET_HOUR = 8
+QUOTA_PRE_MARKET_MINUTE = 25
+QUOTA_MARKET_OPEN_HOUR = 8
+QUOTA_MARKET_OPEN_MINUTE = 55
+QUOTA_POST_MARKET_HOUR = 15
+QUOTA_POST_MARKET_MINUTE = 25
+
 if TYPE_CHECKING:
     from src.engine import TradingEngine
 
@@ -68,6 +75,13 @@ def _run_async(coro: object) -> None:
         asyncio.run(coro)
     except Exception:
         logger.exception("스케줄러 작업 실행 중 에러 발생 (다음 실행에 영향 없음)")
+
+
+async def _update_quota(quotas: dict[str, int]) -> None:
+    """Redis에 역할별 API 할당량을 설정한다."""
+    from src.api.rate_limiter import update_redis_quota
+
+    await update_redis_quota(quotas)
 
 
 class TradingScheduler:
@@ -318,6 +332,59 @@ class TradingScheduler:
             "일일 요약 집계 등록: 평일 %02d:%02d",
             SUMMARY_HOUR,
             SUMMARY_MINUTE,
+        )
+
+        # API 할당량 시간대 전환 (Redis Rate Limiter)
+        total = settings.rate_limit.per_second
+
+        def _set_quota_pre_market() -> None:
+            """장 시작 전: 스크리닝 100%."""
+            _run_async(_update_quota({"main": 0, "screener": total}))
+
+        def _set_quota_market_open() -> None:
+            """장 시작: 메인 80% + 스크리닝 20%."""
+            main_q = int(total * 0.8)
+            _run_async(_update_quota({"main": main_q, "screener": total - main_q}))
+
+        def _set_quota_post_market() -> None:
+            """장 마감 후: 메인 100%."""
+            _run_async(_update_quota({"main": total, "screener": 0}))
+
+        self._scheduler.add_job(
+            func=_set_quota_pre_market,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=QUOTA_PRE_MARKET_HOUR,
+            minute=QUOTA_PRE_MARKET_MINUTE,
+            id="quota_pre_market",
+            name="API 할당량: 스크리닝 전용",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            func=_set_quota_market_open,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=QUOTA_MARKET_OPEN_HOUR,
+            minute=QUOTA_MARKET_OPEN_MINUTE,
+            id="quota_market_open",
+            name="API 할당량: 장중 배분",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            func=_set_quota_post_market,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=QUOTA_POST_MARKET_HOUR,
+            minute=QUOTA_POST_MARKET_MINUTE,
+            id="quota_post_market",
+            name="API 할당량: 메인 전용",
+            replace_existing=True,
+        )
+        logger.info(
+            "API 할당량 전환 등록: %02d:%02d(스크리닝), %02d:%02d(장중), %02d:%02d(마감후)",
+            QUOTA_PRE_MARKET_HOUR, QUOTA_PRE_MARKET_MINUTE,
+            QUOTA_MARKET_OPEN_HOUR, QUOTA_MARKET_OPEN_MINUTE,
+            QUOTA_POST_MARKET_HOUR, QUOTA_POST_MARKET_MINUTE,
         )
 
     def start(self) -> None:
