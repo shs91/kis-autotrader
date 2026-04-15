@@ -255,11 +255,12 @@ class TradingEngine:
 
             await self._seed_watchlist_from_env()
 
-            # 관심종목 일봉 사전 캐싱
+            # 관심종목 일봉 사전 캐싱 + 종목명 사전 등록
             watchlist_codes = self._get_watchlist_codes()
             for code in watchlist_codes:
                 await self._get_daily_df(code)
             logger.info("관심종목 일봉 캐싱 완료 (%d종목)", len(self._daily_cache))
+            await self._prefetch_stock_names(watchlist_codes)
 
             # 장 시작 전 스크리닝 1회 실행
             await self._screen_stocks()
@@ -507,6 +508,10 @@ class TradingEngine:
             resolved = self._resolve_stock_name(stock_code)
             if resolved:
                 current.stock_name = resolved
+            else:
+                # 최후 수단: 코드를 이름으로 사용하되 로그 남김
+                current.stock_name = stock_code
+                logger.debug("종목명 미해결: %s (API·DB 모두 빈 값)", stock_code)
 
         # 3. 전략 분석 (보유/미보유 모두 실행)
         strategy = self._selector.get_strategy(stock_code)
@@ -1142,6 +1147,42 @@ class TradingEngine:
                     "avg_price": h.avg_price,
                 }
         return None
+
+    async def _prefetch_stock_names(self, codes: list[str]) -> None:
+        """관심종목의 이름을 사전에 DB에 등록한다.
+
+        stocks 테이블에 없거나 이름이 코드와 동일한 종목은
+        현재가 API를 호출하여 이름을 가져온 뒤 등록/갱신한다.
+        """
+        try:
+            with get_session() as session:
+                stock_repo = StockRepository(session)
+                missing_codes = []
+                for code in codes:
+                    stock = stock_repo.get_by_code(code)
+                    if stock is None or not stock.name or stock.name == code:
+                        missing_codes.append(code)
+
+            if not missing_codes:
+                return
+
+            logger.info("종목명 사전 등록: %d종목 조회 중", len(missing_codes))
+            for code in missing_codes:
+                try:
+                    current = await self._quote.get_current_price(code)
+                    if current.stock_name and current.stock_name != code:
+                        with get_session() as session:
+                            stock_repo = StockRepository(session)
+                            stock = stock_repo.get_by_code(code)
+                            if stock is None:
+                                stock_repo.create(code, current.stock_name, "UNKNOWN")
+                            elif stock.name != current.stock_name:
+                                stock_repo.update_name(code, current.stock_name)
+                except Exception:
+                    logger.debug("종목명 조회 실패: %s", code)
+
+        except Exception:
+            logger.exception("종목명 사전 등록 실패 (매매에 영향 없음)")
 
     def _resolve_stock_name(self, stock_code: str) -> str:
         """DB에서 종목명을 조회한다. 코드와 동일하거나 없으면 빈 문자열 반환."""
