@@ -4,6 +4,22 @@
 Redis Rate Limiter를 통해 API 호출 할당량을 관리한다.
 스크리닝 결과는 screening_results 테이블에 저장되고,
 메인 엔진은 이 테이블에서 최신 결과를 읽는다.
+
+메인 엔진 ↔ screening_results 조회 규약 (proposal 2026-04-16):
+- ScreeningWorker는 ``_record_to_db`` → ``ScreeningResultRepository``를 통해
+  ``screening_results`` 테이블에 insert한다. 이때 상위 후보는
+  ``converted_to_trade=True``로 표시되어 메인 엔진이 참조할 수 있도록
+  마킹된다(실제 매매 전환 여부가 아닌 "스코어 컷을 통과해 매매 평가
+  대상으로 승격된 후보" 의 의미).
+- 메인 엔진(`src.engine.TradingEngine._screen_stocks`)은 해당 날짜의
+  ``converted_to_trade=True`` 레코드를 `ScreeningResultRepository.get_by_date`
+  로 조회하여 `self._screened_codes`에 병합한다. 즉 조회 키는
+  ``(date=today, converted_to_trade=True)``이며 사이클 번호는 Worker와
+  엔진이 독립적으로 카운트한다.
+- 이 규약이 깨지면(예: Worker가 converted_to_trade=False만 insert, 날짜
+  불일치) 메인 엔진이 발굴된 종목을 읽어오지 못해 스크리닝→시그널 평가
+  파이프라인이 단절된다. 디버깅은 ``EVAL_TARGETS`` 메트릭의
+  ``detail.counts.screening`` 값을 우선 확인할 것.
 """
 
 from __future__ import annotations

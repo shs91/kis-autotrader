@@ -69,6 +69,14 @@ class StrategySelector:
             배정된 전략. 매핑 없으면 기본 전략.
         """
         strategy_name = self._mappings.get(stock_code, self._default_name)
+        # proposal 2026-04-16: 스크리닝→시그널 파이프라인 추적용 trace.
+        # 평가 대상 종목이 어떤 전략으로 배정되는지 DEBUG로 남긴다.
+        logger.debug(
+            "전략 배정: stock=%s → %s (매핑=%s)",
+            stock_code,
+            strategy_name,
+            "explicit" if stock_code in self._mappings else "default",
+        )
         return self._registry.get(strategy_name)
 
     def set_mapping(self, stock_code: str, strategy_name: str) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from src.config import settings
@@ -41,11 +43,27 @@ class BollingerBandStrategy(BaseStrategy):
 
     def analyze(self, market_data: pd.DataFrame) -> Signal:
         """시장 데이터를 분석하여 볼린저밴드 기반 시그널을 생성한다."""
-        if len(market_data) < self._period + 1:
+        series_len = len(market_data)
+        close_raw = market_data["close"] if "close" in market_data.columns else None
+        nan_ratio = 0.0
+        if close_raw is not None and series_len > 0:
+            nan_ratio = float(close_raw.isna().sum()) / series_len
+
+        if series_len < self._period + 1:
             return Signal(
                 signal_type=SignalType.HOLD,
                 confidence=0.0,
-                reason=f"데이터 부족 (필요: {self._period + 1}개, 현재: {len(market_data)}개)",
+                reason=f"데이터 부족 (필요: {self._period + 1}개, 현재: {series_len}개)",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_price": None,
+                    "last_upper": None,
+                    "last_lower": None,
+                    "last_percent_b": None,
+                    "guard_triggered": True,
+                    "guard_reason": "insufficient_length",
+                },
             )
 
         close = market_data["close"].astype(float)
@@ -62,8 +80,35 @@ class BollingerBandStrategy(BaseStrategy):
         current_sma = float(sma.iloc[-1])
         band_width = current_upper - current_lower
 
+        if any(math.isnan(v) for v in (current_upper, current_lower, current_sma)):
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                reason="볼린저 값에 NaN 포함 — 데이터 부족",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_price": current_price,
+                    "last_upper": None if math.isnan(current_upper) else current_upper,
+                    "last_lower": None if math.isnan(current_lower) else current_lower,
+                    "last_percent_b": None,
+                    "guard_triggered": True,
+                    "guard_reason": "nan_band",
+                },
+            )
+
         # %B 계산: (종가 - 하단) / (상단 - 하단)
         pct_b = (current_price - current_lower) / band_width if band_width > 0 else 0.5
+
+        meta: dict[str, object] = {
+            "series_len": series_len,
+            "nan_ratio": round(nan_ratio, 4),
+            "last_price": current_price,
+            "last_upper": current_upper,
+            "last_lower": current_lower,
+            "last_percent_b": round(pct_b, 4),
+            "guard_triggered": False,
+        }
 
         # 하단밴드 이하: 매수
         if current_price <= current_lower:
@@ -73,6 +118,7 @@ class BollingerBandStrategy(BaseStrategy):
                 confidence=max(confidence, 0.1),
                 target_price=current_sma,  # 중심선까지 반등 목표
                 reason=f"볼린저 하단 돌파 (%B={pct_b:.2f}, 가격={current_price:,.0f} <= 하단={current_lower:,.0f})",
+                meta=meta,
             )
 
         # 상단밴드 이상: 매도
@@ -83,10 +129,12 @@ class BollingerBandStrategy(BaseStrategy):
                 confidence=max(confidence, 0.1),
                 target_price=current_sma,
                 reason=f"볼린저 상단 돌파 (%B={pct_b:.2f}, 가격={current_price:,.0f} >= 상단={current_upper:,.0f})",
+                meta=meta,
             )
 
         return Signal(
             signal_type=SignalType.HOLD,
             confidence=0.0,
             reason=f"볼린저 밴드 내 (%B={pct_b:.2f})",
+            meta=meta,
         )

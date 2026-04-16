@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from src.config import settings
@@ -77,23 +79,63 @@ class RSIStrategy(BaseStrategy):
         """
         self._validate_data(market_data)
 
+        series_len = len(market_data)
+        close_series = market_data["close"]
+        nan_count = int(close_series.isna().sum())
+        nan_ratio = (nan_count / series_len) if series_len > 0 else 0.0
+
         # RSI 계산을 위해 최소 period + 1개 데이터 필요
         min_required = self._period + 1
-        if len(market_data) < min_required:
+        if series_len < min_required:
             logger.info(
                 "데이터 부족 (필요: %d, 현재: %d) - HOLD 반환",
                 min_required,
-                len(market_data),
+                series_len,
             )
             return Signal(
                 signal_type=SignalType.HOLD,
                 confidence=0.0,
-                reason=f"데이터 부족 (필요: {min_required}개, 현재: {len(market_data)}개)",
+                reason=f"데이터 부족 (필요: {min_required}개, 현재: {series_len}개)",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_rsi": None,
+                    "guard_triggered": True,
+                    "guard_reason": "insufficient_length",
+                },
             )
 
-        rsi = self._calculate_rsi(market_data["close"])
+        rsi = self._calculate_rsi(close_series)
         current_rsi = rsi.iloc[-1]
-        current_price = float(market_data["close"].iloc[-1])
+        current_price = float(close_series.iloc[-1])
+
+        last_rsi_val = (
+            None if (isinstance(current_rsi, float) and math.isnan(current_rsi))
+            else float(current_rsi)
+        )
+
+        # NaN 방어: RSI 계산 결과가 NaN이면 시그널 판단 불가
+        if last_rsi_val is None:
+            logger.warning("RSI 값이 NaN — HOLD 반환")
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                reason="RSI 값이 NaN — 데이터 부족",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_rsi": None,
+                    "guard_triggered": True,
+                    "guard_reason": "nan_rsi",
+                },
+            )
+
+        meta: dict[str, object] = {
+            "series_len": series_len,
+            "nan_ratio": round(nan_ratio, 4),
+            "last_rsi": last_rsi_val,
+            "guard_triggered": False,
+        }
 
         # 과매도 구간 - 매수 시그널
         if current_rsi < self._oversold:
@@ -107,6 +149,7 @@ class RSIStrategy(BaseStrategy):
                 confidence=confidence,
                 target_price=current_price,
                 reason=f"과매도 구간 (RSI: {current_rsi:.2f} < {self._oversold})",
+                meta=meta,
             )
 
         # 과매수 구간 - 매도 시그널
@@ -121,6 +164,7 @@ class RSIStrategy(BaseStrategy):
                 confidence=confidence,
                 target_price=current_price,
                 reason=f"과매수 구간 (RSI: {current_rsi:.2f} > {self._overbought})",
+                meta=meta,
             )
 
         # 정상 범위 - HOLD
@@ -129,6 +173,7 @@ class RSIStrategy(BaseStrategy):
             signal_type=SignalType.HOLD,
             confidence=0.0,
             reason=f"RSI 정상 범위 ({current_rsi:.2f})",
+            meta=meta,
         )
 
     def _calculate_rsi(self, close_prices: pd.Series) -> pd.Series:  # type: ignore[type-arg]

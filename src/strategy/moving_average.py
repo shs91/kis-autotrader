@@ -74,29 +74,49 @@ class MovingAverageStrategy(BaseStrategy):
         """
         self._validate_data(market_data)
 
+        series_len = len(market_data)
+        close_series = market_data["close"]
+        nan_count = int(close_series.isna().sum())
+        nan_ratio = (nan_count / series_len) if series_len > 0 else 0.0
+
         # 데이터가 장기 이동평균 계산에 필요한 최소 개수 + 1 (교차 확인용)보다 적으면 HOLD
         min_required = self._long_period + 1
-        if len(market_data) < min_required:
+        if series_len < min_required:
             logger.info(
                 "데이터 부족 (필요: %d, 현재: %d) - HOLD 반환",
                 min_required,
-                len(market_data),
+                series_len,
             )
             return Signal(
                 signal_type=SignalType.HOLD,
                 confidence=0.0,
-                reason=f"데이터 부족 (필요: {min_required}개, 현재: {len(market_data)}개)",
+                reason=f"데이터 부족 (필요: {min_required}개, 현재: {series_len}개)",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_short": None,
+                    "last_long": None,
+                    "guard_triggered": True,
+                    "guard_reason": "insufficient_length",
+                },
             )
 
         # 이동평균 계산
-        short_ma = market_data["close"].rolling(window=self._short_period).mean()
-        long_ma = market_data["close"].rolling(window=self._long_period).mean()
+        short_ma = close_series.rolling(window=self._short_period).mean()
+        long_ma = close_series.rolling(window=self._long_period).mean()
 
         # 현재 봉과 직전 봉의 MA 값
         current_short = short_ma.iloc[-1]
         current_long = long_ma.iloc[-1]
         prev_short = short_ma.iloc[-2]
         prev_long = long_ma.iloc[-2]
+
+        last_short_val = (
+            None if math.isnan(current_short) else float(current_short)
+        )
+        last_long_val = (
+            None if math.isnan(current_long) else float(current_long)
+        )
 
         # NaN 방어: MA 값 중 하나라도 NaN이면 시그널 판단 불가
         if any(math.isnan(v) for v in [current_short, current_long, prev_short, prev_long]):
@@ -109,13 +129,29 @@ class MovingAverageStrategy(BaseStrategy):
                 signal_type=SignalType.HOLD,
                 confidence=0.0,
                 reason="이동평균 값에 NaN 포함 — 데이터 부족",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_short": last_short_val,
+                    "last_long": last_long_val,
+                    "guard_triggered": True,
+                    "guard_reason": "nan_in_ma",
+                },
             )
 
         # 괴리율 기반 신뢰도 계산
         divergence_rate = abs(current_short - current_long) / current_long if current_long != 0 else 0.0
         confidence = min(divergence_rate / self._max_divergence, 1.0)
 
-        current_price = float(market_data["close"].iloc[-1])
+        current_price = float(close_series.iloc[-1])
+
+        meta: dict[str, object] = {
+            "series_len": series_len,
+            "nan_ratio": round(nan_ratio, 4),
+            "last_short": float(current_short),
+            "last_long": float(current_long),
+            "guard_triggered": False,
+        }
 
         # 골든크로스: 직전 봉에서 단기 <= 장기였는데 현재 봉에서 단기 > 장기
         if prev_short <= prev_long and current_short > current_long:
@@ -132,6 +168,7 @@ class MovingAverageStrategy(BaseStrategy):
                 reason=(
                     f"골든크로스 발생 (단기MA {current_short:.2f} > 장기MA {current_long:.2f})"
                 ),
+                meta=meta,
             )
 
         # 데드크로스: 직전 봉에서 단기 >= 장기였는데 현재 봉에서 단기 < 장기
@@ -149,6 +186,7 @@ class MovingAverageStrategy(BaseStrategy):
                 reason=(
                     f"데드크로스 발생 (단기MA {current_short:.2f} < 장기MA {current_long:.2f})"
                 ),
+                meta=meta,
             )
 
         # 교차가 발생하지 않은 경우
@@ -156,6 +194,7 @@ class MovingAverageStrategy(BaseStrategy):
             signal_type=SignalType.HOLD,
             confidence=0.0,
             reason="이동평균 교차 미발생",
+            meta=meta,
         )
 
     def _validate_data(self, market_data: pd.DataFrame) -> None:

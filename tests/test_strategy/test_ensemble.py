@@ -216,3 +216,75 @@ def test_name_format() -> None:
         ],
     )
     assert "앙상블" in ensemble.name
+
+
+class FixedMetaStrategy(BaseStrategy):
+    """Signal.meta에 임의 필드를 넣어 반환하는 테스트용 전략."""
+
+    def __init__(
+        self,
+        signal_type: SignalType,
+        confidence: float,
+        meta: dict[str, object],
+    ) -> None:
+        self._signal = Signal(signal_type=signal_type, confidence=confidence, meta=meta)
+
+    def analyze(self, market_data: pd.DataFrame) -> Signal:
+        return self._signal
+
+    @property
+    def name(self) -> str:
+        return f"meta({self._signal.signal_type.value})"
+
+
+def test_sub_strategy_meta_merged_into_vote() -> None:
+    """하위 전략의 Signal.meta가 vote_meta.votes 항목에 병합되어야 한다.
+
+    기존 shape(strategy/action/confidence)은 유지되고, sub-meta 키가
+    그대로 추가되어야 한다. proposal 2026-04-16 observability.
+    """
+    ensemble = EnsembleStrategy(
+        [
+            FixedMetaStrategy(
+                SignalType.HOLD,
+                0.0,
+                meta={
+                    "series_len": 25,
+                    "nan_ratio": 0.0,
+                    "last_rsi": 45.2,
+                    "guard_triggered": False,
+                },
+            ),
+            FixedMetaStrategy(
+                SignalType.HOLD,
+                0.0,
+                meta={
+                    "series_len": 10,
+                    "nan_ratio": 0.0,
+                    "last_macd": None,
+                    "guard_triggered": True,
+                    "guard_reason": "insufficient_length",
+                },
+            ),
+        ],
+        method="majority",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+
+    votes = result.meta["votes"]
+    assert len(votes) == 2
+
+    # 기존 shape 유지
+    assert votes[0]["strategy"].startswith("meta")
+    assert votes[0]["action"] == "HOLD"
+    assert votes[0]["confidence"] == 0.0
+
+    # sub-meta 키가 병합됨
+    assert votes[0]["series_len"] == 25
+    assert votes[0]["last_rsi"] == 45.2
+    assert votes[0]["guard_triggered"] is False
+
+    assert votes[1]["series_len"] == 10
+    assert votes[1]["guard_triggered"] is True
+    assert votes[1]["guard_reason"] == "insufficient_length"

@@ -108,3 +108,23 @@ class TestRSIAnalyze:
 
         assert signal.signal_type == SignalType.HOLD
         assert "정상 범위" in signal.reason
+
+    def test_meta_records_observability_keys(self) -> None:
+        """Signal.meta에 series_len/nan_ratio/last_rsi/guard_triggered가 기록된다."""
+        strategy = RSIStrategy(period=5)
+        prices = _generate_rising_prices(30)
+        signal = strategy.analyze(pd.DataFrame({"close": prices}))
+        assert "series_len" in signal.meta
+        assert signal.meta["series_len"] == 30
+        assert signal.meta["nan_ratio"] == 0.0
+        assert signal.meta["guard_triggered"] is False
+        assert signal.meta["last_rsi"] is not None
+
+    def test_meta_insufficient_length_guard(self) -> None:
+        """데이터 부족 시 guard_triggered=True, last_rsi=None."""
+        strategy = RSIStrategy(period=14)
+        signal = strategy.analyze(pd.DataFrame({"close": list(range(10))}))
+        assert signal.signal_type == SignalType.HOLD
+        assert signal.meta["guard_triggered"] is True
+        assert signal.meta["guard_reason"] == "insufficient_length"
+        assert signal.meta["last_rsi"] is None

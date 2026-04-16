@@ -58,17 +58,32 @@ class EnsembleStrategy(BaseStrategy):
         logger.info("앙상블 가중치 업데이트: %s", weights)
 
     def _build_vote_meta(self, signals: list[Signal]) -> dict[str, object]:
-        """투표 집계 상세를 meta dict로 구성한다."""
+        """투표 집계 상세를 meta dict로 구성한다.
+
+        각 하위 전략의 ``Signal.meta``(series_len·nan_ratio·last_value·
+        guard_triggered 등 관측 필드)를 vote 항목에 병합하여, 전원
+        ``confidence=0`` HOLD로 수렴할 때 어느 단계에서 방어 분기에
+        진입했는지 데이터로 추적할 수 있도록 한다. 기존 shape
+        ``{strategy, action, confidence}``는 유지하고, 서브 meta 키만
+        append한다.
+        """
+        votes: list[dict[str, object]] = []
+        for s, sig in zip(self._strategies, signals):
+            vote: dict[str, object] = {
+                "strategy": s.name,
+                "action": sig.signal_type.value,
+                "confidence": round(sig.confidence, 4),
+            }
+            if sig.meta:
+                # 기존 키(strategy/action/confidence)는 sub-meta에 의해
+                # 덮어쓰이지 않도록 보호한다.
+                for k, v in sig.meta.items():
+                    if k not in vote:
+                        vote[k] = v
+            votes.append(vote)
         return {
             "method": self._method,
-            "votes": [
-                {
-                    "strategy": s.name,
-                    "action": sig.signal_type.value,
-                    "confidence": round(sig.confidence, 4),
-                }
-                for s, sig in zip(self._strategies, signals)
-            ],
+            "votes": votes,
         }
 
     def analyze(self, market_data: pd.DataFrame) -> Signal:

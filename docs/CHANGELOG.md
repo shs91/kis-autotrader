@@ -5,6 +5,206 @@
 
 ---
 
+## [2026-04-16 17:30] 스크리닝→시그널 파이프라인 가시화 — EVAL_TARGETS 메트릭 추가
+- 제안서: docs/proposals/2026-04-16_screening-to-signal-pipeline-gap.md
+- 카테고리: bug_fix (observability)
+- 배경:
+  - 오늘 스크리닝 145 distinct 종목 발굴했으나 시그널 평가 대상은 블루칩
+    5종 + 두산에너빌리티 1종뿐 (전환율 0%). 어제는 67종 발굴 중 13종
+    전환(19.4%)이었으나 오늘 0%로 급락. 스크리닝 결과가 엔진의
+    평가 대상 리스트로 주입되는 경로가 단절되었거나 회복되지 않은 것으로
+    추정되나, 현재 로그로는 "엔진이 이번 사이클에서 실제로 어떤
+    종목 N개를 평가했는지"를 확인할 수 없었다.
+- 변경 파일:
+  - src/engine.py: `run_trading_cycle` 내 평가 대상 구성 직후
+    `_record_eval_targets()` 호출. 이 메서드는 `metric_type=EVAL_TARGETS`
+    레코드를 `system_metrics` 큐에 enqueue. detail에
+    `{cycle, counts: {screening, watchlist, positions}, total_targets,
+    targets(최대 50개), truncated}` 필드 기록. 재사용 중이던
+    `_get_watchlist_codes()` 결과를 로컬 변수로 뽑아 카운트 로그와
+    메트릭에서 공유.
+  - src/worker/screener.py: ScreeningWorker와 메인 엔진 간
+    `screening_results` 조회 규약(date=today + converted_to_trade=True 키)을
+    모듈 docstring에 명문화. 코드 변경 없음.
+  - src/strategy/selector.py: `get_strategy()`에 전략 배정 DEBUG trace
+    추가 — 어떤 종목이 어떤 전략으로 배정되는지 로그로 추적.
+  - tests/test_engine_db_integration.py: `TestRecordEvalTargets` 추가
+    (3 테스트). 메트릭 payload shape, truncate, run_trading_cycle에서의
+    실제 enqueue 발생 검증.
+- 검증 결과:
+  - pytest ✅ (400 passed, 4 pre-existing failures in test_risk.py 관련
+    장 마감 임박 차단 로직 — 제 변경과 무관)
+  - mypy: pre-existing 79 → 74 (신규 에러 없음)
+  - ruff: pre-existing 16 → 16 (신규 에러 없음)
+- 기대 효과: 내일(2026-04-17) 리포트에서 스크리닝 발굴 N종 → 엔진
+  평가 반영 M종 비율이 보이므로, 단절된 구간이 "엔진 DB 조회"인지
+  "selector 필터링"인지 구체적 수정 제안을 작성할 수 있다.
+
+---
+
+## [2026-04-16 17:30] 앙상블 서브전략 confidence=0 수렴 원인 진단 — 지표 관측 메타 추가
+- 제안서: docs/proposals/2026-04-16_ensemble-all-hold-zero-confidence.md
+- 카테고리: bug_fix (observability)
+- 배경:
+  - 어제 구현된 `vote_meta`(SIGNAL_SKIP 관측) 덕분에 오늘 처음으로
+    앙상블 내부 투표가 데이터로 확인됨. 5종목 × 289 사이클 = 1,445건
+    전부 4개 서브전략(MA·RSI·MACD·BB)이 `confidence=0` HOLD로 수렴.
+  - 서로 다른 지표가 동시에 0 confidence를 낼 통계적 가능성이 낮아,
+    데이터 길이 부족/NaN 방어 분기 진입이 의심됨. 다만 현재 meta에는
+    각 지표의 `series_len/nan_ratio/last_value/guard_triggered`가 없어
+    원인 단계를 특정할 수 없다. 어제 4,400건 정상 계산과 대비.
+- 변경 파일 (5개 한도 정확히 충족):
+  - src/strategy/moving_average.py: `analyze()` 내 Signal.meta에
+    `series_len, nan_ratio, last_short, last_long, guard_triggered
+    (+guard_reason)` 기록. 길이 부족·NaN 분기에서도 메타 채움.
+  - src/strategy/rsi.py: `series_len, nan_ratio, last_rsi,
+    guard_triggered (+guard_reason)` 기록. NaN RSI 방어 분기 추가.
+  - src/strategy/macd.py: `series_len, nan_ratio, last_macd,
+    last_signal, last_hist, guard_triggered (+guard_reason)` 기록.
+    NaN 방어 분기 추가.
+  - src/strategy/bollinger.py: `series_len, nan_ratio, last_price,
+    last_upper, last_lower, last_percent_b, guard_triggered
+    (+guard_reason)` 기록. NaN 밴드 방어 분기 추가.
+  - src/strategy/ensemble.py: `_build_vote_meta()`에서 각 서브전략의
+    `Signal.meta`를 vote 항목에 병합. 기존 shape `{strategy, action,
+    confidence}` 유지하고 sub-meta 키만 append (기존 3개 키는 보호).
+- 테스트 추가:
+  - tests/test_strategy/test_ensemble.py: sub-meta 병합 테스트 1건.
+  - tests/test_strategy/test_moving_average.py, test_rsi.py, test_macd.py,
+    test_bollinger.py: 정상 케이스의 meta 키 존재 + 길이 부족 guard
+    테스트 각 1~2건씩 (기존 로직 영향 없음).
+- 검증 결과:
+  - pytest ✅ (400 passed, 4 pre-existing failures in test_risk.py —
+    장 마감 임박 차단 로직, 제 변경과 무관)
+  - mypy: pre-existing 79 → 74 (신규 에러 없음)
+  - ruff: pre-existing 16 → 16 (신규 에러 없음)
+- 기대 효과: 내일부터 `SIGNAL_SKIP.detail.vote_meta.votes[i]`에 각 지표
+  단계별 상태(길이/NaN/최종값)가 쌓여, confidence=0 수렴의 구체 원인을
+  `guard_triggered=true`(길이/NaN 분기) vs 정상 계산 후 BUY/SELL 분기
+  조건 미충족으로 구분 가능.
+
+---
+
+## [2026-04-16] Worker 큐 적체 이슈 해결 — batch_size/poll_interval 튜닝
+- 카테고리: bug_fix (ops)
+- 배경:
+  - 2026-04-16 16:20 시점에 구글 캘린더 오늘 결산 이벤트가 미등록 상태.
+    조사 결과 15:40에 post_market으로 enqueue된 5건 중 `daily_performance`
+    (priority=5)만 즉시 처리되고 `sync_portfolio`·`daily_summary`·
+    `calendar_event` (priority=1)와 `telegram_notify` (priority=3)는 PENDING
+    상태로 장시간 대기.
+  - 원인: Worker 처리 용량 < enqueue 속도.
+    - 기본값 `WORKER_BATCH_SIZE=10`, `WORKER_POLL_INTERVAL=30` → 20건/분
+    - 매매 사이클(10초)마다 `CYCLE_START`·`CYCLE_END`·N개의 `SIGNAL_SKIP`
+      메트릭 enqueue → 분당 ~60건 이상 누적
+    - 하루 매매 시간 끝에 record_metric(priority=3) 수백건이 큐에 남아
+      priority=1 태스크를 막음 (`priority DESC, scheduled_at` 정렬).
+  - 당일 조치: PENDING 4건(id 11270~11273) priority를 10으로 격상 →
+    16:23:22~16:23:37 사이 모두 처리 완료. 캘린더 이벤트
+    `[매매결과] 2026-04-16 +0.0% (0건 체결)` 정상 등록 확인.
+- 변경 파일:
+  - .env: `WORKER_BATCH_SIZE=50`, `WORKER_POLL_INTERVAL=15` 추가
+    (처리 용량 200건/분 = enqueue 속도의 약 3배 이상 확보).
+  - .env.example: 기본값 주석에 튜닝 가이드 추가.
+- 검증: 오늘 남은 record_metric PENDING 359건은 장 마감 후라 enqueue가
+  멈춘 상태이므로 현재 속도로 ~18분 내 자연 소진. 재시작 시 신규 설정
+  적용되어 ~1.8분에 소진 가능.
+
+---
+
+## [2026-04-16] Google Calendar 일일 결산 상단 요약 오보 수정 — 평가손익 → 실현손익 통일
+- 카테고리: bug_fix
+- 배경:
+  - 2026-04-15 구글 캘린더 `[매매결과] 2026-04-15 +0.6% (3건 체결)` 이벤트의
+    상단 요약이 `총 손익: +0원`으로 표시되었지만 종목별 상세 합은
+    `+60,600원`으로 불일치.
+  - 원인: `_enqueue_calendar_event`의 payload가 `balance.total_profit_loss`
+    (평가손익·미실현 포함)와 `balance.total_profit_rate`(평가수익률)를
+    전달. 2026-04-15에는 보유 중인 삼성전자가 매수가=현재가라 평가손익이
+    0원이 되었고, 종목별 상세(DB trades 기반)의 실현손익 +60,600원과
+    달랐음.
+  - 제목 `+0.6%`도 평가수익률(자산증감수익률). 실현수익률 `+5.03%`와 상이.
+- 변경 파일:
+  - src/engine.py:
+    - `_enqueue_calendar_event()` 시그니처 변경(keyword-only):
+      `balance` 파라미터 제거, `trades`·`realized_profit_loss`·
+      `realized_rate` 추가. payload `total_profit_loss`/`profit_rate`에
+      실현값을 전달하여 종목별 상세 합과 상단 요약/제목이 일치하도록 수정.
+    - `post_market()`에서 Telegram과 동일한 실현손익/수익률 값을 Calendar
+      enqueue에도 전달.
+- 검증 결과: pytest ✅ (391 passed) | ruff ✅ | mypy: 기존 dead code
+  (`_create_calendar_event`, `_save_daily_performance`, `_sync_portfolio`)의
+  `object` 타입 힌트 관련 pre-existing 에러만 잔존.
+
+---
+
+## [2026-04-16] Telegram 일일 결산 "0건 +0원" 오보 수정 — KIS executions → DB trades 전환
+- 카테고리: bug_fix
+- 배경:
+  - 2026-04-15 Telegram 알림이 실제 체결(매수 2 + 매도 1, 실현손익 +60,600원)과
+    다르게 `체결: 0건, 실현손익: +0원 (+0.64%)`로 잘못 전송됨.
+  - 원인: `post_market`에서 `self._account.get_executions()`(KIS
+    `inquire-daily-ccld` API) 호출 시 해당 API가 500 에러 후 빈 결과 반환.
+    `_enqueue_telegram_daily_summary`는 이 빈 `executions`를 그대로 사용하여
+    `count=0, buy_count=0, sell_count=0`로 메시지 생성.
+  - 의미 오류: formatter는 "실현손익" 라벨을 표시하는데 실제 전달되는 값은
+    `balance.total_profit_loss`(KIS 평가손익, 미실현 포함). 라벨과 의미가
+    달랐음.
+  - Calendar 이벤트는 이미 `_load_today_trades()`(DB 조회)를 사용해 올바르게
+    "+0.6% (3건 체결)"로 기록되었으나, Telegram은 같은 fallback을 쓰지
+    않았음.
+- 변경 파일:
+  - src/engine.py:
+    - `post_market()`: 장 마감 집계 전반을 DB `trades` 테이블 기반으로 전환.
+      buy_count / sell_count / realized_pl / realized_rate를 DB에서 계산.
+      KIS executions는 부가 로깅에만 사용.
+    - `_enqueue_telegram_daily_summary()` 시그니처 변경(keyword-only):
+      `executions` 제거, `realized_profit_loss` / `realized_rate` 추가.
+      "실현손익" 라벨에 실제 실현손익(매도 trades.profit_loss_amount 합)을
+      전달하도록 수정.
+    - `_enqueue_daily_performance()`: executions(KIS 결과) 대신 trades(DB)
+      수신. details JSON도 Trade 객체 속성에 맞게 변환(trade_type→side,
+      profit_loss_amount 추가). KIS API가 빈 결과를 반환해도 체결 상세가
+      DB에 정확히 저장됨.
+    - `[일일결산]` 로그 메시지도 DB 기반 값으로 변경.
+- 검증 결과: pytest ✅ (391 passed) | ruff ✅ | mypy: 기존 `object` 타입 힌트
+  관련 pre-existing 에러만 잔존 (이번 변경과 무관)
+
+---
+
+## [2026-04-16] DailyPerformance 저장 버그 2건 수정 — Worker 경로 파라미터명·단위 불일치
+- 카테고리: bug_fix
+- 배경:
+  - **버그 1 (이름 불일치)**: 2026-04-15 15:40~15:55 장 마감 후 일일 성과 저장이
+    5회 재시도 후 DEAD 처리. 에러: `DailyPerformanceRepository.create() got an
+    unexpected keyword argument 'total_profit_loss'`. Worker 분리(Phase 1)에서
+    handler가 payload 키를 그대로 Repository.create() 호출에 사용했으나
+    Repository 시그니처는 `total_pl`, `rate`, `count`를 요구.
+  - **버그 2 (단위 불일치)**: 이름 불일치를 해결하면 이번에는 `profit_rate`가
+    100배 크게 저장되는 문제 발생. `balance.total_profit_rate`는 KIS API의
+    `ASST_ICDC_ERNG_RT`로 **퍼센트 단위**(예: 2.5)인데, DB `profit_rate`
+    컬럼은 **비율 단위**(예: 0.025)로 저장하는 것이 기존 histori/legacy
+    `_save_daily_performance` 경로와 일치. Worker enqueue 경로에는 `/100.0`
+    변환이 누락되어 있었음.
+  - 결과: 2026-04-15 일일 성과가 DB에 누락됨. 수정 이후 생성되는 레코드는
+    기존 daily_performances 이력과 동일한 비율 스케일로 저장됨.
+- 변경 파일:
+  - src/worker/handlers.py:
+    - `DailyPerformanceHandler.execute()` 내 `repo.create()` 호출 파라미터명 수정
+      (`total_profit_loss=` → `total_pl=`, `profit_rate=` → `rate=`,
+      `execution_count=` → `count=`).
+    - docstring에 `profit_rate` 단위를 "비율, 예: 2.5% → 0.025"로 명시.
+  - src/engine.py:
+    - `_enqueue_daily_performance()`의 payload `profit_rate`를
+      `float(balance.total_profit_rate) / 100.0`로 변환하여
+      legacy `_save_daily_performance` 및 기존 DB 이력과 단위 통일.
+    - 단위 변환 의도를 설명하는 주석 추가.
+- 검증 결과: pytest ✅ (391 passed) | ruff ✅ | mypy: 기존 dead code
+  (`_save_daily_performance`, `_sync_portfolio`)의 `balance: object` 타입
+  관련 pre-existing 에러만 잔존 (이번 변경과 무관)
+
+---
+
 ## [2026-04-15] ENSEMBLE 시그널 매매 전환율 0% 원인 조사 — observability 강화
 - 제안서: docs/proposals/2026-04-15_ensemble-zero-conversion-investigation.md
 - 카테고리: bug_fix (observability)

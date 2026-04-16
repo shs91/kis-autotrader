@@ -56,3 +56,24 @@ class TestBollingerBandStrategy:
         """전략 이름이 파라미터를 포함한다."""
         strategy = BollingerBandStrategy(period=20, num_std=2.0)
         assert "20" in strategy.name
+
+    def test_meta_records_observability_keys(self) -> None:
+        """Signal.meta에 series_len/nan_ratio/last_price/last_upper/last_lower/last_percent_b/guard_triggered."""
+        strategy = BollingerBandStrategy(period=5, num_std=2.0)
+        prices = [100, 101, 99, 100, 101, 100]
+        signal = strategy.analyze(_make_df(prices))
+        assert "series_len" in signal.meta
+        assert signal.meta["nan_ratio"] == 0.0
+        assert signal.meta["guard_triggered"] is False
+        assert signal.meta["last_upper"] is not None
+        assert signal.meta["last_lower"] is not None
+        assert signal.meta["last_percent_b"] is not None
+
+    def test_meta_insufficient_length_guard(self) -> None:
+        """데이터 부족 시 guard_triggered=True, guard_reason='insufficient_length'."""
+        strategy = BollingerBandStrategy(period=20, num_std=2.0)
+        signal = strategy.analyze(_make_df([100.0] * 10))
+        assert signal.signal_type == SignalType.HOLD
+        assert signal.meta["guard_triggered"] is True
+        assert signal.meta["guard_reason"] == "insufficient_length"
+        assert signal.meta["last_percent_b"] is None

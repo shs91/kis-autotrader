@@ -127,3 +127,35 @@ class TestMovingAverageAnalyze:
         signal = strategy.analyze(df)
         assert signal.signal_type == SignalType.HOLD
         assert "교차 미발생" in signal.reason
+
+    def test_meta_records_observability_keys(self) -> None:
+        """Signal.meta에 series_len/nan_ratio/last_short/last_long/guard_triggered가 기록된다."""
+        strategy = self._make_strategy()
+        prices = [100.0, 102.0, 104.0, 106.0, 108.0, 110.0, 112.0]
+        signal = strategy.analyze(pd.DataFrame({"close": prices}))
+        assert "series_len" in signal.meta
+        assert signal.meta["series_len"] == 7
+        assert signal.meta["nan_ratio"] == 0.0
+        assert signal.meta["guard_triggered"] is False
+        assert signal.meta["last_short"] is not None
+        assert signal.meta["last_long"] is not None
+
+    def test_meta_insufficient_length_guard(self) -> None:
+        """데이터 부족 시 guard_triggered=True 및 guard_reason이 기록된다."""
+        strategy = self._make_strategy()
+        df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0, 104.0]})
+        signal = strategy.analyze(df)
+        assert signal.signal_type == SignalType.HOLD
+        assert signal.meta["guard_triggered"] is True
+        assert signal.meta["guard_reason"] == "insufficient_length"
+        assert signal.meta["last_short"] is None
+
+    def test_meta_nan_guard(self) -> None:
+        """NaN 포함 시 guard_triggered=True, guard_reason='nan_in_ma'."""
+        strategy = self._make_strategy()
+        prices = [100.0, 102.0, float("nan"), 106.0, 108.0, 110.0, 112.0]
+        signal = strategy.analyze(pd.DataFrame({"close": prices}))
+        assert signal.signal_type == SignalType.HOLD
+        assert signal.meta["guard_triggered"] is True
+        assert signal.meta["guard_reason"] == "nan_in_ma"
+        assert signal.meta["nan_ratio"] > 0.0

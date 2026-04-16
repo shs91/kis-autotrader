@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from src.config import settings
@@ -44,12 +46,27 @@ class MACDStrategy(BaseStrategy):
 
     def analyze(self, market_data: pd.DataFrame) -> Signal:
         """시장 데이터를 분석하여 MACD 기반 시그널을 생성한다."""
+        series_len = len(market_data)
+        close_raw = market_data["close"] if "close" in market_data.columns else None
+        nan_ratio = 0.0
+        if close_raw is not None and series_len > 0:
+            nan_ratio = float(close_raw.isna().sum()) / series_len
+
         min_required = self._slow + self._signal + 1
-        if len(market_data) < min_required:
+        if series_len < min_required:
             return Signal(
                 signal_type=SignalType.HOLD,
                 confidence=0.0,
-                reason=f"데이터 부족 (필요: {min_required}개, 현재: {len(market_data)}개)",
+                reason=f"데이터 부족 (필요: {min_required}개, 현재: {series_len}개)",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_macd": None,
+                    "last_signal": None,
+                    "last_hist": None,
+                    "guard_triggered": True,
+                    "guard_reason": "insufficient_length",
+                },
             )
 
         close = market_data["close"].astype(float)
@@ -62,7 +79,34 @@ class MACDStrategy(BaseStrategy):
 
         current_hist = float(histogram.iloc[-1])
         prev_hist = float(histogram.iloc[-2])
+        current_macd = float(macd_line.iloc[-1])
+        current_signal = float(signal_line.iloc[-1])
         current_price = float(close.iloc[-1])
+
+        if any(math.isnan(v) for v in (current_hist, prev_hist, current_macd, current_signal)):
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                reason="MACD 값에 NaN 포함 — 데이터 부족",
+                meta={
+                    "series_len": series_len,
+                    "nan_ratio": round(nan_ratio, 4),
+                    "last_macd": None if math.isnan(current_macd) else current_macd,
+                    "last_signal": None if math.isnan(current_signal) else current_signal,
+                    "last_hist": None if math.isnan(current_hist) else current_hist,
+                    "guard_triggered": True,
+                    "guard_reason": "nan_macd",
+                },
+            )
+
+        meta: dict[str, object] = {
+            "series_len": series_len,
+            "nan_ratio": round(nan_ratio, 4),
+            "last_macd": current_macd,
+            "last_signal": current_signal,
+            "last_hist": current_hist,
+            "guard_triggered": False,
+        }
 
         # 히스토그램이 음→양: 골든크로스 (매수)
         if prev_hist <= 0 < current_hist:
@@ -72,6 +116,7 @@ class MACDStrategy(BaseStrategy):
                 confidence=confidence,
                 target_price=current_price,
                 reason=f"MACD 골든크로스 (hist: {prev_hist:.2f} → {current_hist:.2f})",
+                meta=meta,
             )
 
         # 히스토그램이 양→음: 데드크로스 (매도)
@@ -82,10 +127,12 @@ class MACDStrategy(BaseStrategy):
                 confidence=confidence,
                 target_price=current_price,
                 reason=f"MACD 데드크로스 (hist: {prev_hist:.2f} → {current_hist:.2f})",
+                meta=meta,
             )
 
         return Signal(
             signal_type=SignalType.HOLD,
             confidence=0.0,
             reason=f"MACD 교차 미발생 (hist: {current_hist:.2f})",
+            meta=meta,
         )

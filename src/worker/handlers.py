@@ -149,8 +149,8 @@ class DailyPerformanceHandler(TaskHandler):
 
         payload:
             trade_date: 매매 날짜 (ISO 문자열).
-            total_profit_loss: 총 손익.
-            profit_rate: 수익률.
+            total_profit_loss: 총 손익 (원).
+            profit_rate: 수익률 (비율, 예: 2.5% → 0.025).
             execution_count: 체결 건수.
             details: 상세 JSON 문자열 (nullable).
         """
@@ -168,9 +168,9 @@ class DailyPerformanceHandler(TaskHandler):
 
             repo.create(
                 perf_date=trade_date,
-                total_profit_loss=payload["total_profit_loss"],
-                profit_rate=payload["profit_rate"],
-                execution_count=payload["execution_count"],
+                total_pl=payload["total_profit_loss"],
+                rate=payload["profit_rate"],
+                count=payload["execution_count"],
                 details=payload.get("details"),
             )
             logger.info("일일 성과 저장 완료: %s", trade_date)

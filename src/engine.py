@@ -328,13 +328,26 @@ class TradingEngine:
                 return
 
             held_codes = {h.stock_code for h in balance.holdings if h.quantity > 0}
+            watchlist_codes = self._get_watchlist_codes()
             targets = self._build_monitor_targets(held_codes)
             logger.info(
                 "모니터링 대상: %d종목 (보유 %d + 관심 %d + 발굴 %d)",
                 len(targets),
                 len(held_codes),
-                len(self._get_watchlist_codes()),
+                len(watchlist_codes),
                 len(self._screened_codes),
+            )
+            # 스크리닝→시그널 파이프라인 가시화 (proposal 2026-04-16):
+            # 이번 사이클에서 평가할 종목 리스트와 원천별 카운트를
+            # system_metrics 에 EVAL_TARGETS 레코드로 기록한다.
+            self._record_eval_targets(
+                cycle_number=self._cycle_count,
+                targets=targets,
+                counts={
+                    "screening": len(self._screened_codes),
+                    "watchlist": len(watchlist_codes),
+                    "positions": len(held_codes),
+                },
             )
 
             for stock_code in targets:
@@ -392,39 +405,74 @@ class TradingEngine:
 
         try:
             balance = await self._get_balance(force=True)
-            executions = await self._account.get_executions()
 
-            logger.info(
-                "당일 체결 건수: %d, 총 평가손익: %s원 (수익률: %.2f%%)",
-                len(executions),
-                f"{balance.total_profit_loss:,}",
-                balance.total_profit_rate,
+            # KIS 모의투자 환경의 inquire-daily-ccld API가 종종 빈 결과/500을
+            # 반환해 KIS executions를 그대로 신뢰할 수 없다. 모든 장 마감 집계는
+            # DB trades 테이블을 기준으로 계산한다. KIS executions는 부가 로깅
+            # 용도로만 사용.
+            kis_executions = await self._account.get_executions()
+            today = date.today()
+            trades = self._load_today_trades(today)
+
+            buy_count = sum(1 for t in trades if t.trade_type == TradeType.BUY)
+            sell_count = sum(1 for t in trades if t.trade_type == TradeType.SELL)
+            realized_pl = sum(
+                (t.profit_loss_amount or 0)
+                for t in trades
+                if t.trade_type == TradeType.SELL
+            )
+            sell_total = sum(
+                t.total_amount
+                for t in trades
+                if t.trade_type == TradeType.SELL
+            )
+            realized_rate = (
+                (realized_pl / sell_total * 100.0) if sell_total > 0 else 0.0
             )
 
-            buy_count = sum(1 for e in executions if e.side == "매수")
-            sell_count = sum(1 for e in executions if e.side == "매도")
+            logger.info(
+                "당일 체결 건수(DB): %d (매수 %d / 매도 %d), "
+                "실현손익: %s원 (%.2f%%) | "
+                "평가손익: %s원 (%.2f%%) | KIS API 체결=%d건",
+                len(trades),
+                buy_count,
+                sell_count,
+                f"{realized_pl:,}",
+                realized_rate,
+                f"{balance.total_profit_loss:,}",
+                balance.total_profit_rate,
+                len(kis_executions),
+            )
 
             # Worker Queue 경유: 일일 성과·포트폴리오·집계·캘린더·텔레그램
-            today_str = date.today().isoformat()
-            self._enqueue_daily_performance(balance, executions)
+            today_str = today.isoformat()
+            self._enqueue_daily_performance(balance, trades)
             self._enqueue_sync_portfolio(balance)
             self._enqueue_daily_summary(today_str)
-            self._enqueue_calendar_event(balance)
+            self._enqueue_calendar_event(
+                trades=trades,
+                realized_profit_loss=realized_pl,
+                realized_rate=realized_rate,
+            )
             self._enqueue_telegram_daily_summary(
-                balance, buy_count, sell_count, executions,
+                balance=balance,
+                buy_count=buy_count,
+                sell_count=sell_count,
+                realized_profit_loss=realized_pl,
+                realized_rate=realized_rate,
             )
 
             self._client._limiter.log_daily_count()
             logger.info(
                 "[일일결산] 사이클=%d, 체결=%d건 (매수 %d / 매도 %d), "
-                "발굴=%d종목, 손익=%s원 (%.2f%%)",
+                "발굴=%d종목, 실현손익=%s원 (%.2f%%)",
                 self._cycle_count,
-                len(executions),
+                len(trades),
                 buy_count,
                 sell_count,
                 len(self._screened_codes),
-                f"{balance.total_profit_loss:,}",
-                balance.total_profit_rate,
+                f"{realized_pl:,}",
+                realized_rate,
             )
 
         except Exception:
@@ -950,12 +998,58 @@ class TradingEngine:
         except Exception:
             logger.exception("메트릭 큐 적재 실패: %s", metric_type)
 
+    # truncate 임계값: detail.targets 배열이 길어져 JSON이 과도하게 커지는
+    # 것을 방지한다. 50개 초과 시 앞 50개만 남기고 truncated=True 플래그를 기록한다.
+    _EVAL_TARGETS_MAX_CODES: int = 50
+
+    def _record_eval_targets(
+        self,
+        *,
+        cycle_number: int,
+        targets: list[str],
+        counts: dict[str, int],
+    ) -> None:
+        """이번 사이클의 평가 대상 종목과 원천별 카운트를 메트릭으로 기록한다.
+
+        스크리닝→전략 평가 파이프라인의 가시성을 확보하기 위한 observability
+        레코드(proposal 2026-04-16). ``counts``는 ``{screening, watchlist,
+        positions}`` 3개 키를 가진다. ``targets`` 리스트가 길어져 JSON이
+        과도하게 커지지 않도록 앞 ``_EVAL_TARGETS_MAX_CODES``개만 기록하고
+        잘린 경우 ``truncated=True`` 플래그를 함께 남긴다.
+        """
+        truncated = len(targets) > self._EVAL_TARGETS_MAX_CODES
+        recorded_targets = targets[: self._EVAL_TARGETS_MAX_CODES]
+        self._record_metric(
+            "EVAL_TARGETS",
+            {
+                "cycle": cycle_number,
+                "counts": {
+                    "screening": int(counts.get("screening", 0)),
+                    "watchlist": int(counts.get("watchlist", 0)),
+                    "positions": int(counts.get("positions", 0)),
+                },
+                "total_targets": len(targets),
+                "targets": recorded_targets,
+                "truncated": truncated,
+            },
+        )
+
     # ── Worker Queue enqueue 메서드 ──────────────────────────
 
-    def _enqueue_calendar_event(self, balance: Balance) -> None:
-        """캘린더 이벤트 등록을 Worker Queue에 적재한다."""
+    def _enqueue_calendar_event(
+        self,
+        *,
+        trades: list[Any],
+        realized_profit_loss: int,
+        realized_rate: float,
+    ) -> None:
+        """캘린더 이벤트 등록을 Worker Queue에 적재한다.
+
+        캘린더 이벤트의 "총 손익"·"수익률"은 종목별 상세 합계와 일치해야
+        하므로 평가손익(``balance.total_profit_loss``)이 아닌 DB trades
+        테이블 기반 실현손익/실현수익률을 전달한다.
+        """
         today = date.today()
-        trades = self._load_today_trades(today)
         details_json = json.dumps(
             self._group_trades_for_calendar(trades),
             ensure_ascii=False,
@@ -964,8 +1058,8 @@ class TradingEngine:
             task_type="calendar_event",
             payload={
                 "trade_date": today.isoformat(),
-                "total_profit_loss": int(balance.total_profit_loss),
-                "profit_rate": float(balance.total_profit_rate),
+                "total_profit_loss": int(realized_profit_loss),
+                "profit_rate": float(realized_rate),
                 "execution_count": len(trades),
                 "details_json": details_json,
             },
@@ -975,27 +1069,36 @@ class TradingEngine:
 
     def _enqueue_telegram_daily_summary(
         self,
+        *,
         balance: Balance,
         buy_count: int,
         sell_count: int,
-        executions: list[object],
+        realized_profit_loss: int,
+        realized_rate: float,
     ) -> None:
-        """Telegram 일일 결산 알림을 Worker Queue에 적재한다."""
+        """Telegram 일일 결산 알림을 Worker Queue에 적재한다.
+
+        Telegram 메시지는 "실현손익" 라벨을 사용하므로, KIS API의
+        평가손익(balance.total_profit_loss, total_profit_rate)이 아닌 DB trades
+        테이블에서 집계한 실현손익/수익률을 전달한다.
+        """
+        today_str = date.today().isoformat()
+        _ = balance  # 현재 payload에 balance 필드는 포함하지 않음 (호환 유지)
         self._task_queue.enqueue(
             task_type="telegram_notify",
             payload={
                 "notify_type": "daily_summary",
                 "message_data": {
-                    "trade_date": date.today().isoformat(),
-                    "count": len(executions),
-                    "profit_loss": int(balance.total_profit_loss),
-                    "rate": float(balance.total_profit_rate),
+                    "trade_date": today_str,
+                    "count": buy_count + sell_count,
+                    "profit_loss": int(realized_profit_loss),
+                    "rate": float(realized_rate),
                     "buy_count": buy_count,
                     "sell_count": sell_count,
                 },
             },
             priority=3,
-            idempotency_key=f"telegram_summary_{date.today().isoformat()}",
+            idempotency_key=f"telegram_summary_{today_str}",
         )
 
     def _enqueue_daily_summary(self, today_str: str) -> None:
@@ -1026,29 +1129,40 @@ class TradingEngine:
         )
 
     def _enqueue_daily_performance(
-        self, balance: Balance, executions: list[object]
+        self, balance: Balance, trades: list[Any]
     ) -> None:
-        """일일 성과 저장을 Worker Queue에 적재한다."""
+        """일일 성과 저장을 Worker Queue에 적재한다.
+
+        ``trades``는 DB ``trades`` 테이블의 오늘 체결 레코드 목록이다. KIS
+        모의투자 API 결과가 비어 있어도 DB 기반으로 정확한 체결 건수/내역을
+        기록하기 위해 Trade 객체를 받는다.
+        """
         details = json.dumps(
             [
                 {
-                    "stock_code": getattr(e, "stock_code", ""),
-                    "stock_name": getattr(e, "stock_name", ""),
-                    "side": getattr(e, "side", ""),
-                    "quantity": getattr(e, "quantity", 0),
-                    "price": getattr(e, "price", 0),
+                    "stock_code": t.stock_code,
+                    "stock_name": t.stock_name,
+                    "side": (
+                        "매수" if t.trade_type == TradeType.BUY else "매도"
+                    ),
+                    "quantity": t.quantity,
+                    "price": t.price,
+                    "profit_loss_amount": t.profit_loss_amount,
                 }
-                for e in executions
+                for t in trades
             ],
             ensure_ascii=False,
         )
+        # DB daily_performances.profit_rate 컬럼은 비율(ratio) 단위로 저장한다
+        # (예: 2.5% → 0.025). KIS API는 퍼센트 단위(ASST_ICDC_ERNG_RT)로
+        # 값을 주므로 100으로 나눠 통일한다.
         self._task_queue.enqueue(
             task_type="daily_performance",
             payload={
                 "trade_date": date.today().isoformat(),
                 "total_profit_loss": float(balance.total_profit_loss),
-                "profit_rate": float(balance.total_profit_rate),
-                "execution_count": len(executions),
+                "profit_rate": float(balance.total_profit_rate) / 100.0,
+                "execution_count": len(trades),
                 "details": details,
             },
             priority=5,

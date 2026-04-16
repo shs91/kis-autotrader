@@ -290,3 +290,89 @@ class TestTradingCycleWithDbFailure:
             await engine.run_trading_cycle()
 
         assert engine._cycle_count == 1
+
+
+# ── EVAL_TARGETS 메트릭 테스트 (proposal 2026-04-16) ──────────
+
+
+class TestRecordEvalTargets:
+    """_record_eval_targets 메트릭 기록 테스트."""
+
+    def test_records_eval_targets_metric(self) -> None:
+        """cycle/counts/targets/truncated 필드가 포함된 메트릭이 enqueue된다."""
+        engine = _make_engine()
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_eval_targets(
+                cycle_number=7,
+                targets=["005930", "000660", "207940"],
+                counts={"screening": 1, "watchlist": 5, "positions": 2},
+            )
+
+            mock_enqueue.assert_called_once()
+            kwargs = mock_enqueue.call_args.kwargs
+            assert kwargs["task_type"] == "record_metric"
+            payload = kwargs["payload"]
+            assert payload["metric_type"] == "EVAL_TARGETS"
+            detail = payload["detail"]
+            assert detail["cycle"] == 7
+            assert detail["counts"] == {
+                "screening": 1,
+                "watchlist": 5,
+                "positions": 2,
+            }
+            assert detail["total_targets"] == 3
+            assert detail["targets"] == ["005930", "000660", "207940"]
+            assert detail["truncated"] is False
+
+    def test_truncates_long_target_list(self) -> None:
+        """targets가 임계값을 넘으면 앞부분만 기록하고 truncated=True."""
+        engine = _make_engine()
+        long_targets = [f"{i:06d}" for i in range(80)]
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_eval_targets(
+                cycle_number=1,
+                targets=long_targets,
+                counts={"screening": 70, "watchlist": 5, "positions": 5},
+            )
+
+            detail = mock_enqueue.call_args.kwargs["payload"]["detail"]
+            assert detail["total_targets"] == 80
+            assert len(detail["targets"]) == engine._EVAL_TARGETS_MAX_CODES
+            assert detail["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_cycle_emits_eval_targets(self) -> None:
+        """run_trading_cycle 실행 시 EVAL_TARGETS 메트릭이 enqueue된다."""
+        engine = _make_engine()
+        engine._cycle_count = 0
+
+        # 서킷 브레이커/리스크 차단 없이 정상 사이클이 돌도록 mock 세팅
+        engine._client.circuit_breaker.is_open = False
+        mock_risk = MagicMock()
+        mock_risk.is_portfolio_halted = False
+        mock_risk.check_daily_trade_limit.return_value = False
+        engine._risk = mock_risk
+
+        balance = MagicMock()
+        balance.deposit = 10_000_000
+        balance.holdings = []
+        engine._get_balance = AsyncMock(return_value=balance)
+
+        # _process_stock 내부는 관심 없음(EVAL_TARGETS enqueue만 검증)
+        engine._process_stock = AsyncMock()
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            await engine.run_trading_cycle()
+
+        # enqueue 호출 중 EVAL_TARGETS 메트릭이 최소 1회 있는지 확인
+        eval_calls = [
+            c for c in mock_enqueue.call_args_list
+            if c.kwargs.get("task_type") == "record_metric"
+            and c.kwargs.get("payload", {}).get("metric_type") == "EVAL_TARGETS"
+        ]
+        assert len(eval_calls) == 1
+        detail = eval_calls[0].kwargs["payload"]["detail"]
+        assert "counts" in detail
+        assert set(detail["counts"].keys()) == {"screening", "watchlist", "positions"}

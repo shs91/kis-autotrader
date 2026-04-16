@@ -56,3 +56,23 @@ class TestMACDStrategy:
         strategy = MACDStrategy(fast_period=12, slow_period=26, signal_period=9)
         assert "12" in strategy.name
         assert "26" in strategy.name
+
+    def test_meta_records_observability_keys(self) -> None:
+        """Signal.meta에 series_len/nan_ratio/last_macd/last_signal/last_hist/guard_triggered."""
+        strategy = MACDStrategy(fast_period=3, slow_period=6, signal_period=3)
+        prices = list(range(100, 80, -1)) + [80, 82]
+        signal = strategy.analyze(_make_df(prices))
+        assert "series_len" in signal.meta
+        assert signal.meta["nan_ratio"] == 0.0
+        assert signal.meta["guard_triggered"] is False
+        assert signal.meta["last_macd"] is not None
+        assert signal.meta["last_signal"] is not None
+        assert signal.meta["last_hist"] is not None
+
+    def test_meta_insufficient_length_guard(self) -> None:
+        """데이터 부족 시 guard_triggered=True."""
+        strategy = MACDStrategy(fast_period=12, slow_period=26, signal_period=9)
+        signal = strategy.analyze(_make_df([100.0] * 10))
+        assert signal.signal_type == SignalType.HOLD
+        assert signal.meta["guard_triggered"] is True
+        assert signal.meta["guard_reason"] == "insufficient_length"
