@@ -5,6 +5,27 @@
 
 ---
 
+## [2026-04-17 22:00] 앙상블 가중투표 SELL 편향 수정 — HOLD 과반 가드
+- 제안서: docs/proposals/2026-04-17_ensemble-sell-bias-fix.md
+- 카테고리: refactor
+- 배경:
+  - W16 앙상블 시그널 8,054건 중 BUY 0건, SELL 8,054건(100% SELL).
+    횡보장에서 교차 전략(MA, MACD)이 HOLD를 출력하면 해당 투표가 "기권"으로
+    처리되어 소수의 SELL 투표만으로 전체 결과가 SELL로 확정되는 구조적 문제.
+  - HOLD 투표가 과반(전체 전략의 50% 초과)이면 앙상블도 HOLD를 반환하도록
+    `_weighted_vote`에 가드 추가.
+- 변경 파일:
+  - src/strategy/ensemble.py: `_weighted_vote` 메서드에 HOLD 과반 가드 6줄 추가
+  - tests/test_strategy/test_ensemble.py: HOLD 과반 테스트 3개 추가
+- 검증 결과:
+  - pytest ✅ (403 passed, 4 pre-existing failures in test_risk.py — 제 변경과 무관)
+  - mypy: pre-existing 에러만 (신규 에러 없음)
+  - ruff ✅ All checks passed
+- 기대 효과: HOLD 과반 시 불필요한 SELL 시그널(주간 ~5,000~7,000건) 제거,
+  signals 테이블 적재량 감소.
+
+---
+
 ## [2026-04-17 21:00] RSI 과매도 임계값 상향 조정 — 약세장 BUY 시그널 활성화
 - 제안서: docs/proposals/2026-04-17_rsi-oversold-threshold-tuning.md
 - 카테고리: param_tuning

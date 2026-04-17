@@ -140,6 +140,14 @@ class EnsembleStrategy(BaseStrategy):
 
     def _weighted_vote(self, signals: list[Signal]) -> Signal:
         """가중 투표를 수행한다."""
+        hold_count = sum(1 for s in signals if s.signal_type == SignalType.HOLD)
+        if hold_count > len(signals) / 2:
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                reason=f"앙상블 가중투표: HOLD 과반 ({hold_count}/{len(signals)})",
+            )
+
         buy_w = sum(s.confidence for s in signals if s.signal_type == SignalType.BUY)
         sell_w = sum(s.confidence for s in signals if s.signal_type == SignalType.SELL)
 

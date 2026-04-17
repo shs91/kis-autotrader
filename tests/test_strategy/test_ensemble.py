@@ -218,6 +218,59 @@ def test_name_format() -> None:
     assert "앙상블" in ensemble.name
 
 
+def test_weighted_hold_majority_guard() -> None:
+    """HOLD 과반 시 가중투표가 HOLD를 반환하는지 확인한다."""
+    # 4개 전략 중 3개 HOLD, 1개 SELL → HOLD 과반 → HOLD 반환
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.SELL, 0.8),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    assert result.confidence == 0.0
+    assert "HOLD 과반" in result.reason
+    assert "3/4" in result.reason
+
+
+def test_weighted_hold_not_majority_allows_sell() -> None:
+    """HOLD가 과반이 아니면 기존 가중투표 로직이 동작한다."""
+    # 4개 전략 중 2개 HOLD, 2개 SELL → HOLD 과반 아님 → SELL 반환
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.SELL, 0.8),
+            FixedStrategy(SignalType.SELL, 0.6),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.SELL
+
+
+def test_weighted_hold_majority_meta_populated() -> None:
+    """HOLD 과반 가드 발동 시 vote_meta가 채워지는지 확인한다."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.SELL, 0.8),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    # analyze()에서 HOLD일 때 meta를 채우므로
+    assert "method" in result.meta
+    assert result.meta["method"] == "weighted"
+    assert len(result.meta["votes"]) == 3
+
+
 class FixedMetaStrategy(BaseStrategy):
     """Signal.meta에 임의 필드를 넣어 반환하는 테스트용 전략."""
 
