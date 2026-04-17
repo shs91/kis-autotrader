@@ -5,6 +5,25 @@
 
 ---
 
+## [2026-04-17 21:00] RSI 과매도 임계값 상향 조정 — 약세장 BUY 시그널 활성화
+- 제안서: docs/proposals/2026-04-17_rsi-oversold-threshold-tuning.md
+- 카테고리: param_tuning
+- 배경:
+  - 최근 4일간(04-14~04-17) 전 전략에서 BUY 시그널 0건 발생. RSI 시그널도
+    7일간 0건. 현재 RSI 과매도 임계값 30.0은 약세장에서 도달하기 어려운
+    극단적 수준이라 시그널 발생이 차단되는 구조.
+  - 스크리닝 전환율도 04-16부터 0%로 급락 (이전 12.7~19.4%).
+- 변경 파일:
+  - config_overrides.json (신규 생성): `STRATEGY_RSI_OVERSOLD` 30.0 → 35.0
+- 검증 결과:
+  - pytest ✅ (400 passed, 4 pre-existing failures in test_risk.py — 제 변경과 무관)
+  - mypy: pre-existing 74 (신규 에러 없음)
+  - ruff: pre-existing 16 (신규 에러 없음)
+- 기대 효과: RSI 과매도 시그널 활성화로 앙상블 BUY 투표 발생, 매매 교착 해소.
+  MAX_LOSS_RATE(3%) 및 기존 리스크 관리 체계가 역추세 매수 리스크를 제어.
+
+---
+
 ## [2026-04-16 17:30] 스크리닝→시그널 파이프라인 가시화 — EVAL_TARGETS 메트릭 추가
 - 제안서: docs/proposals/2026-04-16_screening-to-signal-pipeline-gap.md
 - 카테고리: bug_fix (observability)

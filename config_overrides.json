@@ -1,0 +1,7 @@
+{
+  "_meta": {
+    "updated_at": "2026-04-17",
+    "updated_by": "proposal:2026-04-17_rsi-oversold-threshold-tuning"
+  },
+  "STRATEGY_RSI_OVERSOLD": 35.0
+}
