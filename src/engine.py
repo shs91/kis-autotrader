@@ -171,7 +171,7 @@ class TradingEngine:
 
         # API 호출
         daily_prices = await self._quote.get_daily_price(stock_code)
-        if len(daily_prices) < 21:
+        if len(daily_prices) < 36:
             logger.info("[%s] 일봉 데이터 부족 (%d건), 스킵", stock_code, len(daily_prices))
             return None
 

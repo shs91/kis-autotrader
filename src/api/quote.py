@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 from src.api.client import KISClient
@@ -157,9 +158,14 @@ class QuoteAPI:
         """
         logger.info("[일봉 조회] 종목=%s, 기간=%s", stock_code, period)
 
+        end_date = date.today()
+        start_date = end_date - timedelta(days=150)
+
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": stock_code,
+            "FID_INPUT_DATE_1": start_date.strftime("%Y%m%d"),
+            "FID_INPUT_DATE_2": end_date.strftime("%Y%m%d"),
             "FID_PERIOD_DIV_CODE": period,
             "FID_ORG_ADJ_PRC": "0" if adjusted else "1",
         }

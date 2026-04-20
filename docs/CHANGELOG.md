@@ -5,6 +5,27 @@
 
 ---
 
+## [2026-04-20 21:00] 일봉 데이터 조회량 부족 수정 — MACD 전략 데이터 요구량 미충족
+- 제안서: docs/proposals/2026-04-20_daily-price-data-insufficiency-fix.md
+- 카테고리: bug_fix
+- 배경:
+  - 04-16부터 5일간 4개 서브전략이 전부 HOLD confidence=0 반환.
+    MACD(12,26,9)는 최소 36행이 필요하나 `get_daily_price()`가 날짜 범위를
+    지정하지 않아 API 기본값 ~30행만 반환되어 데이터 부족 가드에 걸림.
+  - 다른 전략(MA/RSI/Bollinger)도 불충분한 데이터로 정확도 저하.
+- 변경 파일:
+  - src/api/quote.py: `get_daily_price()`에 `FID_INPUT_DATE_1`/`FID_INPUT_DATE_2`
+    파라미터 추가 (최근 150일=약 100거래일분 요청)
+  - src/engine.py: `_get_daily_df()` 최소 데이터 가드 21 → 36 상향
+  - tests/test_api/test_quote.py: 날짜 범위 파라미터 전달 검증 테스트 추가
+- 검증 결과:
+  - pytest ✅ (404 passed, 4 pre-existing failures in test_risk.py — 제 변경과 무관)
+  - mypy: pre-existing 에러만 (신규 에러 없음)
+  - ruff: pre-existing 에러만 (신규 에러 없음)
+- 기대 효과: MACD 활성화 + 전체 앙상블 품질 향상 + BUY 시그널 복원
+
+---
+
 ## [2026-04-17 22:00] 앙상블 가중투표 SELL 편향 수정 — HOLD 과반 가드
 - 제안서: docs/proposals/2026-04-17_ensemble-sell-bias-fix.md
 - 카테고리: refactor

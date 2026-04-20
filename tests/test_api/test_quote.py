@@ -78,6 +78,21 @@ class TestQuoteAPI:
         assert result[0].volume == 15000000
         assert result[1].date == "20260330"
 
+    async def test_get_daily_price_passes_date_range_params(self) -> None:
+        """일봉 조회 시 날짜 범위 파라미터가 전달된다."""
+        mock_client = AsyncMock()
+        mock_client.get.return_value = {"output": []}
+
+        api = QuoteAPI(client=mock_client)
+        await api.get_daily_price("005930")
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert "FID_INPUT_DATE_1" in params
+        assert "FID_INPUT_DATE_2" in params
+        assert len(params["FID_INPUT_DATE_1"]) == 8
+        assert len(params["FID_INPUT_DATE_2"]) == 8
+
     async def test_get_minute_price(self) -> None:
         """분봉 데이터 조회가 정상적으로 동작한다."""
         response = {
