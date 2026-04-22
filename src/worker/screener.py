@@ -27,6 +27,8 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime
 
+import pandas as pd
+
 from src.api.auth import KISAuth
 from src.api.client import KISClient
 from src.api.quote import QuoteAPI
@@ -130,11 +132,16 @@ class ScreeningWorker:
         scored: list[ScoredCandidate] = []
         for rank_idx, item in enumerate(filtered):
             try:
-                df = await self._quote.get_daily_prices(
-                    stock_code=item.stock_code, count=60,
-                )
-                if df is None or df.empty:
+                daily_prices = await self._quote.get_daily_price(item.stock_code)
+                if len(daily_prices) < 36:
                     continue
+
+                df = pd.DataFrame(
+                    [
+                        {"close": p.close_price, "date": p.date}
+                        for p in reversed(daily_prices)
+                    ]
+                )
 
                 strategy = self._selector.get_strategy(item.stock_code)
                 signal = strategy.analyze(df)

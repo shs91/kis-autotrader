@@ -5,6 +5,30 @@
 
 ---
 
+## [2026-04-22 21:00] ScreeningWorker 일봉 조회 메서드명 불일치 수정 — 7일간 스크리닝 전환율 0% 해소
+- 제안서: docs/proposals/2026-04-22_screening-worker-method-name-fix.md
+- 카테고리: bug_fix
+- 배경:
+  - 04-16부터 7일간 스크리닝이 매일 30~145종목을 발굴하지만 전환율이 0%.
+    `src/worker/screener.py`에서 `self._quote.get_daily_prices()`를 호출했으나
+    실제 메서드명은 `get_daily_price()` (단수형). `AttributeError`가 발생하지만
+    `except Exception: logger.debug(...)`가 에러를 삼켜 `scored` 리스트가 항상 빈 상태.
+  - 또한 `count=60` 파라미터는 `get_daily_price`에 존재하지 않으며,
+    반환 타입이 `list[DailyPriceItem]`이므로 DataFrame 변환 로직이 필요.
+- 변경 파일:
+  - src/worker/screener.py: `get_daily_prices(stock_code, count=60)` →
+    `get_daily_price(stock_code)` 메서드명 수정 + `list[DailyPriceItem]` →
+    `pd.DataFrame` 변환 로직 추가 (engine.py `_get_daily_df()`와 동일 패턴).
+    최소 데이터 가드 `len(daily_prices) < 36` 추가 (MACD 최소 요구량).
+    `import pandas as pd` 추가.
+- 검증 결과:
+  - pytest ✅ (404 passed, 4 pre-existing failures in test_risk.py — 제 변경과 무관)
+  - mypy: pre-existing 에러만 (신규 에러 없음)
+  - ruff ✅ All checks passed
+- 기대 효과: 스크리닝 파이프라인 정상화 → 전환율 복원 → 매매 교착 해소
+
+---
+
 ## [2026-04-20 21:00] 일봉 데이터 조회량 부족 수정 — MACD 전략 데이터 요구량 미충족
 - 제안서: docs/proposals/2026-04-20_daily-price-data-insufficiency-fix.md
 - 카테고리: bug_fix
