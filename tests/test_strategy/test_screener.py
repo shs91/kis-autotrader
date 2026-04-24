@@ -254,3 +254,44 @@ class TestStockScreener:
         ranked = screener.rank_candidates(scored)
         assert len(ranked) >= 1
         assert all(c.total_score >= cfg.min_score for c in ranked)
+
+
+# ── ETF/ETN 필터 테스트 ─────────────────────────
+
+
+class TestETFFilter:
+    """ETF/ETN/레버리지 필터 테스트."""
+
+    def test_is_etf_etn_filters_kodex(self) -> None:
+        """KODEX ETF 종목이 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("252670", "KODEX 200선물인버스2X")
+
+    def test_is_etf_etn_filters_tiger(self) -> None:
+        """TIGER ETF 종목이 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("102110", "TIGER 200")
+
+    def test_is_etf_etn_filters_etn_code(self) -> None:
+        """Q로 시작하는 ETN 코드가 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("Q530036", "삼성 인버스 2X WTI원유 선물 ETN")
+
+    def test_is_etf_etn_filters_leverage(self) -> None:
+        """레버리지/인버스 키워드가 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("123456", "테스트 레버리지 종목")
+        assert ScreeningFilter._is_etf_etn("123456", "테스트 인버스 종목")
+
+    def test_is_etf_etn_passes_normal_stock(self) -> None:
+        """일반 종목(삼성전자 등)은 통과한다."""
+        assert not ScreeningFilter._is_etf_etn("005930", "삼성전자")
+        assert not ScreeningFilter._is_etf_etn("000660", "SK하이닉스")
+
+    def test_screening_excludes_etf(self) -> None:
+        """스크리닝 결과에서 ETF가 제외된다."""
+        f = ScreeningFilter(config=_config())
+        items = [
+            _item(code="005930", name="삼성전자"),
+            _item(code="252670", name="KODEX 200선물인버스2X"),
+            _item(code="Q530036", name="삼성 인버스 2X WTI원유 선물 ETN"),
+        ]
+        result = f.apply(items, exclude_codes=set())
+        assert len(result) == 1
+        assert result[0].stock_code == "005930"

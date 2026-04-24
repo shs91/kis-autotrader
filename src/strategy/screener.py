@@ -54,23 +54,29 @@ class ScreeningFilter:
         """
         cfg = self._config
         passed: list[VolumeRankItem] = []
+        etf_count = 0
 
         for item in items:
             if item.stock_code in exclude_codes:
+                continue
+            if self._is_etf_etn(item.stock_code, item.stock_name):
+                etf_count += 1
                 continue
             if not self._pass_filter(item, cfg):
                 continue
             passed.append(item)
 
         logger.info(
-            "스크리닝 필터: %d → %d종목 (제외 %d)",
-            len(items), len(passed), len(items) - len(passed),
+            "스크리닝 필터: %d → %d종목 (제외 %d, ETF/ETN %d)",
+            len(items), len(passed), len(items) - len(passed), etf_count,
         )
         return passed
 
     @staticmethod
     def _pass_filter(item: VolumeRankItem, cfg: ScreeningConfig) -> bool:
         """단일 종목의 필터 통과 여부를 판정한다."""
+        if ScreeningFilter._is_etf_etn(item.stock_code, item.stock_name):
+            return False
         if item.current_price < cfg.min_price or item.current_price > cfg.max_price:
             return False
         if item.market_cap < cfg.min_market_cap:
@@ -80,6 +86,22 @@ class ScreeningFilter:
         if item.volume < cfg.min_volume:
             return False
         return True
+
+    _ETF_BRAND_KEYWORDS: tuple[str, ...] = (
+        "KODEX", "TIGER", "KBSTAR", "ARIRANG", "SOL ", "ACE ",
+        "HANARO", "ETN", "레버리지", "인버스", "2X", "곱버스",
+    )
+
+    @staticmethod
+    def _is_etf_etn(stock_code: str, stock_name: str) -> bool:
+        """ETF/ETN/레버리지/인버스 종목 여부를 판별한다."""
+        if stock_code.startswith("Q"):
+            return True
+        upper_name = stock_name.upper()
+        for keyword in ScreeningFilter._ETF_BRAND_KEYWORDS:
+            if keyword.upper() in upper_name:
+                return True
+        return False
 
 
 class ScreeningScorer:

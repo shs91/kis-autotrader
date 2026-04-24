@@ -16,8 +16,11 @@ class TestMovingAverageStrategyInit:
 
     def test_default_init(self) -> None:
         """기본값으로 초기화한다."""
+        from src.config import settings
         strategy = MovingAverageStrategy()
-        assert strategy.name == "이동평균교차(5/20)"
+        short = settings.strategy.ma_short_period
+        long = settings.strategy.ma_long_period
+        assert strategy.name == f"이동평균교차({short}/{long})"
 
     def test_custom_periods(self) -> None:
         """사용자 지정 기간으로 초기화한다."""

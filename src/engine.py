@@ -93,6 +93,12 @@ class TradingEngine:
         self._cycle_count = 0
         self._daily_limit_reached = False
 
+        # 사이클별 전략 평가 카운터 (시그널 가뭄 진단용)
+        self._cycle_buy_count = 0
+        self._cycle_sell_count = 0
+        self._cycle_hold_count = 0
+        self._cycle_max_confidence = 0.0
+
         # 일봉 캐시: {종목코드: (날짜, DataFrame)}
         self._daily_cache: dict[str, tuple[str, pd.DataFrame]] = {}
         # 잔고 캐시: (조회시각, Balance)
@@ -350,6 +356,12 @@ class TradingEngine:
                 },
             )
 
+            # 사이클별 전략 평가 카운터 리셋
+            self._cycle_buy_count = 0
+            self._cycle_sell_count = 0
+            self._cycle_hold_count = 0
+            self._cycle_max_confidence = 0.0
+
             for stock_code in targets:
                 # 서킷 브레이커가 열려있으면 사이클 즉시 중단
                 if self._client.circuit_breaker.is_open:
@@ -374,6 +386,22 @@ class TradingEngine:
                         "stock_code": stock_code,
                         "error": "종목 처리 실패",
                     })
+
+            total_evaluated = (
+                self._cycle_buy_count + self._cycle_sell_count + self._cycle_hold_count
+            )
+            if total_evaluated > 0:
+                logger.info(
+                    "사이클 #%d 전략 요약: 평가 %d종목, BUY %d / SELL %d / HOLD %d, "
+                    "max_confidence=%.3f, 스크리닝 %d종목",
+                    self._cycle_count,
+                    total_evaluated,
+                    self._cycle_buy_count,
+                    self._cycle_sell_count,
+                    self._cycle_hold_count,
+                    self._cycle_max_confidence,
+                    len(self._screened_codes),
+                )
         finally:
             limiter = self._client._limiter
             self._record_metric("CYCLE_END", {
@@ -575,7 +603,17 @@ class TradingEngine:
             f"{current.current_price:,}",
         )
 
-        # 3-1. 시그널 DB 기록 (BUY/SELL만, action_taken은 아래서 결정)
+        # 3-1. 사이클 전략 평가 카운터 갱신
+        if signal.signal_type == SignalType.BUY:
+            self._cycle_buy_count += 1
+        elif signal.signal_type == SignalType.SELL:
+            self._cycle_sell_count += 1
+        else:
+            self._cycle_hold_count += 1
+        if signal.confidence > self._cycle_max_confidence:
+            self._cycle_max_confidence = signal.confidence
+
+        # 3-2. 시그널 DB 기록 (BUY/SELL만, action_taken은 아래서 결정)
         will_act = False
         skip_reason: str | None = None
 

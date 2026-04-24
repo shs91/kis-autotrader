@@ -219,22 +219,37 @@ def test_name_format() -> None:
 
 
 def test_weighted_hold_majority_guard() -> None:
-    """HOLD 과반 시 가중투표가 HOLD를 반환하는지 확인한다."""
-    # 4개 전략 중 3개 HOLD, 1개 SELL → HOLD 과반 → HOLD 반환
+    """HOLD 대다수(75% 초과) 시 가중투표가 HOLD를 반환하는지 확인한다."""
+    # 4개 전략 중 4개 HOLD → HOLD 대다수 → HOLD 반환
     ensemble = EnsembleStrategy(
         [
             FixedStrategy(SignalType.HOLD, 0.0),
             FixedStrategy(SignalType.HOLD, 0.0),
             FixedStrategy(SignalType.HOLD, 0.0),
-            FixedStrategy(SignalType.SELL, 0.8),
+            FixedStrategy(SignalType.HOLD, 0.0),
         ],
         method="weighted",
     )
     result = ensemble.analyze(EMPTY_DF)
     assert result.signal_type == SignalType.HOLD
     assert result.confidence == 0.0
-    assert "HOLD 과반" in result.reason
-    assert "3/4" in result.reason
+    assert "HOLD 대다수" in result.reason
+    assert "4/4" in result.reason
+
+
+def test_weighted_hold_3_of_4_passes_through() -> None:
+    """3/4 HOLD + 1 BUY → weighted vote로 진행하여 BUY 반환."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.BUY, 0.5),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
 
 
 def test_weighted_hold_not_majority_allows_sell() -> None:
@@ -254,12 +269,14 @@ def test_weighted_hold_not_majority_allows_sell() -> None:
 
 
 def test_weighted_hold_majority_meta_populated() -> None:
-    """HOLD 과반 가드 발동 시 vote_meta가 채워지는지 확인한다."""
+    """HOLD 대다수 가드 발동 시 vote_meta가 채워지는지 확인한다."""
+    # 4개 전략 전부 HOLD → 대다수 가드 발동
     ensemble = EnsembleStrategy(
         [
             FixedStrategy(SignalType.HOLD, 0.0),
             FixedStrategy(SignalType.HOLD, 0.0),
-            FixedStrategy(SignalType.SELL, 0.8),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
         ],
         method="weighted",
     )
@@ -268,7 +285,7 @@ def test_weighted_hold_majority_meta_populated() -> None:
     # analyze()에서 HOLD일 때 meta를 채우므로
     assert "method" in result.meta
     assert result.meta["method"] == "weighted"
-    assert len(result.meta["votes"]) == 3
+    assert len(result.meta["votes"]) == 4
 
 
 class FixedMetaStrategy(BaseStrategy):
