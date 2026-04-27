@@ -7,7 +7,7 @@ Cowork 분석가가 작성한 제안서를 검토하고, 안전 게이트를 통
 ### 1. 컨텍스트 로딩
 - CLAUDE.md → 프로젝트 구조, 코딩 컨벤션, 안전 게이트 규칙
 - docs/BRIDGE_SPEC.md → 제안서 규격, 안전 게이트 파라미터 허용 범위
-- docs/CHANGELOG.md → 최근 변경 이력 (제안서 효과 검증에 필요)
+- docs/CHANGELOG.md → 최근 5건 변경 이력 (전체 이력은 DB implementation_logs 테이블)
 
 ### 2. 제안서 확인
 - docs/proposals/에서 상태가 "ready"인 제안서를 모두 읽어
@@ -40,7 +40,8 @@ c) 수동 검토 필요 (구현하지 않음)
    - 전체 테스트 통과 → 다음 단계
    - 테스트 실패 → 변경 롤백, 제안서 상태를 "failed"로 변경, 실패 사유 기록
 5) 제안서 상태를 "implemented"로 변경
-6) docs/CHANGELOG.md에 변경 이력 추가
+6) DB implementation_logs 테이블에 구현 이력 기록 (ImplementationLogRepository.create())
+7) docs/CHANGELOG.md rolling 갱신 (최근 5건만 유지 — 가장 오래된 항목 제거 후 새 항목 맨 위 추가)
 
 ### 5. 에러 수정 우선순위
 제안서 중 아래 키워드가 포함된 것을 최우선 처리:

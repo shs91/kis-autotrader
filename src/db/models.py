@@ -391,6 +391,48 @@ class TaskQueue(Base):
         )
 
 
+class ImplementationCategory(enum.Enum):
+    """자동 구현 카테고리."""
+
+    BUG_FIX = "bug_fix"
+    REFACTOR = "refactor"
+    PARAM_TUNING = "param_tuning"
+    FEATURE = "feature"
+    ENHANCEMENT = "enhancement"
+    PERFORMANCE = "performance"
+    DOCS = "docs"
+    CONFIG = "config"
+
+
+class ImplementationLog(Base):
+    """자동 구현 변경 이력 테이블 (CHANGELOG 대체)."""
+
+    __tablename__ = "implementation_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    category: Mapped[ImplementationCategory] = mapped_column(
+        SAEnum(ImplementationCategory, name="impl_category_enum"), nullable=False
+    )
+    proposal_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    changed_files: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    background: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_effect: Mapped[str | None] = mapped_column(Text, nullable=True)
+    implemented_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ImplementationLog(id={self.id}, title={self.title!r}, "
+            f"category={self.category.value})>"
+        )
+
+
 class DailySummary(Base):
     """일일 요약 테이블 (리포트용 집계)."""
 

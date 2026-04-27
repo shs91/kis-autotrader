@@ -15,6 +15,8 @@ from src.db.models import (
     EventLevel,
     EventLog,
     Execution,
+    ImplementationCategory,
+    ImplementationLog,
     Order,
     OrderStatus,
     OrderType,
@@ -1018,3 +1020,98 @@ class DailySummaryRepository:
         """
         stmt = select(DailySummary).where(DailySummary.report_date == report_date)
         return self._session.execute(stmt).scalar_one_or_none()
+
+
+class ImplementationLogRepository:
+    """자동 구현 변경 이력 데이터 접근 클래스."""
+
+    def __init__(self, session: Session) -> None:
+        """초기화.
+
+        Args:
+            session: SQLAlchemy 세션
+        """
+        self._session = session
+
+    def create(
+        self,
+        *,
+        title: str,
+        category: ImplementationCategory,
+        implemented_at: datetime,
+        proposal_path: str | None = None,
+        changed_files: dict | None = None,
+        verification: dict | None = None,
+        background: str | None = None,
+        expected_effect: str | None = None,
+    ) -> ImplementationLog:
+        """구현 이력을 기록한다.
+
+        Args:
+            title: 변경 제목
+            category: 카테고리 (bug_fix, refactor 등)
+            implemented_at: 구현 시각
+            proposal_path: 제안서 경로
+            changed_files: 변경 파일 목록 (JSON)
+            verification: 검증 결과 (JSON)
+            background: 배경 설명
+            expected_effect: 기대 효과
+
+        Returns:
+            생성된 ImplementationLog 객체
+        """
+        log = ImplementationLog(
+            title=title,
+            category=category,
+            implemented_at=implemented_at,
+            proposal_path=proposal_path,
+            changed_files=changed_files,
+            verification=verification,
+            background=background,
+            expected_effect=expected_effect,
+        )
+        self._session.add(log)
+        self._session.flush()
+        logger.info("구현 이력 기록: %s (%s)", title, category.value)
+        return log
+
+    def list_recent(self, limit: int = 5) -> list[ImplementationLog]:
+        """최근 구현 이력을 조회한다.
+
+        Args:
+            limit: 조회 건수
+
+        Returns:
+            구현 이력 리스트 (최신순)
+        """
+        stmt = (
+            select(ImplementationLog)
+            .order_by(ImplementationLog.implemented_at.desc())
+            .limit(limit)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def list_by_category(
+        self, category: ImplementationCategory
+    ) -> list[ImplementationLog]:
+        """카테고리별 구현 이력을 조회한다.
+
+        Args:
+            category: 카테고리
+
+        Returns:
+            구현 이력 리스트 (최신순)
+        """
+        stmt = (
+            select(ImplementationLog)
+            .where(ImplementationLog.category == category)
+            .order_by(ImplementationLog.implemented_at.desc())
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def count(self) -> int:
+        """전체 구현 이력 건수를 반환한다."""
+        result = self._session.execute(
+            sa_select(func.count()).select_from(ImplementationLog)
+        ).scalar_one()
+        return int(result)

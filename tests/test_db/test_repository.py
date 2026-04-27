@@ -9,10 +9,12 @@ from sqlalchemy import JSON, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.db.models import Base, OrderStatus, OrderType, SellReason, TradeType
+from src.db.models import ImplementationCategory
 from src.db.repository import (
     DailyPerformanceRepository,
     DailySummaryRepository,
     ExecutionRepository,
+    ImplementationLogRepository,
     OrderRepository,
     PortfolioRepository,
     ScreeningResultRepository,
@@ -597,3 +599,78 @@ class TestDailySummaryRepository:
 
         not_found = repo.get_by_date(date(2026, 4, 8))
         assert not_found is None
+
+
+class TestImplementationLogRepository:
+    """ImplementationLogRepository 테스트."""
+
+    def test_create(self, session: Session) -> None:
+        """구현 이력을 생성한다."""
+        repo = ImplementationLogRepository(session)
+        log = repo.create(
+            title="버그 수정 — 종목명 누락",
+            category=ImplementationCategory.BUG_FIX,
+            implemented_at=datetime(2026, 4, 14, 21, 0),
+            proposal_path="docs/proposals/2026-04-14_stock-name-fix.md",
+            changed_files={"src/engine.py": "fallback 로직 추가"},
+            verification={"summary": "pytest ✅ | mypy ✅ | ruff ✅"},
+        )
+        session.commit()
+
+        assert log.id is not None
+        assert log.title == "버그 수정 — 종목명 누락"
+        assert log.category == ImplementationCategory.BUG_FIX
+        assert log.changed_files is not None
+        assert "src/engine.py" in log.changed_files
+
+    def test_list_recent(self, session: Session) -> None:
+        """최근 이력을 조회한다."""
+        repo = ImplementationLogRepository(session)
+        for i in range(7):
+            repo.create(
+                title=f"변경 #{i}",
+                category=ImplementationCategory.ENHANCEMENT,
+                implemented_at=datetime(2026, 4, 1 + i, 21, 0),
+            )
+        session.commit()
+
+        recent = repo.list_recent(limit=5)
+        assert len(recent) == 5
+        assert recent[0].title == "변경 #6"  # 최신순
+
+    def test_list_by_category(self, session: Session) -> None:
+        """카테고리별 이력을 조회한다."""
+        repo = ImplementationLogRepository(session)
+        repo.create(
+            title="버그 A",
+            category=ImplementationCategory.BUG_FIX,
+            implemented_at=datetime(2026, 4, 1, 21, 0),
+        )
+        repo.create(
+            title="리팩토링 B",
+            category=ImplementationCategory.REFACTOR,
+            implemented_at=datetime(2026, 4, 2, 21, 0),
+        )
+        repo.create(
+            title="버그 C",
+            category=ImplementationCategory.BUG_FIX,
+            implemented_at=datetime(2026, 4, 3, 21, 0),
+        )
+        session.commit()
+
+        bugs = repo.list_by_category(ImplementationCategory.BUG_FIX)
+        assert len(bugs) == 2
+        assert all(b.category == ImplementationCategory.BUG_FIX for b in bugs)
+
+    def test_count(self, session: Session) -> None:
+        """전체 건수를 반환한다."""
+        repo = ImplementationLogRepository(session)
+        assert repo.count() == 0
+
+        repo.create(
+            title="변경 1",
+            category=ImplementationCategory.CONFIG,
+            implemented_at=datetime(2026, 4, 1, 21, 0),
+        )
+        session.commit()
+        assert repo.count() == 1

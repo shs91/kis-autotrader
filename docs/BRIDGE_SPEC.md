@@ -437,19 +437,25 @@ python scripts/query_analytics.py risk --days 30
 > **참고**: `stop_loss`·`take_profit`·`strategy`의 `avg`/`min`/`max`/`median` 단위는 **수익률 %** (예: -2.15 = -2.15%).
 > `recommendation`의 `stop_loss_rate`·`take_profit_rate`는 **비율** (예: 0.0215 = 2.15%)로, `config.py`의 `MAX_LOSS_RATE`·`TAKE_PROFIT_RATIO` 형식과 동일합니다.
 
-## CHANGELOG 규격
+## 구현 이력 기록 규격
 
-Claude Code가 자동으로 기록:
+구현 이력은 **두 곳**에 기록한다:
 
-```markdown
-## [YYYY-MM-DD HH:MM] 제안 제목
-- 제안서: docs/proposals/YYYY-MM-DD_제목.md
-- 카테고리: param_tuning
-- 변경 파일:
-  - src/파일.py: 변경 요약
-- 검증 결과: pytest ✅ | mypy ✅ | ruff ✅
-- 프로세스 재시작: ✅
-```
+### 1. DB (`implementation_logs` 테이블) — 영구 저장소
+Claude Code가 구현 완료 시 `ImplementationLogRepository.create()`로 기록:
+- `title`: 변경 제목
+- `category`: bug_fix / refactor / param_tuning / feature / enhancement / performance / docs / config
+- `proposal_path`: 제안서 경로
+- `changed_files`: 변경 파일 목록 (JSON: `{"src/파일.py": "변경 요약"}`)
+- `verification`: 검증 결과 (JSON: `{"summary": "pytest ✅ | mypy ✅ | ruff ✅"}`)
+- `background`: 배경 설명
+- `expected_effect`: 기대 효과
+- `implemented_at`: 구현 시각
+
+### 2. `docs/CHANGELOG.md` — 최근 5건 rolling summary
+- 가장 오래된 항목을 제거하고 새 항목을 맨 위에 추가
+- Cowork 컨텍스트 로딩용 (전체 이력은 DB 조회)
+- 기존 CHANGELOG 마크다운 형식 유지
 
 ## Claude Code 자동 구현 흐름
 
@@ -461,7 +467,7 @@ Claude Code가 자동으로 기록:
    b. 위반 시 → skipped 처리, 위반 사유 기록, 다음 제안서로
    c. 통과 시 → 변경 스펙에 따라 코드 수정
    d. pytest + mypy + ruff 실행
-   e. 전부 pass → implemented 처리, CHANGELOG 기록
+   e. 전부 pass → implemented 처리, DB implementation_logs 기록 + CHANGELOG rolling 갱신
    f. 하나라도 fail → git restore로 원복, failed 처리, 실패 사유 기록
 3. implemented된 제안서가 1개 이상이면:
    a. launchctl stop com.kis.autotrader
