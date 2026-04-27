@@ -342,6 +342,133 @@ class TestRecordEvalTargets:
             assert len(detail["targets"]) == engine._EVAL_TARGETS_MAX_CODES
             assert detail["truncated"] is True
 
+
+# ── SIGNAL_SUMMARY 메트릭 테스트 (proposal 2026-04-27) ──────
+
+
+class TestSignalSummaryMetric:
+    """사이클 종료 시 SIGNAL_SUMMARY 메트릭 기록 테스트."""
+
+    @pytest.mark.asyncio
+    async def test_signal_summary_recorded_after_cycle(self) -> None:
+        """사이클 실행 후 SIGNAL_SUMMARY 메트릭이 enqueue된다."""
+        engine = _make_engine()
+        engine._cycle_count = 0
+
+        engine._client.circuit_breaker.is_open = False
+        mock_risk = MagicMock()
+        mock_risk.is_portfolio_halted = False
+        mock_risk.check_daily_trade_limit.return_value = False
+        engine._risk = mock_risk
+
+        balance = MagicMock()
+        balance.deposit = 10_000_000
+        balance.holdings = []
+        engine._get_balance = AsyncMock(return_value=balance)
+
+        # _screened_codes에 종목을 넣어 evaluated > 0 이 되도록 mock
+        engine._screened_codes = {"005930", "000660"}
+
+        async def fake_process(
+            code: str, deposit: object, is_held: object, holding: object,
+        ) -> None:
+            engine._cycle_buy_count += 1
+            engine._cycle_max_confidence = max(
+                engine._cycle_max_confidence, 0.75,
+            )
+
+        engine._process_stock = AsyncMock(side_effect=fake_process)
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            await engine.run_trading_cycle()
+
+        summary_calls = [
+            c for c in mock_enqueue.call_args_list
+            if c.kwargs.get("task_type") == "record_metric"
+            and c.kwargs.get("payload", {}).get("metric_type") == "SIGNAL_SUMMARY"
+        ]
+        assert len(summary_calls) == 1
+        detail = summary_calls[0].kwargs["payload"]["detail"]
+        assert detail["cycle"] == 1
+        expected = detail["buy_count"] + detail["sell_count"] + detail["hold_count"]
+        assert detail["evaluated"] == expected
+        assert "max_confidence" in detail
+        assert "screened_count" in detail
+
+    @pytest.mark.asyncio
+    async def test_signal_summary_contains_all_keys(self) -> None:
+        """SIGNAL_SUMMARY detail에 필수 키가 모두 존재한다."""
+        engine = _make_engine()
+        engine._cycle_count = 0
+
+        engine._client.circuit_breaker.is_open = False
+        mock_risk = MagicMock()
+        mock_risk.is_portfolio_halted = False
+        mock_risk.check_daily_trade_limit.return_value = False
+        engine._risk = mock_risk
+
+        balance = MagicMock()
+        balance.deposit = 10_000_000
+        balance.holdings = []
+        engine._get_balance = AsyncMock(return_value=balance)
+
+        engine._screened_codes = {"005930"}
+
+        async def fake_process(
+            code: str, deposit: object, is_held: object, holding: object,
+        ) -> None:
+            engine._cycle_hold_count += 1
+
+        engine._process_stock = AsyncMock(side_effect=fake_process)
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            await engine.run_trading_cycle()
+
+        summary_calls = [
+            c for c in mock_enqueue.call_args_list
+            if c.kwargs.get("task_type") == "record_metric"
+            and c.kwargs.get("payload", {}).get("metric_type") == "SIGNAL_SUMMARY"
+        ]
+        assert len(summary_calls) == 1
+        detail = summary_calls[0].kwargs["payload"]["detail"]
+        expected_keys = {
+            "cycle", "evaluated", "buy_count", "sell_count",
+            "hold_count", "max_confidence", "screened_count",
+        }
+        assert set(detail.keys()) == expected_keys
+
+    @pytest.mark.asyncio
+    async def test_no_signal_summary_when_zero_evaluated(self) -> None:
+        """평가 종목 0건이면 SIGNAL_SUMMARY가 기록되지 않는다."""
+        engine = _make_engine()
+        engine._cycle_count = 0
+
+        engine._client.circuit_breaker.is_open = False
+        mock_risk = MagicMock()
+        mock_risk.is_portfolio_halted = False
+        mock_risk.check_daily_trade_limit.return_value = False
+        engine._risk = mock_risk
+
+        balance = MagicMock()
+        balance.deposit = 10_000_000
+        balance.holdings = []
+        engine._get_balance = AsyncMock(return_value=balance)
+
+        # 스크리닝 종목 없음 → 평가 대상 0건
+        engine._screened_codes = set()
+        engine._process_stock = AsyncMock()
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            await engine.run_trading_cycle()
+
+        summary_calls = [
+            c for c in mock_enqueue.call_args_list
+            if c.kwargs.get("task_type") == "record_metric"
+            and c.kwargs.get("payload", {}).get("metric_type") == "SIGNAL_SUMMARY"
+        ]
+        assert len(summary_calls) == 0
+
+
     @pytest.mark.asyncio
     async def test_cycle_emits_eval_targets(self) -> None:
         """run_trading_cycle 실행 시 EVAL_TARGETS 메트릭이 enqueue된다."""

@@ -402,6 +402,15 @@ class TradingEngine:
                     self._cycle_max_confidence,
                     len(self._screened_codes),
                 )
+                self._record_metric("SIGNAL_SUMMARY", {
+                    "cycle": self._cycle_count,
+                    "evaluated": total_evaluated,
+                    "buy_count": self._cycle_buy_count,
+                    "sell_count": self._cycle_sell_count,
+                    "hold_count": self._cycle_hold_count,
+                    "max_confidence": round(self._cycle_max_confidence, 4),
+                    "screened_count": len(self._screened_codes),
+                })
         finally:
             limiter = self._client._limiter
             self._record_metric("CYCLE_END", {

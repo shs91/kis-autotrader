@@ -5,6 +5,16 @@
 
 ---
 
+## [2026-04-27 21:00] 시그널 가뭄 진단 정보 DB 적재 — SIGNAL_SUMMARY 메트릭
+- 제안서: docs/proposals/2026-04-27_signal-diagnosis-db-persistence.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: 사이클 종료 시 `_record_metric("SIGNAL_SUMMARY", {...})` 호출 추가. cycle/evaluated/buy_count/sell_count/hold_count/max_confidence/screened_count를 system_metrics 테이블에 기록.
+  - tests/test_engine_db_integration.py: `TestSignalSummaryMetric` 클래스 추가 (사이클 후 SIGNAL_SUMMARY 기록 검증, 필수 키 존재 검증, 평가 0건 시 미기록 검증 — 3개 테스트).
+- 검증 결과: pytest ✅ (414 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
+
+---
+
 ## [2026-04-24 21:00] 시그널 가뭄 진단 로깅 추가
 - 제안서: docs/proposals/2026-04-24_signal-drought-diagnosis-logging.md
 - 카테고리: bug_fix
