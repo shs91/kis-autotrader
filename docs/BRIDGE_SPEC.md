@@ -442,7 +442,7 @@ python scripts/query_analytics.py risk --days 30
 구현 이력은 **두 곳**에 기록한다:
 
 ### 1. DB (`implementation_logs` 테이블) — 영구 저장소
-Claude Code가 구현 완료 시 `ImplementationLogRepository.create()`로 기록:
+Claude Code가 구현 완료 시 `scripts/record_implementation.py`를 실행하여 기록:
 - `title`: 변경 제목
 - `category`: bug_fix / refactor / param_tuning / feature / enhancement / performance / docs / config
 - `proposal_path`: 제안서 경로

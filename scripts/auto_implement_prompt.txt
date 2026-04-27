@@ -40,7 +40,18 @@ c) 수동 검토 필요 (구현하지 않음)
    - 전체 테스트 통과 → 다음 단계
    - 테스트 실패 → 변경 롤백, 제안서 상태를 "failed"로 변경, 실패 사유 기록
 5) 제안서 상태를 "implemented"로 변경
-6) DB implementation_logs 테이블에 구현 이력 기록 (ImplementationLogRepository.create())
+6) DB에 구현 이력 기록 — 아래 스크립트를 Bash로 실행:
+   ```
+   .venv/bin/python scripts/record_implementation.py \
+     --title "제안서 제목" \
+     --category bug_fix \
+     --proposal "docs/proposals/YYYY-MM-DD_제목.md" \
+     --files '{"src/파일.py": "변경 요약", "tests/파일.py": "테스트 추가"}' \
+     --verification "pytest ✅ (N passed) | mypy ✅ | ruff ✅" \
+     --background "배경 설명 (선택)" \
+     --effect "기대 효과 (선택)"
+   ```
+   카테고리: bug_fix, refactor, param_tuning, feature, enhancement, performance, docs, config
 7) docs/CHANGELOG.md rolling 갱신 (최근 5건만 유지 — 가장 오래된 항목 제거 후 새 항목 맨 위 추가)
 
 ### 5. 에러 수정 우선순위

@@ -436,7 +436,7 @@ scripts/run_dashboard.sh
 소스 코드를 수정할 때 아래 문서를 반드시 함께 업데이트할 것:
 
 ### 1. 구현 이력 기록 (필수)
-- **모든 코드 변경 시** `implementation_logs` DB 테이블에 기록한다 (`ImplementationLogRepository.create()`).
+- **모든 코드 변경 시** `scripts/record_implementation.py`를 실행하여 DB에 기록한다.
 - `docs/CHANGELOG.md`는 **최근 5건 rolling summary**만 유지 — 새 항목 추가 시 가장 오래된 항목 제거.
 - 커밋 전에 반드시 DB 기록 + CHANGELOG rolling 갱신 완료할 것.
 
