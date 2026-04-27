@@ -15,8 +15,9 @@ docs/prompts/
 ├── _common_rules.md          ← 공통 규칙 (타임존, enum, 수익률/승률 정의, 임계값)
 ├── daily_routine.md          ← [Code] 일간 자동 분석 (launchd, 평일 16:30)
 ├── weekly_routine.md         ← [Code] 주간 자동 통계 (launchd, 금 18:00)
-├── weekly_review.md          ← [Cowork] 주간 해석·판단 (토요일, 수동)
-├── monthly_review.md         ← [Cowork] 월간 전략 논의 (마지막 금/주말, 수동)
+├── weekend_review.md         ← [Cowork] 통합 진입점 (매주 토요일 스케줄)
+├── weekly_review.md          ← [Cowork] 주간 해석·판단 (weekend_review에서 호출)
+├── monthly_review.md         ← [Cowork] 월간 전략 논의 (마지막주 토요일만 호출)
 ├── daily_analysis.md         ← [레거시] 기존 통합 프롬프트 (참조용 보존)
 ├── weekly_analysis.md        ← [레거시] 기존 통합 프롬프트 (참조용 보존)
 └── monthly_analysis.md       ← [레거시] 기존 통합 프롬프트 (참조용 보존)
@@ -48,23 +49,24 @@ docs/prompts/
          ├─ docs/reports/YYYY-Www_weekly.md 생성 (통계 섹션만)
          └─ "중기 아키텍처 논의" 섹션은 데이터만 채우고 판단 비워둠
 
-토/일  [Cowork] weekly_review.md (사용자 시간 될 때)
-         ├─ 주간 리포트의 빈 섹션 채우기
+토     [Cowork] weekend_review.md (매주 토요일 스케줄)
+         ├─ 주간 리포트의 빈 섹션 채우기 (weekly_review.md)
          ├─ 이전 제안서 효과 검증
          ├─ 전략 심층 분석 (코드 읽기 포함)
-         └─ 중기 제안서 작성 (사용자 동의 후)
+         ├─ 중기 제안서 작성 (사용자 동의 후)
+         └─ [마지막주만] 월간 리뷰 추가 수행 (monthly_review.md)
 ```
 
-### 월말 (자동 + 수동)
+### 월말 (마지막주 토요일)
 
 ```
-마지막 금  주간 루틴 실행 시 월말 데이터도 자연스럽게 포함
-
-주말     [Cowork] monthly_review.md (사용자와 대화)
-           ├─ 월간 쿼리 실행 + 주간 리포트 종합
-           ├─ 전략 유효성 검증 (MA, 리스크 파라미터)
-           ├─ 사용자와 전략 방향 논의
-           └─ docs/reports/YYYY-MM_monthly.md + 전략 제안서
+마지막주 토요일에는 weekend_review.md가 월간 리뷰도 함께 트리거:
+  ├─ 주간 리뷰 (항상)
+  └─ 월간 리뷰 (is_last_saturday = true일 때만)
+        ├─ 월간 쿼리 실행 + 주간 리포트 종합
+        ├─ 전략 유효성 검증 (MA, 리스크 파라미터)
+        ├─ 사용자와 전략 방향 논의
+        └─ docs/reports/YYYY-MM_monthly.md + 전략 제안서
 ```
 
 ## Code vs Cowork 분리 기준
@@ -140,17 +142,13 @@ fi
 | 기존 | 변경 후 |
 |------|---------|
 | 일간 스케줄 (매일) | **삭제** — launchd `com.kis.dailyanalysis`로 대체 |
-| 주간 스케줄 (금) | 프롬프트를 `weekly_review.md` 참조로 변경, **스케줄을 토요일로** |
-| 월간 스케줄 (마지막 금) | 프롬프트를 `monthly_review.md` 참조로 변경, **마지막 토/일로** |
+| 주간 스케줄 (금) | **삭제** — 아래 통합 스케줄로 대체 |
+| 월간 스케줄 (마지막 금) | **삭제** — 아래 통합 스케줄로 대체 |
+| (신규) 주말 스케줄 (매주 토) | `weekend_review.md` 참조 (주간+월간 분기) |
 
-Cowork 프롬프트 (주간):
+Cowork 스케줄 **1개만** 등록 (매주 토요일):
 ```
-이 프로젝트의 docs/prompts/weekly_review.md 파일을 읽고 그 지시사항을 수행해.
-```
-
-Cowork 프롬프트 (월간):
-```
-이 프로젝트의 docs/prompts/monthly_review.md 파일을 읽고 그 지시사항을 수행해.
+이 프로젝트의 docs/prompts/weekend_review.md 파일을 읽고 그 지시사항을 수행해.
 ```
 
 ## 레거시 프롬프트

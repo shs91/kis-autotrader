@@ -1,7 +1,19 @@
 # 월간 리뷰 프롬프트 (Cowork 세션용)
 
-> 이 프롬프트는 Cowork에서 대화형으로 실행된다.
-> 스케줄: 매월 마지막 금요일 또는 주말
+> 이 프롬프트는 `weekend_review.md`에서 마지막주 토요일에만 호출된다.
+> 단독 실행 시에는 아래 조건을 직접 확인할 것.
+
+## 실행 조건 (단독 실행 시)
+
+`weekend_review.md` 경유가 아닌 단독 실행 시, 아래 쿼리로 확인한다.
+마지막주 토요일이 아니면 "월간 리뷰 실행 조건 미충족. 종료." 출력 후 종료.
+
+```sql
+SELECT (now() AT TIME ZONE 'Asia/Seoul')::date = (
+  (date_trunc('month', now() AT TIME ZONE 'Asia/Seoul') + INTERVAL '1 month - 1 day')::date
+  - ((EXTRACT(DOW FROM (date_trunc('month', now() AT TIME ZONE 'Asia/Seoul') + INTERVAL '1 month - 1 day'))::int + 1) % 7)
+) AS is_last_saturday;
+```
 
 ## 공통 규칙
 
