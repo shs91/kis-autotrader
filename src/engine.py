@@ -524,6 +524,9 @@ class TradingEngine:
 
         실제 스크리닝(API 호출 + 전략 분석)은 ScreeningWorker가 별도로 수행한다.
         메인 엔진은 DB 결과만 읽어 매매 대상에 추가한다.
+        converted_to_trade 플래그와 무관하게 상위 랭킹 종목을 평가 대상에
+        포함한다 — 엔진이 자체 전략 분석을 수행하므로 Worker의 사전 필터에
+        의존하지 않는다.
         """
         scfg = self._screener.config
         if len(self._screened_codes) >= scfg.max_screened:
@@ -536,10 +539,15 @@ class TradingEngine:
                 results = repo.get_by_date(today)
 
             new_codes: list[str] = []
+            seen: set[str] = set()
             watchlist_set = set(self._get_watchlist_codes())
+            converted_count = 0
             for r in results:
-                if not r.converted_to_trade:
+                if r.converted_to_trade:
+                    converted_count += 1
+                if r.stock_code in seen:
                     continue
+                seen.add(r.stock_code)
                 if r.stock_code in self._screened_codes:
                     continue
                 if r.stock_code in watchlist_set:
@@ -548,6 +556,14 @@ class TradingEngine:
 
             remaining = scfg.max_screened - len(self._screened_codes)
             added = new_codes[:remaining]
+
+            if results:
+                unique_count = len(seen)
+                logger.info(
+                    "스크리닝 DB 조회: %d건 (고유 %d종목, converted %d건)",
+                    len(results), unique_count, converted_count,
+                )
+
             if added:
                 self._screened_codes.update(added)
                 logger.info(
@@ -555,6 +571,11 @@ class TradingEngine:
                     len(added),
                     len(self._screened_codes),
                     scfg.max_screened,
+                )
+            elif results and not added:
+                logger.info(
+                    "스크리닝 결과 반영 0종목 (이미 등록 %d, 관심종목 제외)",
+                    len(self._screened_codes),
                 )
         except Exception:
             logger.exception("스크리닝 결과 DB 조회 실패")

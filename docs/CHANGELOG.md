@@ -1,8 +1,18 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (59건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (61건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-04-28 21:00] 스크리닝→엔진 평가 파이프라인 단절 수정 — converted_to_trade 필터 제거
+- 제안서: docs/proposals/2026-04-28_screening-to-engine-pipeline-fix.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `_screen_stocks()`에서 `converted_to_trade` 필터 제거. 상위 랭킹 종목을 플래그와 무관하게 평가 대상에 포함. 중복 제거(seen set) 추가. 진단 로깅 강화 (DB 조회 건수, 고유 종목수, converted 건수).
+  - tests/test_engine_db_integration.py: 스크리닝 결과 반영 테스트 3건 추가 (unconverted 포함 검증, 중복 제거 검증, max_screened 한도 준수 검증).
+- 검증 결과: pytest ✅ (421 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
 
 ---
 
@@ -42,16 +52,3 @@
   - src/strategy/screener.py: `ScreeningFilter._is_etf_etn()` 정적 메서드 추가 (종목코드 Q 시작 또는 종목명에 KODEX/TIGER/KBSTAR/ARIRANG/SOL/ACE/HANARO/ETN/레버리지/인버스/2X/곱버스 포함 시 필터링). `apply()` 및 `_pass_filter()`에서 ETF/ETN 종목 제외. 필터 로그에 ETF/ETN 제외 건수 추가.
   - tests/test_strategy/test_screener.py: `TestETFFilter` 클래스 추가 (KODEX/TIGER/ETN코드/레버리지 필터링 + 일반 종목 통과 + 통합 필터링 6개 테스트).
 - 검증 결과: pytest ✅ | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-04-24 21:00] 스크리닝 가중치 재조정 + MA 기간 단축 + 최소 신뢰도 하향
-- 제안서:
-  - docs/proposals/2026-04-24_screening-weight-rebalance.md
-  - docs/proposals/2026-04-24_ma-period-shortening.md
-  - docs/proposals/2026-04-24_min-confidence-lowering.md
-- 카테고리: param_tuning
-- 변경 파일:
-  - config_overrides.json: `SCREENING_WEIGHT_VOLUME_RANK` 0.2→0.3, `SCREENING_WEIGHT_CHANGE_RATE` 0.3→0.4, `SCREENING_WEIGHT_STRATEGY` 0.5→0.3 (합계 1.0), `STRATEGY_MA_SHORT_PERIOD` 5→3, `STRATEGY_MIN_CONFIDENCE` 0.1→0.08
-  - tests/test_strategy/test_moving_average.py: `test_default_init` 기대값을 config에서 동적 로드하도록 수정 (config_overrides 영향 반영)
-- 검증 결과: pytest ✅ (411 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅

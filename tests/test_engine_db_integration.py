@@ -470,6 +470,95 @@ class TestSignalSummaryMetric:
 
 
     @pytest.mark.asyncio
+    async def test_screen_stocks_includes_unconverted(self) -> None:
+        """converted_to_trade=False인 스크리닝 결과도 평가 대상에 포함된다."""
+        engine = _make_engine()
+        engine._screened_codes = set()
+        # watchlist을 비워서 관심종목 제외 필터 방지
+        engine._watchlist_codes = []
+
+        # screening_results DB 레코드 mock (모두 converted_to_trade=False)
+        mock_results = []
+        for i, (code, name) in enumerate([
+            ("999001", "테스트A"), ("999002", "테스트B"), ("999003", "테스트C"),
+        ]):
+            r = MagicMock()
+            r.stock_code = code
+            r.stock_name = name
+            r.converted_to_trade = False
+            r.screening_rank = i + 1
+            mock_results.append(r)
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_date.return_value = mock_results
+
+        with patch("src.engine.get_session") as mock_session, \
+             patch("src.engine.ScreeningResultRepository", return_value=mock_repo):
+            mock_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+            await engine._screen_stocks()
+
+        # converted_to_trade 필터 없이 3종목 모두 반영
+        assert engine._screened_codes == {"999001", "999002", "999003"}
+
+    @pytest.mark.asyncio
+    async def test_screen_stocks_deduplicates(self) -> None:
+        """동일 종목이 여러 사이클에 걸쳐 있어도 중복 없이 1회만 반영된다."""
+        engine = _make_engine()
+        engine._screened_codes = set()
+        engine._watchlist_codes = []
+
+        # 같은 종목이 2번 등장 (다른 cycle)
+        mock_results = []
+        for _cycle in [1, 2]:
+            r = MagicMock()
+            r.stock_code = "999001"
+            r.stock_name = "테스트A"
+            r.converted_to_trade = False
+            r.screening_rank = 1
+            mock_results.append(r)
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_date.return_value = mock_results
+
+        with patch("src.engine.get_session") as mock_session, \
+             patch("src.engine.ScreeningResultRepository", return_value=mock_repo):
+            mock_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+            await engine._screen_stocks()
+
+        assert engine._screened_codes == {"999001"}
+
+    @pytest.mark.asyncio
+    async def test_screen_stocks_respects_max_screened(self) -> None:
+        """max_screened 한도를 초과하지 않는다."""
+        engine = _make_engine()
+        engine._screened_codes = set()
+        engine._watchlist_codes = []
+        engine._screener._config = MagicMock()
+        engine._screener._config.max_screened = 2
+
+        mock_results = []
+        for i, code in enumerate(["999001", "999002", "999003"]):
+            r = MagicMock()
+            r.stock_code = code
+            r.stock_name = f"종목{i}"
+            r.converted_to_trade = False
+            r.screening_rank = i + 1
+            mock_results.append(r)
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_date.return_value = mock_results
+
+        with patch("src.engine.get_session") as mock_session, \
+             patch("src.engine.ScreeningResultRepository", return_value=mock_repo):
+            mock_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+            await engine._screen_stocks()
+
+        assert len(engine._screened_codes) == 2
+
+    @pytest.mark.asyncio
     async def test_cycle_emits_eval_targets(self) -> None:
         """run_trading_cycle 실행 시 EVAL_TARGETS 메트릭이 enqueue된다."""
         engine = _make_engine()
