@@ -1,8 +1,17 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (61건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (62건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-04-29 17:00] auto-implement 후 서비스 재시작 누락 수정
+- 제안서: docs/proposals/2026-04-29_auto-implement-service-restart.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - scripts/run_auto_implement.sh: Claude Code 실행 후 로그에서 `implemented` 감지 시 `launchctl stop/start com.kis.autotrader` 재시작 로직 추가. 10초 후 프로세스 상태 확인. 미구현 시 재시작 스킵.
+- 검증 결과: pytest ✅ (421 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
 
 ---
 
@@ -41,14 +50,4 @@
 - 변경 파일:
   - src/strategy/ensemble.py: `_weighted_vote` 내 HOLD 가드 임계값 `len(signals) / 2` → `len(signals) * 3 / 4` 변경. 4개 전략 중 3개 HOLD + 1개 BUY 시 weighted vote 진행 허용.
   - tests/test_strategy/test_ensemble.py: HOLD 과반 가드 테스트를 새 임계값(75%)에 맞게 수정. `test_weighted_hold_3_of_4_passes_through` 테스트 추가.
-- 검증 결과: pytest ✅ | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-04-24 21:00] 스크리너 ETF/ETN/레버리지 종목 필터링 추가
-- 제안서: docs/proposals/2026-04-24_screener-etf-filter.md
-- 카테고리: refactor
-- 변경 파일:
-  - src/strategy/screener.py: `ScreeningFilter._is_etf_etn()` 정적 메서드 추가 (종목코드 Q 시작 또는 종목명에 KODEX/TIGER/KBSTAR/ARIRANG/SOL/ACE/HANARO/ETN/레버리지/인버스/2X/곱버스 포함 시 필터링). `apply()` 및 `_pass_filter()`에서 ETF/ETN 종목 제외. 필터 로그에 ETF/ETN 제외 건수 추가.
-  - tests/test_strategy/test_screener.py: `TestETFFilter` 클래스 추가 (KODEX/TIGER/ETN코드/레버리지 필터링 + 일반 종목 통과 + 통합 필터링 6개 테스트).
 - 검증 결과: pytest ✅ | mypy: pre-existing 에러만 | ruff ✅

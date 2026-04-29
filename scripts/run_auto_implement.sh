@@ -26,6 +26,23 @@ cd "$PROJECT_DIR"
 
 echo "=== Auto-implement finished at $(date) ===" >> "$LOG_FILE"
 
+# 구현 성공 시 서비스 재시작 (BRIDGE_SPEC 규격)
+if grep -q "implemented" "$LOG_FILE" 2>/dev/null; then
+  echo "=== Service restart started at $(date) ===" >> "$LOG_FILE"
+  launchctl stop com.kis.autotrader 2>> "$LOG_FILE" || true
+  sleep 5
+  launchctl start com.kis.autotrader 2>> "$LOG_FILE" || true
+  sleep 10
+  if launchctl list 2>/dev/null | grep -q "com.kis.autotrader"; then
+    echo "서비스 재시작 완료" >> "$LOG_FILE"
+  else
+    echo "서비스 재시작 실패 — 수동 확인 필요" >> "$LOG_FILE"
+  fi
+  echo "=== Service restart finished at $(date) ===" >> "$LOG_FILE"
+else
+  echo "구현된 제안서 없음 — 재시작 스킵" >> "$LOG_FILE"
+fi
+
 # 패치노트 Google Calendar 등록
 echo "=== Patch note event started at $(date) ===" >> "$LOG_FILE"
 "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/create_patch_note_event.py" \
