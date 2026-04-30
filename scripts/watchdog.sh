@@ -13,9 +13,13 @@ PROJECT_DIR="$HOME/IdeaProjects/kis-autotrader"
 LOG_FILE="$PROJECT_DIR/logs/autotrader.out.log"
 WATCHDOG_LOG="$PROJECT_DIR/logs/watchdog.log"
 WATCHDOG_STATE="$PROJECT_DIR/logs/.watchdog_state"
+RESTART_COUNT_FILE="$PROJECT_DIR/logs/.watchdog_restart_count"
+HEAL_LOCK_FILE="$PROJECT_DIR/logs/.auto_heal_today"
 SERVICE_NAME="com.kis.autotrader"
 HEALTH_URL="http://localhost:18923/health"
 STALE_THRESHOLD=300  # 초 (5분)
+RESTART_THRESHOLD=3  # 이 횟수 이상 재시작 시 auto-heal 트리거
+RESTART_WINDOW=1800  # 30분 (초)
 
 mkdir -p "$PROJECT_DIR/logs"
 
@@ -29,6 +33,51 @@ import asyncio
 from src.notify.telegram import TelegramNotifier
 asyncio.run(TelegramNotifier().notify_error('Watchdog', '$1'))
 " 2>/dev/null || true
+}
+
+increment_restart_count() {
+    local now
+    now=$(date +%s)
+    local count=0
+    local first_ts="$now"
+
+    if [ -f "$RESTART_COUNT_FILE" ]; then
+        first_ts=$(head -1 "$RESTART_COUNT_FILE")
+        count=$(tail -1 "$RESTART_COUNT_FILE")
+        local elapsed=$((now - first_ts))
+        if [ "$elapsed" -gt "$RESTART_WINDOW" ]; then
+            # 윈도우 초과 — 카운터 리셋
+            first_ts="$now"
+            count=0
+        fi
+    fi
+
+    count=$((count + 1))
+    printf '%s\n%s\n' "$first_ts" "$count" > "$RESTART_COUNT_FILE"
+    echo "$count"
+}
+
+trigger_auto_heal() {
+    local reason="$1"
+    # 하루 1회 제한
+    if [ -f "$HEAL_LOCK_FILE" ]; then
+        local lock_date
+        lock_date=$(cat "$HEAL_LOCK_FILE")
+        if [ "$lock_date" = "$TODAY" ]; then
+            log "AUTO-HEAL 스킵: 오늘 이미 실행됨"
+            notify_telegram "반복 장애 지속 중이지만 오늘 auto-heal은 이미 실행되었습니다. 수동 확인이 필요합니다."
+            return
+        fi
+    fi
+
+    log "AUTO-HEAL 트리거: $reason"
+    echo "$TODAY" > "$HEAL_LOCK_FILE"
+    notify_telegram "반복 장애 감지 ($reason). 자동 진단/수정을 시작합니다."
+
+    # auto_heal.sh를 백그라운드로 실행 (watchdog 타임아웃 방지)
+    nohup "$PROJECT_DIR/scripts/auto_heal.sh" "$reason" >> "$WATCHDOG_LOG" 2>&1 &
+    # 재시작 카운터 초기화
+    rm -f "$RESTART_COUNT_FILE"
 }
 
 restart_service() {
@@ -45,15 +94,29 @@ restart_service() {
         log "재시작 성공"
         # 상태 파일 초기화 (재시작 후 첫 사이클 대기)
         rm -f "$WATCHDOG_STATE"
+
+        # 반복 재시작 감지
+        local restart_count
+        restart_count=$(increment_restart_count)
+        log "재시작 카운트: ${restart_count}/${RESTART_THRESHOLD} (최근 ${RESTART_WINDOW}초)"
+        if [ "$restart_count" -ge "$RESTART_THRESHOLD" ]; then
+            trigger_auto_heal "${RESTART_WINDOW}초 내 ${restart_count}회 재시작 감지 — 원인: $reason"
+        fi
     else
         log "ERROR: 재시작 실패"
+        # 재시작 자체가 실패한 경우도 카운트
+        local restart_count
+        restart_count=$(increment_restart_count)
+        if [ "$restart_count" -ge "$RESTART_THRESHOLD" ]; then
+            trigger_auto_heal "재시작 실패 ${restart_count}회 — 원인: $reason"
+        fi
     fi
 }
 
 # 주말 체크 (토요일=6, 일요일=7)
 DAY_OF_WEEK=$(date +%u)  # 1=월 ~ 7=일
 if [ "$DAY_OF_WEEK" -ge 6 ]; then
-    rm -f "$WATCHDOG_STATE"
+    rm -f "$WATCHDOG_STATE" "$RESTART_COUNT_FILE"
     exit 0
 fi
 
@@ -62,7 +125,7 @@ TODAY=$(date +%Y-%m-%d)
 HOLIDAYS_FILE="$PROJECT_DIR/holidays.json"
 if [ -f "$HOLIDAYS_FILE" ]; then
     if python3 -c "import json,sys; sys.exit(0 if '$TODAY' in json.load(open('$HOLIDAYS_FILE'))['holidays'] else 1)" 2>/dev/null; then
-        rm -f "$WATCHDOG_STATE"
+        rm -f "$WATCHDOG_STATE" "$RESTART_COUNT_FILE"
         exit 0
     fi
 fi
@@ -76,7 +139,7 @@ MARKET_CLOSE=$((15 * 60 + 20)) # 15:20
 
 if [ "$CURRENT_MIN" -lt "$MARKET_OPEN" ] || [ "$CURRENT_MIN" -gt "$MARKET_CLOSE" ]; then
     # 장외 시간 — 상태 파일 초기화 후 종료
-    rm -f "$WATCHDOG_STATE"
+    rm -f "$WATCHDOG_STATE" "$RESTART_COUNT_FILE"
     exit 0
 fi
 

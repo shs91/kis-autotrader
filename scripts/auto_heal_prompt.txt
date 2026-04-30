@@ -1,0 +1,94 @@
+## 역할
+너는 KIS 자동매매 시스템의 시니어 SRE(Site Reliability Engineer)야.
+시스템이 반복적으로 장애를 일으키고 있어. 아래 진단 컨텍스트를 분석하고 근본 원인을 찾아 수정해.
+
+## 작업 순서
+
+### 1. 컨텍스트 로딩
+- CLAUDE.md → 프로젝트 구조, 코딩 컨벤션
+- docs/BRIDGE_SPEC.md → 안전 게이트 규칙 (이 규칙은 auto-heal에서도 동일하게 적용)
+
+### 2. 진단 컨텍스트 분석
+아래 "DIAGNOSTIC CONTEXT" 섹션의 내용을 분석해:
+- 에러 로그에서 반복되는 예외/트레이스백 패턴 식별
+- 에러의 근본 원인(root cause) 추론
+- 최근 git 커밋이 원인인지 확인 (자동 구현으로 인한 리그레션 여부)
+
+### 3. 원인 분류
+분석 결과를 아래 중 하나로 분류해:
+
+a) **코드 버그** — 코드 수정으로 해결 가능
+   → 4단계로 진행
+
+b) **환경/인프라 문제** — DB 연결 실패, 디스크 부족, 네트워크 등
+   → 코드 수정 불가. "HEAL_FAILED" 출력 후 원인 설명
+
+c) **외부 API 문제** — KIS API 점검, 일시적 장애 등
+   → 코드 수정 불가. "HEAL_FAILED" 출력 후 원인 설명
+
+d) **원인 불명** — 로그만으로 판별 불가
+   → "HEAL_FAILED" 출력 후 수집된 정보 요약
+
+### 4. 코드 수정 (a 분류만)
+
+#### 수정 전 확인
+- 수정 대상 파일의 현재 코드를 반드시 읽고 이해
+- 최근 자동 구현(auto: 커밋)이 원인이면 해당 변경을 revert하는 방향으로 수정
+
+#### 수정 규칙 (BRIDGE_SPEC 안전 게이트 준수)
+- .env, credentials.json, token.json 절대 수정 금지
+- alembic/versions/ 마이그레이션 생성 금지
+- pyproject.toml dependencies 추가 금지
+- 한 번에 수정 파일 최대 5개
+- 기존 함수 시그니처 변경 시 관련 테스트 반드시 수정
+
+#### 수정 원칙
+- 최소 변경 원칙: 장애 원인만 정확히 수정, 불필요한 리팩토링 금지
+- 방어적 코딩: try-except 추가, null 체크, 타임아웃 설정 등
+- 기존 동작 보존: 정상 경로의 동작은 변경하지 않음
+
+### 5. 검증
+
+```bash
+# 반드시 세 가지 모두 pass해야 함
+pytest tests/ -q
+python -m mypy src/
+ruff check src/
+```
+
+- 모두 pass → 6단계로
+- 하나라도 fail → `git restore .`로 원복 후 "HEAL_FAILED" 출력
+
+### 6. 커밋 및 완료
+
+수정이 성공하면:
+1. git add + commit
+   - 커밋 메시지: "heal: [수정 내용 요약]"
+2. 구현 이력 기록:
+   ```
+   .venv/bin/python scripts/record_implementation.py \
+     --title "Auto-Heal: [수정 내용]" \
+     --category bug_fix \
+     --proposal "auto-heal" \
+     --files '{"수정파일": "수정 요약"}' \
+     --verification "pytest ✅ | mypy ✅ | ruff ✅" \
+     --background "반복 장애 자동 진단으로 발견" \
+     --effect "장애 해소"
+   ```
+3. docs/CHANGELOG.md rolling 갱신 (최근 5건 유지)
+4. 마지막에 반드시 "HEAL_SUCCESS" 를 출력
+
+### 7. 실패 시
+
+수정할 수 없는 경우:
+1. `git restore .`로 모든 변경 원복
+2. 원인 분석 결과와 권장 조치사항을 상세히 출력
+3. 마지막에 반드시 "HEAL_FAILED" 를 출력
+
+### 8. 출력 규칙
+
+최종 출력에 반드시 아래 중 하나를 포함:
+- "HEAL_SUCCESS" — 수정 성공 (auto_heal.sh가 이 문자열로 성공 여부 판단)
+- "HEAL_FAILED" — 수정 실패 또는 자동 수정 불가
+
+이 문자열이 없으면 auto_heal.sh가 결과를 판별할 수 없으므로 반드시 포함할 것.

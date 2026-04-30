@@ -45,9 +45,9 @@
 
 ---
 
-## [2026-04-24 21:00] 시그널 가뭄 진단 로깅 추가
-- 제안서: docs/proposals/2026-04-24_signal-drought-diagnosis-logging.md
-- 카테고리: bug_fix
+## [2026-04-30] 자동 진단/복구 파이프라인 (Auto-Heal) 추가
+- 카테고리: feature
 - 변경 파일:
-  - src/engine.py: 사이클별 전략 평가 카운터(`_cycle_buy_count`, `_cycle_sell_count`, `_cycle_hold_count`, `_cycle_max_confidence`) 추가. 사이클 종료 시 평가 요약 INFO 로그 출력.
-- 검증 결과: pytest ✅ (411 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
+  - scripts/watchdog.sh: 반복 재시작 감지 로직 추가 — 30분 내 3회 이상 재시작 시 `auto_heal.sh` 트리거. `increment_restart_count()`, `trigger_auto_heal()` 함수 추가. 하루 1회 실행 제한. 장외/주말/공휴일 카운터 초기화.
+  - scripts/auto_heal.sh: (신규) 에러로그 + 시스템 상태(DB, 디스크, 메모리, 헬스체크, git) 수집 → Claude Code 진단 세션 호출. 성공(HEAL_SUCCESS) 시 서비스 재시작, 실패(HEAL_FAILED) 시 Telegram 수동 개입 알림.
+  - scripts/auto_heal_prompt.txt: (신규) Claude Code SRE 진단/수정 프롬프트. BRIDGE_SPEC 안전 게이트 준수, 최소 변경 원칙, pytest/mypy/ruff 검증 필수.
