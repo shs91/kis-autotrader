@@ -1,8 +1,18 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (62건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (63건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-04-30 21:00] 스크리닝 DB 조회 타임존 불일치 수정 — get_by_date KST 명시
+- 제안서: docs/proposals/2026-04-30_screening-query-timezone-fix.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/db/repository.py: `get_by_date()`에서 naive datetime → KST timezone-aware datetime으로 변경. `datetime.combine(target_date, ..., tzinfo=kst)` 적용.
+  - tests/test_db/test_repository.py: KST 타임존 기반 get_by_date 테스트 2건 추가 (조회 검증, 타 날짜 제외 검증).
+- 검증 결과: pytest ✅ (423 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
 
 ---
 
@@ -41,13 +51,3 @@
 - 변경 파일:
   - src/engine.py: 사이클별 전략 평가 카운터(`_cycle_buy_count`, `_cycle_sell_count`, `_cycle_hold_count`, `_cycle_max_confidence`) 추가. 사이클 종료 시 평가 요약 INFO 로그 출력.
 - 검증 결과: pytest ✅ (411 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-04-24 21:00] 앙상블 HOLD 과반 가드 임계값 완화 — 50% → 75%
-- 제안서: docs/proposals/2026-04-24_ensemble-hold-threshold-relaxation.md
-- 카테고리: refactor
-- 변경 파일:
-  - src/strategy/ensemble.py: `_weighted_vote` 내 HOLD 가드 임계값 `len(signals) / 2` → `len(signals) * 3 / 4` 변경. 4개 전략 중 3개 HOLD + 1개 BUY 시 weighted vote 진행 허용.
-  - tests/test_strategy/test_ensemble.py: HOLD 과반 가드 테스트를 새 임계값(75%)에 맞게 수정. `test_weighted_hold_3_of_4_passes_through` 테스트 추가.
-- 검증 결과: pytest ✅ | mypy: pre-existing 에러만 | ruff ✅

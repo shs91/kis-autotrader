@@ -836,7 +836,9 @@ class ScreeningResultRepository:
         Returns:
             스크리닝 결과 리스트
         """
-        start = datetime.combine(target_date, datetime.min.time())
+        from zoneinfo import ZoneInfo
+        kst = ZoneInfo("Asia/Seoul")
+        start = datetime.combine(target_date, datetime.min.time(), tzinfo=kst)
         end = start + timedelta(days=1)
         stmt = (
             select(ScreeningResult)

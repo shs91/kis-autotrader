@@ -468,6 +468,48 @@ class TestScreeningResultRepository:
         cycle2 = repo.get_by_cycle(2)
         assert len(cycle2) == 1
 
+    def test_get_by_date_kst_timezone(self, session: Session) -> None:
+        """KST 기준 날짜로 스크리닝 결과를 조회한다."""
+        from zoneinfo import ZoneInfo
+        kst = ZoneInfo("Asia/Seoul")
+        repo = ScreeningResultRepository(session)
+        # KST 04-30 09:00 = UTC 04-30 00:00
+        repo.record_screening(
+            stock_code="005930", stock_name="삼성전자",
+            screening_rank=1, volume=5000000, price_change_pct=3.5,
+            screened_at=datetime(2026, 4, 30, 9, 0, tzinfo=kst),
+            cycle_number=1,
+        )
+        # KST 04-30 15:00 = UTC 04-30 06:00
+        repo.record_screening(
+            stock_code="000660", stock_name="SK하이닉스",
+            screening_rank=2, volume=3000000, price_change_pct=2.1,
+            screened_at=datetime(2026, 4, 30, 15, 0, tzinfo=kst),
+            cycle_number=2,
+        )
+        session.commit()
+
+        results = repo.get_by_date(date(2026, 4, 30))
+        assert len(results) == 2
+        assert results[0].screening_rank == 1
+
+    def test_get_by_date_excludes_other_dates(self, session: Session) -> None:
+        """다른 날짜의 스크리닝 결과는 제외한다."""
+        from zoneinfo import ZoneInfo
+        kst = ZoneInfo("Asia/Seoul")
+        repo = ScreeningResultRepository(session)
+        # KST 04-29 장중 데이터
+        repo.record_screening(
+            stock_code="005930", stock_name="삼성전자",
+            screening_rank=1, volume=5000000, price_change_pct=3.5,
+            screened_at=datetime(2026, 4, 29, 10, 0, tzinfo=kst),
+            cycle_number=1,
+        )
+        session.commit()
+
+        results = repo.get_by_date(date(2026, 4, 30))
+        assert len(results) == 0
+
 
 class TestSystemMetricRepository:
     """SystemMetricRepository 테스트."""
