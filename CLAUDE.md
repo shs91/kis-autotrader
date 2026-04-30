@@ -389,7 +389,7 @@ POSTGRES_USER=kis
 POSTGRES_PASSWORD=change_me_to_strong_password
 
 # Health Check
-# HEALTH_PORT=8080
+# HEALTH_PORT=18923
 # HEALTH_ENABLED=true
 ```
 

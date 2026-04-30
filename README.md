@@ -453,7 +453,7 @@ TELEGRAM_CHAT_ID=채팅_ID            # 알림 수신 채팅방 ID
 TELEGRAM_ENABLED=false              # true로 변경 시 알림 활성화
 
 # Health Check (선택)
-HEALTH_PORT=8080                   # 헬스체크 HTTP 포트
+HEALTH_PORT=18923                  # 헬스체크 HTTP 포트
 ```
 
 ---

@@ -21,7 +21,7 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-DEFAULT_PORT = 8080
+DEFAULT_PORT = 18923
 
 
 def _check_db() -> dict[str, Any]:

@@ -364,7 +364,7 @@ class HealthConfig:
     """헬스체크 서버 설정."""
 
     port: int = field(
-        default_factory=lambda: _env_int("HEALTH_PORT", 8080)
+        default_factory=lambda: _env_int("HEALTH_PORT", 18923)
     )
     enabled: bool = field(
         default_factory=lambda: _env("HEALTH_ENABLED", "true").lower() == "true"

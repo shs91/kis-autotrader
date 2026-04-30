@@ -14,7 +14,7 @@ LOG_FILE="$PROJECT_DIR/logs/autotrader.out.log"
 WATCHDOG_LOG="$PROJECT_DIR/logs/watchdog.log"
 WATCHDOG_STATE="$PROJECT_DIR/logs/.watchdog_state"
 SERVICE_NAME="com.kis.autotrader"
-HEALTH_URL="http://localhost:8080/health"
+HEALTH_URL="http://localhost:18923/health"
 STALE_THRESHOLD=300  # 초 (5분)
 
 mkdir -p "$PROJECT_DIR/logs"

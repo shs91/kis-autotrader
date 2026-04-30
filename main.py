@@ -570,7 +570,11 @@ async def main() -> None:
                 "daily_api_count": engine._client._limiter.daily_count,
             }
         )
-        await health_server.start()
+        try:
+            await health_server.start()
+        except OSError as e:
+            logger.warning("헬스체크 서버 시작 실패 (매매에 영향 없음): %s", e)
+            health_server = None
 
     # Telegram Bot 시작
     bot = TelegramBot()

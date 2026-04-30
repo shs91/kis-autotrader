@@ -24,7 +24,7 @@ st.set_page_config(
 # ── DB 연결 ──────────────────────────────────────
 
 DB_URL = st.secrets.get("DATABASE_URL", "postgresql://kis_user:kis_password@localhost:5432/kis_trader")
-HEALTH_URL = st.secrets.get("HEALTH_URL", "http://localhost:8080/health")
+HEALTH_URL = st.secrets.get("HEALTH_URL", "http://localhost:18923/health")
 
 
 @st.cache_resource

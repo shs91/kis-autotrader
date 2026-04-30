@@ -33,6 +33,6 @@ ENV TZ=Asia/Seoul
 ENV PYTHONUNBUFFERED=1
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:18923/health || exit 1
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
