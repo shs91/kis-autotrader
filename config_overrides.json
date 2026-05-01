@@ -1,11 +1,11 @@
 {
   "_meta": {
-    "updated_at": "2026-04-24",
-    "updated_by": "proposal:2026-04-24_screening-weight-rebalance+ma-period-shortening+min-confidence-lowering"
+    "updated_at": "2026-05-01",
+    "updated_by": "proposal:2026-05-01_signal-confidence-threshold-lowering"
   },
   "STRATEGY_RSI_OVERSOLD": 35.0,
   "STRATEGY_MA_SHORT_PERIOD": 3,
-  "STRATEGY_MIN_CONFIDENCE": 0.08,
+  "STRATEGY_MIN_CONFIDENCE": 0.05,
   "SCREENING_WEIGHT_VOLUME_RANK": 0.3,
   "SCREENING_WEIGHT_CHANGE_RATE": 0.4,
   "SCREENING_WEIGHT_STRATEGY": 0.3

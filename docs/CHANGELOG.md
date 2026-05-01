@@ -1,8 +1,17 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (63건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (64건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-01] 시그널 저장 필터 임계값 하향 — STRATEGY_MIN_CONFIDENCE 0.08→0.05
+- 제안서: docs/proposals/2026-05-01_signal-confidence-threshold-lowering.md
+- 카테고리: param_tuning
+- 변경 파일:
+  - config_overrides.json: `STRATEGY_MIN_CONFIDENCE` 0.08 → 0.05 하향 (BRIDGE_SPEC 허용 최솟값). 14일 연속 시그널 0건 상태 해소 목적.
+- 검증 결과: pytest ✅ (423 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
 
 ---
 
@@ -43,11 +52,3 @@
   - tests/test_engine_db_integration.py: `TestSignalSummaryMetric` 클래스 추가 (사이클 후 SIGNAL_SUMMARY 기록 검증, 필수 키 존재 검증, 평가 0건 시 미기록 검증 — 3개 테스트).
 - 검증 결과: pytest ✅ (414 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
 
----
-
-## [2026-04-30] 자동 진단/복구 파이프라인 (Auto-Heal) 추가
-- 카테고리: feature
-- 변경 파일:
-  - scripts/watchdog.sh: 반복 재시작 감지 로직 추가 — 30분 내 3회 이상 재시작 시 `auto_heal.sh` 트리거. `increment_restart_count()`, `trigger_auto_heal()` 함수 추가. 하루 1회 실행 제한. 장외/주말/공휴일 카운터 초기화.
-  - scripts/auto_heal.sh: (신규) 에러로그 + 시스템 상태(DB, 디스크, 메모리, 헬스체크, git) 수집 → Claude Code 진단 세션 호출. 성공(HEAL_SUCCESS) 시 서비스 재시작, 실패(HEAL_FAILED) 시 Telegram 수동 개입 알림.
-  - scripts/auto_heal_prompt.txt: (신규) Claude Code SRE 진단/수정 프롬프트. BRIDGE_SPEC 안전 게이트 준수, 최소 변경 원칙, pytest/mypy/ruff 검증 필수.
