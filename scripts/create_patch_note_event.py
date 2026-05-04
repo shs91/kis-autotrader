@@ -34,18 +34,24 @@ TIMEZONE = "Asia/Seoul"
 
 
 def find_today_implementations(today: str) -> list[dict[str, str]]:
-    """오늘 implemented된 제안서를 수집한다."""
+    """오늘 implemented된 제안서를 수집한다.
+
+    제안서 파일명 날짜와 구현 실행 날짜가 다를 수 있으므로(예: 금요일 작성 → 월요일 구현),
+    파일명 대신 상태(implemented) + 파일 수정일이 오늘인지를 기준으로 판별한다.
+    """
     results: list[dict[str, str]] = []
 
     if not PROPOSALS_DIR.exists():
         return results
 
     for f in sorted(PROPOSALS_DIR.glob("*.md")):
-        if not f.name.startswith(today):
-            continue
-
         content = f.read_text(encoding="utf-8")
         if not re.search(r"상태:\s*implemented", content, re.IGNORECASE):
+            continue
+
+        # 파일 수정일이 오늘인지 확인 (오늘 implemented로 변경된 제안서만 대상)
+        modified_date = date.fromtimestamp(f.stat().st_mtime).isoformat()
+        if modified_date != today:
             continue
 
         # 제목 추출
