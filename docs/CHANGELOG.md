@@ -1,8 +1,18 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (64건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (65건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-04] 일봉 데이터 부족 / 평가 조기 종료 진단 메트릭 추가
+- 제안서: docs/proposals/2026-05-02_daily-data-insufficient-metric.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `_get_daily_df()`에서 일봉 부족 시 `DAILY_DATA_INSUFFICIENT` 메트릭 적재 (종목코드·반환건수·최소요구건수·사이클). `_process_stock()`에서 일봉 부족 조기 종료 시 `EVAL_SKIP` 메트릭 적재 (종목코드·사유·사이클).
+  - tests/test_engine_db_integration.py: `TestDailyDataInsufficientMetric` 클래스 추가 (DAILY_DATA_INSUFFICIENT 적재 검증, EVAL_SKIP 적재 검증 — 2개 테스트).
+- 검증 결과: pytest ✅ (425 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
 
 ---
 
@@ -41,14 +51,4 @@
   - src/engine.py: `_screen_stocks()`에서 `converted_to_trade` 필터 제거. 상위 랭킹 종목을 플래그와 무관하게 평가 대상에 포함. 중복 제거(seen set) 추가. 진단 로깅 강화 (DB 조회 건수, 고유 종목수, converted 건수).
   - tests/test_engine_db_integration.py: 스크리닝 결과 반영 테스트 3건 추가 (unconverted 포함 검증, 중복 제거 검증, max_screened 한도 준수 검증).
 - 검증 결과: pytest ✅ (421 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-04-27 21:00] 시그널 가뭄 진단 정보 DB 적재 — SIGNAL_SUMMARY 메트릭
-- 제안서: docs/proposals/2026-04-27_signal-diagnosis-db-persistence.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: 사이클 종료 시 `_record_metric("SIGNAL_SUMMARY", {...})` 호출 추가. cycle/evaluated/buy_count/sell_count/hold_count/max_confidence/screened_count를 system_metrics 테이블에 기록.
-  - tests/test_engine_db_integration.py: `TestSignalSummaryMetric` 클래스 추가 (사이클 후 SIGNAL_SUMMARY 기록 검증, 필수 키 존재 검증, 평가 0건 시 미기록 검증 — 3개 테스트).
-- 검증 결과: pytest ✅ (414 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
 

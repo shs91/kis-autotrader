@@ -179,6 +179,12 @@ class TradingEngine:
         daily_prices = await self._quote.get_daily_price(stock_code)
         if len(daily_prices) < 36:
             logger.info("[%s] 일봉 데이터 부족 (%d건), 스킵", stock_code, len(daily_prices))
+            self._record_metric("DAILY_DATA_INSUFFICIENT", {
+                "stock_code": stock_code,
+                "returned_count": len(daily_prices),
+                "required_count": 36,
+                "cycle": self._cycle_count,
+            })
             return None
 
         df = pd.DataFrame(
@@ -602,6 +608,11 @@ class TradingEngine:
         # 1. 일봉 데이터 (캐시 활용)
         df = await self._get_daily_df(stock_code)
         if df is None:
+            self._record_metric("EVAL_SKIP", {
+                "stock_code": stock_code,
+                "skip_reason": "daily_data_insufficient",
+                "cycle": self._cycle_count,
+            })
             return
 
         # 2. 현재가 조회 (실시간)

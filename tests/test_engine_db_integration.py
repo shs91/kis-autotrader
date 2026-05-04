@@ -592,3 +592,68 @@ class TestSignalSummaryMetric:
         detail = eval_calls[0].kwargs["payload"]["detail"]
         assert "counts" in detail
         assert set(detail["counts"].keys()) == {"screening", "watchlist", "positions"}
+
+
+# ── 일봉 데이터 부족 / 평가 조기 종료 진단 메트릭 ──────────────
+
+
+class TestDailyDataInsufficientMetric:
+    """일봉 데이터 부족 시 DAILY_DATA_INSUFFICIENT 메트릭 적재 검증."""
+
+    @pytest.mark.asyncio
+    async def test_daily_data_insufficient_metric_recorded(self) -> None:
+        """일봉 35건 반환 시 DAILY_DATA_INSUFFICIENT 메트릭이 적재된다."""
+        engine = _make_engine()
+        engine._cycle_count = 5
+
+        # 35건 반환 (임계값 36 미달)
+        mock_prices = [MagicMock(close_price=100, date="2026-01-01")] * 35
+        engine._quote.get_daily_price = AsyncMock(return_value=mock_prices)
+
+        # 캐시 비우기
+        engine._daily_cache.clear()
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            result = await engine._get_daily_df("000660")
+
+        assert result is None
+
+        # DAILY_DATA_INSUFFICIENT 메트릭 확인
+        metric_calls = [
+            c for c in mock_enqueue.call_args_list
+            if c.kwargs.get("task_type") == "record_metric"
+            and c.kwargs.get("payload", {}).get("metric_type")
+            == "DAILY_DATA_INSUFFICIENT"
+        ]
+        assert len(metric_calls) == 1
+        detail = metric_calls[0].kwargs["payload"]["detail"]
+        assert detail["stock_code"] == "000660"
+        assert detail["returned_count"] == 35
+        assert detail["required_count"] == 36
+        assert detail["cycle"] == 5
+
+    @pytest.mark.asyncio
+    async def test_eval_skip_metric_recorded_on_daily_insufficient(self) -> None:
+        """일봉 부족 시 _process_stock에서 EVAL_SKIP 메트릭이 기록된다."""
+        engine = _make_engine()
+        engine._cycle_count = 3
+
+        # _get_daily_df가 None을 반환하도록 설정
+        engine._get_daily_df = AsyncMock(return_value=None)
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            await engine._process_stock(
+                "000660", deposit=10_000_000, is_held=False, holding_info=None,
+            )
+
+        # EVAL_SKIP 메트릭 확인
+        skip_calls = [
+            c for c in mock_enqueue.call_args_list
+            if c.kwargs.get("task_type") == "record_metric"
+            and c.kwargs.get("payload", {}).get("metric_type") == "EVAL_SKIP"
+        ]
+        assert len(skip_calls) == 1
+        detail = skip_calls[0].kwargs["payload"]["detail"]
+        assert detail["stock_code"] == "000660"
+        assert detail["skip_reason"] == "daily_data_insufficient"
+        assert detail["cycle"] == 3
