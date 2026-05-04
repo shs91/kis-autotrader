@@ -1129,78 +1129,360 @@ layout: section
 layout: default
 ---
 
-# Harness란 무엇인가
+# 왜 Harness인가 &mdash; 스크립트 기반의 한계
 
 <div class="text-sm mt-2 opacity-60">
-AI 에이전트를 "누가(Agent)" + "어떻게(Skill)"로 분리하여 팀으로 운영하는 아키텍처
+지금 우리 시스템은 잘 돌아간다. 그런데 한 발 더 나가면 어디서 막히는가?
 </div>
 
-<div class="grid grid-cols-3 gap-4 mt-5">
+<div class="grid grid-cols-2 gap-6 mt-5">
+
+<div class="p-5 border border-red-500/20 rounded-xl bg-red-500/[0.03]">
+
+<div class="text-xs font-mono text-red-400/70 mb-2 tracking-widest">LV3의 천장 (지금 우리)</div>
+
+<div class="text-sm space-y-2 opacity-85">
+
+- 역할 분리는 **쉘 스크립트**로 한다 (`run_daily_analysis.sh`)
+- 에이전트 간 통신은 **파일**(`proposals/`)로 한다
+- 작업 의존성은 **launchd 시간표**로 한다 (16:00 → 17:00)
+- 새 역할(예: 보안 감사) 추가 = 새 스크립트 + 새 cron + 새 디렉토리
+- 한 번 실패하면 **사람이 로그를 읽고** 다음 cron까지 기다림
+
+</div>
+
+<div class="text-xs opacity-50 italic mt-3">
+"AI를 운영"하지만, 운영의 뼈대는 여전히 사람이 만든 스크립트다.
+</div>
+
+</div>
+
+<div class="p-5 border border-emerald-500/20 rounded-xl bg-emerald-500/[0.03]">
+
+<div class="text-xs font-mono text-emerald-400/70 mb-2 tracking-widest">HARNESS가 푸는 문제</div>
+
+<div class="text-sm space-y-2 opacity-85">
+
+- 역할은 **선언적인 마크다운**으로 정의한다
+- 통신은 **에이전트 간 메시지 프로토콜**로 한다
+- 의존성은 **태스크 그래프**로 표현한다 (시간이 아니라)
+- 새 역할 추가 = **에이전트 파일 한 장**
+- 실패하면 **다른 에이전트가 자동으로 진단**한다
+
+</div>
+
+<div class="text-xs opacity-50 italic mt-3">
+"AI 팀을 운영하는 OS"를 갖는다는 것.
+</div>
+
+</div>
+
+</div>
+
+<div class="mt-4 p-3 border-l-2 border-orange-400/60 text-sm opacity-70">
+<strong>한 줄로:</strong> Lv3는 "AI를 부리는 사람"이다. Harness는 "AI 팀을 부리는 AI"를 만든다.
+</div>
+
+---
+layout: default
+---
+
+# Harness의 3계층 &mdash; 누가 / 어떻게 / 언제
+
+<div class="text-sm mt-1 opacity-60">
+사람을 채용해 팀을 만드는 과정과 똑같다. 역할 정의(Job Description) → 매뉴얼(SOP) → 매니저(PM).
+</div>
+
+<div class="grid grid-cols-3 gap-3 mt-4">
 
 <div class="p-4 border border-cyan-500/20 rounded-xl bg-cyan-500/[0.03]">
 
-<div class="text-xs font-mono text-cyan-400/70 mb-2 tracking-widest">AGENT &mdash; 누가</div>
+<div class="text-xs font-mono text-cyan-400/70 mb-2 tracking-widest">1. AGENT &mdash; 누가</div>
+
+<div class="text-xs opacity-50 mb-2">"이 사람은 어떤 사람인가"</div>
 
 ```
 .claude/agents/
-  analyst.md
-  implementer.md
-  qa.md
+  market-analyst.md
+  risk-reviewer.md
+  code-implementer.md
+  qa-verifier.md
 ```
 
 <div class="text-xs opacity-70 mt-2 space-y-1">
 
-- 핵심 역할, 작업 원칙
-- 입출력 프로토콜
-- 팀 통신 규칙
+- **정체성**: 직무, 책임 범위
+- **원칙**: 절대 안 하는 것
+- **입출력**: 받는 데이터 / 만드는 결과
+- **협업**: 누구에게 위임 / 누구의 검증
 
+</div>
+
+<div class="text-[11px] opacity-40 mt-2 italic">
+사람으로 치면 "직무기술서"
 </div>
 
 </div>
 
 <div class="p-4 border border-emerald-500/20 rounded-xl bg-emerald-500/[0.03]">
 
-<div class="text-xs font-mono text-emerald-400/70 mb-2 tracking-widest">SKILL &mdash; 어떻게</div>
+<div class="text-xs font-mono text-emerald-400/70 mb-2 tracking-widest">2. SKILL &mdash; 어떻게</div>
+
+<div class="text-xs opacity-50 mb-2">"이 일은 어떻게 하는가"</div>
 
 ```
 .claude/skills/
-  data-analysis/
-    skill.md
-    references/
-    scripts/
+  trading-analysis/
+    skill.md         (SOP)
+    references/      (사례)
+    scripts/         (도구)
 ```
 
 <div class="text-xs opacity-70 mt-2 space-y-1">
 
-- 구체적 작업 수행 방법
-- 단계적 정보 공개
-- 에이전트 1:N 매핑
+- **수행 방법**: 단계, 체크리스트
+- **점진적 공개**: 필요할 때만 상세 로드
+- **재사용**: 1 스킬 → N 에이전트
+- **버전 관리**: 코드처럼
 
+</div>
+
+<div class="text-[11px] opacity-40 mt-2 italic">
+사람으로 치면 "업무 매뉴얼/SOP"
 </div>
 
 </div>
 
 <div class="p-4 border border-orange-500/20 rounded-xl bg-orange-500/[0.03]">
 
-<div class="text-xs font-mono text-orange-400/70 mb-2 tracking-widest">ORCHESTRATOR &mdash; 언제</div>
+<div class="text-xs font-mono text-orange-400/70 mb-2 tracking-widest">3. ORCHESTRATOR &mdash; 언제</div>
+
+<div class="text-xs opacity-50 mb-2">"누가 언제 일하는가"</div>
 
 ```
-작업 분배
-  ├ 병렬 실행 가능 식별
-  ├ 의존성 순서 결정
-  ├ 결과 수집 및 통합
-  └ 에러 시 폴백 경로
+태스크 그래프
+  ├ 의존성 분석
+  ├ 병렬 가능 식별
+  ├ 결과 수집/통합
+  └ 실패 시 폴백
 ```
 
 <div class="text-xs opacity-70 mt-2 space-y-1">
 
-- 파이프라인 / 팬아웃 / 감독자
-- 데이터 전달 프로토콜
+- **분배**: 누구에게 어떤 작업
+- **순서**: 무엇이 먼저
+- **합산**: 결과 어떻게 모음
+- **회복**: 실패 시 어떻게
+
+</div>
+
+<div class="text-[11px] opacity-40 mt-2 italic">
+사람으로 치면 "PM/팀장"
+</div>
+
+</div>
+
+</div>
+
+<div class="mt-3 p-2 border-l-2 border-emerald-400/60 text-xs opacity-65">
+<strong>핵심:</strong> 셋은 분리되어야 한다. Agent에 Skill 내용을 박으면 재사용이 깨지고, Orchestrator에 역할을 박으면 팀 확장이 막힌다.
+</div>
+
+---
+layout: default
+---
+
+# Agent 파일 &mdash; 어떻게 생겼나
+
+<div class="text-sm mt-1 opacity-60">
+실제 Agent 정의 파일은 마크다운 한 장이다. 코드가 아니라 <strong>선언</strong>이다.
+</div>
+
+<div class="grid grid-cols-2 gap-5 mt-4">
+
+<div>
+
+```markdown {*}{maxHeight:'380px'}
+---
+name: market-analyst
+description: 장 마감 후 거래 데이터를
+  분석해 개선 제안서를 작성하는 분석가.
+model: sonnet
+tools: [Read, Bash, Grep]
+---
+
+# 정체성
+
+당신은 KIS 자동매매 시스템의 시장 분석가입니다.
+거래 데이터에서 패턴과 개선점을 찾는 것이
+유일한 책임입니다.
+
+# 절대 원칙
+
+- 코드(src/, tests/)는 절대 수정하지 않는다
+- .env, credentials.json은 읽지도 않는다
+- 추측이 아닌 query_analytics.py 출력만 근거로
+  사용한다
+
+# 입력
+
+- docs/reports/ (어제까지의 리포트)
+- query_analytics.py 의 JSON 출력
+- BRIDGE_SPEC.md (안전 게이트 규칙)
+
+# 출력
+
+- docs/proposals/YYYY-MM-DD_제목.md
+  (state: ready, BRIDGE_SPEC 준수)
+
+# 협업
+
+- 제안 후 code-implementer 에이전트가 받는다
+- 안전 게이트 통과 못 할 제안은 만들지 않는다
+```
+
+</div>
+
+<div class="text-sm space-y-3">
+
+<div class="text-xs font-mono text-white/40 mb-2 tracking-widest">ANATOMY</div>
+
+<div>
+<span class="text-cyan-400 font-bold">frontmatter</span>
+<div class="text-xs opacity-65 mt-0.5">에이전트 메타데이터. 모델, 사용 가능한 도구, 호출 시 자동 매칭에 쓰이는 description.</div>
+</div>
+
+<div>
+<span class="text-cyan-400 font-bold">정체성 / 절대 원칙</span>
+<div class="text-xs opacity-65 mt-0.5">"이 사람은 누구인가"와 "절대 하지 않는 것". CLAUDE.md의 전역 규칙을 이 역할에 맞게 좁힌다.</div>
+</div>
+
+<div>
+<span class="text-cyan-400 font-bold">입력 / 출력</span>
+<div class="text-xs opacity-65 mt-0.5">에이전트 간 통신 프로토콜. 파일 경로/형식까지 명시해야 다른 에이전트가 이어받을 수 있다.</div>
+</div>
+
+<div>
+<span class="text-cyan-400 font-bold">협업</span>
+<div class="text-xs opacity-65 mt-0.5">앞뒤 에이전트와의 인터페이스. 이게 곧 Orchestrator가 그릴 그래프의 간선이다.</div>
+</div>
+
+<div class="mt-4 p-3 border-l-2 border-emerald-400/60 text-xs opacity-70">
+지금 우리 프로젝트의 <strong>BRIDGE_SPEC.md + CLAUDE.md의 모듈 경계</strong>를 에이전트 단위로 쪼개면 그대로 이 파일들이 된다.
+</div>
+
+</div>
+
+</div>
+
+---
+layout: default
+---
+
+# Skill &mdash; 점진적 정보 공개
+
+<div class="text-sm mt-1 opacity-60">
+스킬은 "이 작업을 어떻게 수행하는가"를 단계적으로 펼쳐 보여주는 매뉴얼이다.
+</div>
+
+<div class="grid grid-cols-2 gap-6 mt-4">
+
+<div>
+
+```
+.claude/skills/safety-gate/
+├── skill.md            ← 항상 로드 (요약)
+├── references/
+│   ├── forbidden.md    ← 금지 영역 상세
+│   ├── ranges.md       ← 25개 파라미터 표
+│   └── examples.md     ← 통과/실패 사례
+└── scripts/
+    ├── validate.py     ← 자동 검증 도구
+    └── rollback.sh     ← 실패 시 원복
+```
+
+<div class="text-xs opacity-50 mt-3 space-y-1">
+
+- <strong>skill.md</strong>는 짧게 (수십 줄). 트리거 조건과 핵심 원칙만.
+- <strong>references/</strong>는 필요할 때만 읽는다. 컨텍스트 비용을 아낀다.
+- <strong>scripts/</strong>는 LLM이 직접 짜지 않고 호출하는 결정적 도구.
 
 </div>
 
 </div>
 
+<div class="space-y-3">
+
+<div class="text-xs font-mono text-white/40 mb-2 tracking-widest">WHY 점진적 공개</div>
+
+<div class="p-3 border border-white/10 rounded-lg text-sm">
+<div class="font-bold text-emerald-400 mb-1">컨텍스트 한계 우회</div>
+<div class="text-xs opacity-70">25개 파라미터 표 전체를 매번 읽지 않는다. "범위 검증 필요할 때만" references/ranges.md를 연다.</div>
+</div>
+
+<div class="p-3 border border-white/10 rounded-lg text-sm">
+<div class="font-bold text-emerald-400 mb-1">재사용성</div>
+<div class="text-xs opacity-70">safety-gate 스킬은 code-implementer, qa-verifier, auto-heal 모두가 같이 쓴다. 1개 스킬, N개 에이전트.</div>
+</div>
+
+<div class="p-3 border border-white/10 rounded-lg text-sm">
+<div class="font-bold text-emerald-400 mb-1">결정성</div>
+<div class="text-xs opacity-70">검증 같은 결정적 로직은 LLM이 매번 다시 짜지 않고 scripts/ 도구를 호출한다. <strong>비결정성을 코드로 격리</strong>한다.</div>
+</div>
+
+<div class="p-3 border border-white/10 rounded-lg text-sm">
+<div class="font-bold text-emerald-400 mb-1">버전 관리</div>
+<div class="text-xs opacity-70">스킬도 PR로 리뷰. "이 스킬이 어떻게 바뀌어 왔나"가 git에 남는다.</div>
+</div>
+
+</div>
+
+</div>
+
+---
+layout: default
+---
+
+# Orchestrator &mdash; 4가지 협업 패턴
+
+<div class="text-sm mt-1 opacity-60">
+같은 에이전트들도, 어떻게 엮느냐에 따라 결과가 달라진다.
+</div>
+
+<div class="grid grid-cols-2 gap-4 mt-4">
+
+<div class="p-4 border border-cyan-500/20 rounded-xl bg-cyan-500/[0.03]">
+<div class="font-bold text-cyan-400 text-sm mb-2">파이프라인 (Sequential)</div>
+<div class="font-mono text-xs opacity-70 mb-2">analyst → implementer → qa</div>
+<div class="text-xs opacity-65">앞 단계 결과가 뒷 단계 입력. <strong>지금 우리 시스템</strong>이 정확히 이 모양 (16:00 → 17:00).</div>
+<div class="text-[11px] opacity-40 mt-2 italic">언제: 단계가 명확하고 의존성이 강할 때</div>
+</div>
+
+<div class="p-4 border border-emerald-500/20 rounded-xl bg-emerald-500/[0.03]">
+<div class="font-bold text-emerald-400 text-sm mb-2">팬아웃 / 팬인 (Parallel)</div>
+<div class="font-mono text-xs opacity-70 mb-2">분석가 3명 병렬 → 통합자 1명</div>
+<div class="text-xs opacity-65">market-analyst, risk-analyst, performance-analyst가 <strong>동시에</strong> 분석 → synthesizer가 합침.</div>
+<div class="text-[11px] opacity-40 mt-2 italic">언제: 독립적 관점들이 모여야 할 때</div>
+</div>
+
+<div class="p-4 border border-orange-500/20 rounded-xl bg-orange-500/[0.03]">
+<div class="font-bold text-orange-400 text-sm mb-2">생성-검증 (Generator-Critic)</div>
+<div class="font-mono text-xs opacity-70 mb-2">implementer ⇄ qa (반복)</div>
+<div class="text-xs opacity-65">구현 → QA 지적 → 재구현 → 재검증. <strong>실패가 학습</strong>이 된다. 90% 임계까지 자동 반복.</div>
+<div class="text-[11px] opacity-40 mt-2 italic">언제: 품질 기준이 높고 한 번에 못 맞출 때</div>
+</div>
+
+<div class="p-4 border border-amber-500/20 rounded-xl bg-amber-500/[0.03]">
+<div class="font-bold text-amber-400 text-sm mb-2">감독자 (Supervisor)</div>
+<div class="font-mono text-xs opacity-70 mb-2">supervisor → 동적으로 선택</div>
+<div class="text-xs opacity-65">상황 보고 supervisor가 <strong>그때그때 적절한 에이전트를 선택</strong>. 장애 상황처럼 미리 정할 수 없을 때.</div>
+<div class="text-[11px] opacity-40 mt-2 italic">언제: 작업 구조가 사전에 결정 안 될 때</div>
+</div>
+
+</div>
+
+<div class="mt-3 p-2 border-l-2 border-emerald-400/60 text-xs opacity-65">
+<strong>현실에서는 섞인다:</strong> 메인은 파이프라인, 분석 단계 안에서는 팬아웃, 구현 단계는 생성-검증, 장애 발생 시 감독자.
 </div>
 
 ---
@@ -1341,6 +1623,172 @@ layout: default
 
 <div class="mt-4 p-3 border-l-2 border-emerald-400/60 text-sm opacity-70">
 <strong>Lv3의 다음 단계:</strong> AI를 운영하는 시스템을 넘어, <strong>AI 팀을 설계하는 아키텍트</strong>가 된다.
+</div>
+
+---
+layout: default
+---
+
+# KIS 프로젝트 장기 로드맵 &mdash; Phase별 Harness 적용
+
+<div class="text-sm mt-1 opacity-60">
+지금의 자율 운영 파이프라인 위에, 4단계로 점진적으로 Harness를 얹는다. 한 번에 다 바꾸지 않는다.
+</div>
+
+<div class="grid grid-cols-2 gap-3 mt-4">
+
+<div class="p-4 border-l-2 border-cyan-400/60 bg-cyan-500/[0.03] rounded-r-lg">
+<div class="text-xs font-mono text-cyan-400/70 mb-1 tracking-widest">PHASE 0 &mdash; 현재 (Lv3)</div>
+<div class="font-bold text-sm mb-1">스크립트 파이프라인 + 파일 통신</div>
+<div class="text-xs opacity-70 space-y-0.5">
+
+- launchd × 7, proposals/reports 디렉토리
+- BRIDGE_SPEC.md가 사실상의 "에이전트 헌법"
+- 자동 구현 63건 / 5분/일 운영 비용
+
+</div>
+</div>
+
+<div class="p-4 border-l-2 border-emerald-400/60 bg-emerald-500/[0.03] rounded-r-lg">
+<div class="text-xs font-mono text-emerald-400/70 mb-1 tracking-widest">PHASE 1 &mdash; 1~2개월</div>
+<div class="font-bold text-sm mb-1">에이전트 분리 (선언화)</div>
+<div class="text-xs opacity-70 space-y-0.5">
+
+- BRIDGE_SPEC을 <code>.claude/agents/</code> 4개로 분해<br/>(market-analyst, code-implementer, qa-verifier, auto-healer)
+- safety-gate를 <code>.claude/skills/</code>로 추출
+- launchd는 그대로 유지 (변화 최소화)
+
+</div>
+<div class="text-[11px] opacity-50 mt-1 italic">▶ 이득: 새 에이전트(예: 보안 감사) 추가 비용이 "마크다운 한 장"으로</div>
+</div>
+
+<div class="p-4 border-l-2 border-emerald-400/60 bg-emerald-500/[0.03] rounded-r-lg">
+<div class="text-xs font-mono text-emerald-400/70 mb-1 tracking-widest">PHASE 2 &mdash; 3~4개월</div>
+<div class="font-bold text-sm mb-1">팬아웃 분석 (병렬화)</div>
+<div class="text-xs opacity-70 space-y-0.5">
+
+- 16:00 분석을 3분할 병렬:<br/>(1) 거래 패턴, (2) 리스크/MDD, (3) 시그널 품질
+- synthesizer 에이전트가 통합 → 단일 제안서
+- 분석 깊이 ↑, 총 소요 시간 ↓
+
+</div>
+<div class="text-[11px] opacity-50 mt-1 italic">▶ 이득: 한 분석가가 못 보는 사각지대 → 다관점 교차 검증</div>
+</div>
+
+<div class="p-4 border-l-2 border-emerald-400/60 bg-emerald-500/[0.03] rounded-r-lg">
+<div class="text-xs font-mono text-emerald-400/70 mb-1 tracking-widest">PHASE 3 &mdash; 5~6개월</div>
+<div class="font-bold text-sm mb-1">생성-검증 루프 (자가 개선)</div>
+<div class="text-xs opacity-70 space-y-0.5">
+
+- code-implementer ⇄ qa-verifier 자동 반복
+- pytest 실패 → 원인 분석 → 재구현 (현재는 1회 실패면 끝)
+- 매치율 90% 미만이면 iterator가 자동 재시도
+
+</div>
+<div class="text-[11px] opacity-50 mt-1 italic">▶ 이득: failed 비율 감소, 사람 개입 빈도 추가 감소</div>
+</div>
+
+<div class="p-4 border-l-2 border-amber-400/60 bg-amber-500/[0.03] rounded-r-lg col-span-2">
+<div class="text-xs font-mono text-amber-400/70 mb-1 tracking-widest">PHASE 4 &mdash; 6개월+ (장기)</div>
+<div class="font-bold text-sm mb-1">감독자 + 백테스트 통합 (자율 전략 진화)</div>
+<div class="grid grid-cols-2 gap-4 text-xs opacity-70 mt-1">
+
+<div class="space-y-0.5">
+
+- supervisor 에이전트가 일일 상황 보고 후<br/>그날의 작업 구성을 동적으로 결정
+- 새 전략 제안 → 자동 백테스트 → 통계적 유의미하면 가상계좌 카나리 → 실전 점진 적용
+- watchdog/auto-heal이 supervisor에 통합
+
+</div>
+
+<div class="space-y-0.5">
+
+- 안전장치는 더 보수적으로:<br/>실전계좌 자동 변경은 카나리 + 사람 승인 게이트 유지
+- KIS_ENV: real에 대한 변경은 <strong>여전히 사람</strong>의 영역
+- 메트릭/감사 로그를 supervisor가 정기 리뷰
+
+</div>
+
+</div>
+<div class="text-[11px] opacity-50 mt-1 italic">▶ 이득: "AI를 운영하는 사람"에서 "AI 팀을 설계하는 아키텍트"로 완전 이행</div>
+</div>
+
+</div>
+
+<div class="mt-3 p-2 border-l-2 border-orange-400/60 text-xs opacity-70">
+<strong>로드맵 원칙:</strong> 각 Phase는 이전 Phase 위에 얹는다. 실패 시 즉시 이전 Phase로 롤백 가능하도록 분기 단위로 작업한다.
+</div>
+
+---
+layout: default
+---
+
+# Phase 1 즉시 착수 가능 &mdash; 구체 작업 항목
+
+<div class="text-sm mt-1 opacity-60">
+다음 PDCA 사이클에서 바로 시작할 수 있는 가장 작은 첫걸음.
+</div>
+
+<div class="grid grid-cols-2 gap-5 mt-4">
+
+<div>
+
+```
+.claude/
+├── agents/
+│   ├── market-analyst.md
+│   │   ← scripts/cowork_*.py + BRIDGE_SPEC
+│   │     의 "Cowork 역할" 부분 이전
+│   ├── code-implementer.md
+│   │   ← run_auto_implement.sh + 안전 게이트
+│   │     검증 로직 이전
+│   ├── qa-verifier.md
+│   │   ← pytest/mypy/ruff 실행 +
+│   │     실패 시 진단 책임 분리
+│   └── auto-healer.md
+│       ← scripts/auto_heal.sh의 판단 로직 이전
+└── skills/
+    ├── safety-gate/
+    │   ← BRIDGE_SPEC.md의 25개 파라미터 표 +
+    │     금지 영역 + 검증 스크립트
+    ├── trading-analytics/
+    │   ← scripts/query_analytics.py 호출 SOP
+    └── log-diagnosis/
+        ← logs/autotrader.log 패턴 분류 SOP
+```
+
+</div>
+
+<div class="space-y-3 text-sm">
+
+<div class="text-xs font-mono text-white/40 mb-2 tracking-widest">기대 효과 (Phase 1만으로도)</div>
+
+<div class="p-3 border border-emerald-500/20 rounded-lg bg-emerald-500/[0.03]">
+<div class="font-bold text-emerald-400 text-sm mb-1">① 새 역할 추가 비용 ↓</div>
+<div class="text-xs opacity-70">"매월 의존성 보안 감사" 같은 신규 루틴 = security-auditor.md 한 장.</div>
+</div>
+
+<div class="p-3 border border-emerald-500/20 rounded-lg bg-emerald-500/[0.03]">
+<div class="font-bold text-emerald-400 text-sm mb-1">② 모듈 경계 명시화</div>
+<div class="text-xs opacity-70">CLAUDE.md "모듈 경계" 표가 에이전트 책임 표와 1:1 매핑되어 강제된다.</div>
+</div>
+
+<div class="p-3 border border-emerald-500/20 rounded-lg bg-emerald-500/[0.03]">
+<div class="font-bold text-emerald-400 text-sm mb-1">③ 다른 프로젝트로 이식 가능</div>
+<div class="text-xs opacity-70">safety-gate 스킬은 KIS 외 어떤 자동 구현 시스템에도 그대로 들어간다.</div>
+</div>
+
+<div class="p-3 border border-emerald-500/20 rounded-lg bg-emerald-500/[0.03]">
+<div class="font-bold text-emerald-400 text-sm mb-1">④ 운영 OS 진입</div>
+<div class="text-xs opacity-70">Phase 2~4에서 필요한 "에이전트라는 1차 구성요소"를 갖추게 된다.</div>
+</div>
+
+</div>
+
+</div>
+
+<div class="mt-3 p-2 border-l-2 border-emerald-400/60 text-xs opacity-70">
+<strong>리스크:</strong> Phase 1은 <em>리팩토링</em>이지 신규 기능이 아니다. 기존 동작이 그대로 보존되는지 회귀 테스트가 핵심 게이트.
 </div>
 
 ---
