@@ -602,12 +602,16 @@ class TestDailyDataInsufficientMetric:
 
     @pytest.mark.asyncio
     async def test_daily_data_insufficient_metric_recorded(self) -> None:
-        """일봉 35건 반환 시 DAILY_DATA_INSUFFICIENT 메트릭이 적재된다."""
+        """일봉 21건 반환 시 DAILY_DATA_INSUFFICIENT 메트릭이 적재된다."""
+        from src.config import settings
+
         engine = _make_engine()
         engine._cycle_count = 5
 
-        # 35건 반환 (임계값 36 미달)
-        mock_prices = [MagicMock(close_price=100, date="2026-01-01")] * 35
+        min_required = settings.strategy.ma_long_period + 2
+        # min_required 미달 건수 반환
+        insufficient_count = min_required - 1
+        mock_prices = [MagicMock(close_price=100, date="2026-01-01")] * insufficient_count
         engine._quote.get_daily_price = AsyncMock(return_value=mock_prices)
 
         # 캐시 비우기
@@ -628,8 +632,8 @@ class TestDailyDataInsufficientMetric:
         assert len(metric_calls) == 1
         detail = metric_calls[0].kwargs["payload"]["detail"]
         assert detail["stock_code"] == "000660"
-        assert detail["returned_count"] == 35
-        assert detail["required_count"] == 36
+        assert detail["returned_count"] == insufficient_count
+        assert detail["required_count"] == min_required
         assert detail["cycle"] == 5
 
     @pytest.mark.asyncio

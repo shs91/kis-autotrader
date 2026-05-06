@@ -1,8 +1,18 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (65건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (66건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-06] 엔진 일봉 데이터 최소 요구량 하향 — 매매 교착 해소
+- 제안서: docs/proposals/2026-05-06_engine-daily-data-threshold-reduction.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: 일봉 데이터 최소 요구 건수를 하드코딩 36에서 `settings.strategy.ma_long_period + 2` (기본 22)로 변경. KIS API가 최대 30건 반환하므로 MA/RSI/Bollinger 전략 정상 평가 가능.
+  - tests/test_engine_db_integration.py: DAILY_DATA_INSUFFICIENT 테스트를 새 임계값 기준으로 수정.
+- 검증 결과: pytest ✅ (425 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
 
 ---
 
@@ -41,14 +51,4 @@
 - 변경 파일:
   - scripts/run_auto_implement.sh: Claude Code 실행 후 로그에서 `implemented` 감지 시 `launchctl stop/start com.kis.autotrader` 재시작 로직 추가. 10초 후 프로세스 상태 확인. 미구현 시 재시작 스킵.
 - 검증 결과: pytest ✅ (421 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
-
----
-
-## [2026-04-28 21:00] 스크리닝→엔진 평가 파이프라인 단절 수정 — converted_to_trade 필터 제거
-- 제안서: docs/proposals/2026-04-28_screening-to-engine-pipeline-fix.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: `_screen_stocks()`에서 `converted_to_trade` 필터 제거. 상위 랭킹 종목을 플래그와 무관하게 평가 대상에 포함. 중복 제거(seen set) 추가. 진단 로깅 강화 (DB 조회 건수, 고유 종목수, converted 건수).
-  - tests/test_engine_db_integration.py: 스크리닝 결과 반영 테스트 3건 추가 (unconverted 포함 검증, 중복 제거 검증, max_screened 한도 준수 검증).
-- 검증 결과: pytest ✅ (421 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
 

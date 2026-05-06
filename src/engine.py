@@ -177,12 +177,13 @@ class TradingEngine:
 
         # API 호출
         daily_prices = await self._quote.get_daily_price(stock_code)
-        if len(daily_prices) < 36:
+        min_daily_count = settings.strategy.ma_long_period + 2
+        if len(daily_prices) < min_daily_count:
             logger.info("[%s] 일봉 데이터 부족 (%d건), 스킵", stock_code, len(daily_prices))
             self._record_metric("DAILY_DATA_INSUFFICIENT", {
                 "stock_code": stock_code,
                 "returned_count": len(daily_prices),
-                "required_count": 36,
+                "required_count": min_daily_count,
                 "cycle": self._cycle_count,
             })
             return None
