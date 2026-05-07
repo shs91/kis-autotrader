@@ -1,12 +1,13 @@
 {
   "_meta": {
-    "updated_at": "2026-05-01",
-    "updated_by": "proposal:2026-05-01_signal-confidence-threshold-lowering"
+    "updated_at": "2026-05-07",
+    "updated_by": "proposal:2026-05-07_screening-min-score-reduction"
   },
   "STRATEGY_RSI_OVERSOLD": 35.0,
   "STRATEGY_MA_SHORT_PERIOD": 3,
-  "STRATEGY_MIN_CONFIDENCE": 0.05,
+  "STRATEGY_MIN_CONFIDENCE": 0.15,
   "SCREENING_WEIGHT_VOLUME_RANK": 0.3,
   "SCREENING_WEIGHT_CHANGE_RATE": 0.4,
-  "SCREENING_WEIGHT_STRATEGY": 0.3
+  "SCREENING_WEIGHT_STRATEGY": 0.3,
+  "SCREENING_MIN_SCORE": 0.15
 }

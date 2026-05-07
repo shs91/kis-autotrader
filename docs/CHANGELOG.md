@@ -1,8 +1,26 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (66건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (68건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-07] 스크리닝 최소 점수 하향 — 전환율 0% 장기화 해소
+- 제안서: docs/proposals/2026-05-07_screening-min-score-reduction.md
+- 카테고리: param_tuning
+- 변경 파일:
+  - config_overrides.json: `SCREENING_MIN_SCORE` 0.25(기본값) → 0.15 하향 추가. 7일 연속 전환율 0% 교착 해소 목적.
+- 검증 결과: pytest ✅ (424 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
+
+---
+
+## [2026-05-07] 시그널 최소 신뢰도 상향 조정 — 저신뢰 시그널 필터링
+- 제안서: docs/proposals/2026-05-07_min-confidence-upward-adjustment.md
+- 카테고리: param_tuning
+- 변경 파일:
+  - config_overrides.json: `STRATEGY_MIN_CONFIDENCE` 0.05 → 0.15 상향. 시그널 act_rate 29.5% 개선 및 노이즈 시그널 제거 목적.
+- 검증 결과: pytest ✅ (424 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
 
 ---
 
@@ -32,23 +50,3 @@
 - 변경 파일:
   - config_overrides.json: `STRATEGY_MIN_CONFIDENCE` 0.08 → 0.05 하향 (BRIDGE_SPEC 허용 최솟값). 14일 연속 시그널 0건 상태 해소 목적.
 - 검증 결과: pytest ✅ (423 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
-
----
-
-## [2026-04-30 21:00] 스크리닝 DB 조회 타임존 불일치 수정 — get_by_date KST 명시
-- 제안서: docs/proposals/2026-04-30_screening-query-timezone-fix.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/db/repository.py: `get_by_date()`에서 naive datetime → KST timezone-aware datetime으로 변경. `datetime.combine(target_date, ..., tzinfo=kst)` 적용.
-  - tests/test_db/test_repository.py: KST 타임존 기반 get_by_date 테스트 2건 추가 (조회 검증, 타 날짜 제외 검증).
-- 검증 결과: pytest ✅ (423 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
-
----
-
-## [2026-04-29 17:00] auto-implement 후 서비스 재시작 누락 수정
-- 제안서: docs/proposals/2026-04-29_auto-implement-service-restart.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - scripts/run_auto_implement.sh: Claude Code 실행 후 로그에서 `implemented` 감지 시 `launchctl stop/start com.kis.autotrader` 재시작 로직 추가. 10초 후 프로세스 상태 확인. 미구현 시 재시작 스킵.
-- 검증 결과: pytest ✅ (421 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
-
