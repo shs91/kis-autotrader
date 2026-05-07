@@ -462,9 +462,11 @@ layout: default
 
 <div class="text-xs font-mono text-white/40 mb-3 tracking-widest">AUTOMATION</div>
 
-- **매일 16:00** Cowork 분석 &rarr; 제안서 생성
+- **매일 16:00** Cowork 일일 분석 &rarr; 제안서 생성
 - **매일 17:00** Claude Code 자동 구현
-- **금 16:30** 주간 리뷰 &rarr; 중기 제안서
+- **금 16:30** Cowork 주간 리뷰 &rarr; 중기 제안서
+- **월말 금 19:00** Cowork 월간 분석 &rarr; 장기 제안서
+- **월말 금 20:00** Claude Code 월간 자동 구현
 - 안전 게이트 통과 시 서비스 자동 재시작
 - 모든 변경 이력은 DB + CHANGELOG (rolling 5건)
 
@@ -515,7 +517,8 @@ layout: default
 
 <div class="text-sm space-y-1 opacity-80">
 
-- 스케줄 기반 (평일 16:00, 금 16:30)
+- **Claude Desktop** 세션에서 스케줄 실행
+- 평일 16:00 일일, 금 16:30 주간, 월말 금 19:00 월간
 - `query_analytics.py`로 거래/시그널/스크리닝 JSON 조회
 - 일일/주간/월간 리포트 자동 생성
 - `docs/proposals/YYYY-MM-DD_제목.md` 출력
@@ -532,7 +535,7 @@ layout: default
 
 <div class="text-sm space-y-1 opacity-80">
 
-- 평일 17:00 launchd로 자동 실행
+- 평일 17:00 / 월말 금 20:00 launchd로 자동 실행 (Claude Code CLI)
 - `BRIDGE_SPEC.md`의 안전 게이트 자동 검증
 - 통과한 제안서만 코드 수정 &rarr; pytest/mypy/ruff
 - 통과 시 `implemented`, 실패 시 `git restore`
@@ -1032,18 +1035,22 @@ layout: default
 # 패턴 5. 반복 루틴은 스케줄러에 넘겨라
 
 <div class="mt-4 text-sm opacity-60 mb-4">
-내 맥북에서 돌고 있는 7개의 launchd 서비스
+맥북에서 돌고 있는 스케줄러 &mdash; launchd 6개 + Claude Desktop 3개
 </div>
 
 ```bash
 $ launchctl list | grep com.kis
-com.kis.autotrader        # 매매 엔진 (24/7)
-com.kis.watchdog          # 프로세스 감시 (5분마다)
-com.kis.dailyanalysis     # Cowork 일일 분석 (평일 16:00)
-com.kis.weeklyanalysis    # Cowork 주간 리뷰 (금 16:30)
-com.kis.autoimplement     # Claude Code 자동 구현 (평일 17:00)
-com.kis.dashboard         # Streamlit 대시보드 (24/7)
-com.kis.backup-db         # DB 백업 (매일, 7일 롤링)
+com.kis.autotrader         # 매매 엔진 (24/7)
+com.kis.watchdog           # 프로세스 감시 (5분마다)
+com.kis.autoimplement      # Claude Code 일일 자동 구현 (평일 17:00)
+com.kis.monthlyimplement   # Claude Code 월간 자동 구현 (월말 금 20:00)
+com.kis.dashboard          # Streamlit 대시보드 (24/7)
+com.kis.backup-db          # DB 백업 (매일, 7일 롤링)
+
+# Claude Desktop 스케줄러 (Cowork 세션)
+- 일일 분석     평일 16:00
+- 주간 리뷰     금 16:30
+- 월간 분석     월말 금 19:00
 ```
 
 <div class="grid grid-cols-2 gap-6 mt-4">
@@ -1642,7 +1649,7 @@ layout: default
 <div class="font-bold text-sm mb-1">스크립트 파이프라인 + 파일 통신</div>
 <div class="text-xs opacity-70 space-y-0.5">
 
-- launchd × 7, proposals/reports 디렉토리
+- launchd × 6 + Claude Desktop 스케줄 × 3, proposals/reports 디렉토리
 - BRIDGE_SPEC.md가 사실상의 "에이전트 헌법"
 - 자동 구현 63건 / 5분/일 운영 비용
 
