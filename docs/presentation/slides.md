@@ -626,6 +626,143 @@ project-root/
 layout: default
 ---
 
+# 핵심 원리 2-확장 &mdash; 전역 컨텍스트 `~/.claude`
+
+<div class="text-sm opacity-50 mb-2">프로젝트 밖, 사용자 홈에 두는 "내 모든 AI 세션의 공통 컨텍스트"</div>
+
+<div class="grid grid-cols-2 gap-6">
+
+<div>
+
+```
+~/.claude/                         ← 사용자 전역
+├── CLAUDE.md                      ← 모든 프로젝트 공통 지침
+├── settings.json                  ← 권한·환경변수·hook
+├── agents/                        ← 내가 만든 사용자 에이전트
+├── commands/                      ← 사용자 슬래시 커맨드
+├── skills/                        ← 사용자 스킬
+└── projects/<project>/memory/
+    └── MEMORY.md                  ← 자동 누적 메모리
+
+project-root/
+├── CLAUDE.md                      ← 이 프로젝트 전용 지침
+└── .claude/
+    ├── settings.json              ← 프로젝트 설정 (커밋)
+    ├── settings.local.json        ← 개인 오버라이드 (gitignore)
+    └── agents/ commands/ skills/  ← 프로젝트 스코프
+```
+
+</div>
+
+<div class="space-y-2 text-xs">
+
+<div>
+<span class="font-bold text-emerald-400">~/.claude/CLAUDE.md</span> &mdash;
+<span class="opacity-70">"나는 한국어로 답변받는다", "커밋 메시지 컨벤션은 이거다" 처럼 <em>모든 프로젝트에서 반복되는 내 취향·규칙</em>을 적는 곳.</span>
+</div>
+
+<div>
+<span class="font-bold text-emerald-400">~/.claude/agents · skills · commands</span> &mdash;
+<span class="opacity-70">한 번 만들어 두면 어떤 프로젝트에서든 호출 가능. <em>개인 도구상자</em>.</span>
+</div>
+
+<div>
+<span class="font-bold text-emerald-400">~/.claude/projects/&lt;p&gt;/memory/MEMORY.md</span> &mdash;
+<span class="opacity-70">대화 중 학습한 사용자 선호·피드백을 AI가 <em>자동 저장</em>하는 영역. 다음 세션이 이 기억을 들고 시작한다.</span>
+</div>
+
+<div>
+<span class="font-bold text-emerald-400">project/.claude/settings.json</span> &mdash;
+<span class="opacity-70">팀 전체가 공유할 권한·hook·MCP 서버 설정. PR로 관리.</span>
+</div>
+
+<div>
+<span class="font-bold text-emerald-400">.claude/settings.local.json</span> &mdash;
+<span class="opacity-70">내 로컬에만 적용되는 오버라이드. gitignore.</span>
+</div>
+
+</div>
+
+</div>
+
+<div class="mt-3 p-3 border-l-2 border-emerald-400/60 text-sm opacity-70">
+<strong>핵심:</strong> 프로젝트 컨텍스트(<code>CLAUDE.md</code>)는 <em>이 시스템</em>을 가르치고,
+전역 컨텍스트(<code>~/.claude</code>)는 <em>나 자신</em>을 가르친다. 둘은 합쳐져서 AI에게 전달된다.
+</div>
+
+---
+layout: default
+---
+
+# 핵심 원리 2-확장 &mdash; 메모리 로딩 우선순위
+
+<div class="text-sm opacity-50 mb-2">세션이 시작될 때 AI가 컨텍스트를 읽는 순서 &mdash; 충돌 시 누가 이기는가</div>
+
+<div class="grid grid-cols-2 gap-8 mt-2">
+
+<div>
+
+<div class="text-xs font-mono text-white/40 mb-3 tracking-widest">LOAD ORDER (위 → 아래)</div>
+
+```
+1. Enterprise Policy           (조직 관리 정책)
+   /Library/Application Support/
+   ClaudeCode/managed-settings.json
+
+2. ~/.claude/CLAUDE.md         (사용자 전역)
+   ~/.claude/settings.json
+
+3. <repo>/CLAUDE.md            (프로젝트 공유)
+   <repo>/.claude/settings.json
+
+4. <repo>/.claude/             (개인 오버라이드)
+   settings.local.json
+
+5. <cwd>/CLAUDE.md             (하위 디렉토리)
+   필요 시 on-demand 로드
+
+6. @import 참조                (CLAUDE.md 안의
+   @path/to/file 라인)
+
+7. /memory · #memo 로 추가      (대화 중 영구 추가)
+8. MEMORY.md (auto-memory)      (학습한 사용자 선호)
+```
+
+</div>
+
+<div class="space-y-3 text-sm">
+
+<div>
+<span class="font-bold text-emerald-400">충돌 규칙 &mdash; "더 좁은 스코프가 이긴다"</span>
+<div class="opacity-70 mt-1">전역 vs 프로젝트가 다르면 <strong>프로젝트가 우선</strong>. 프로젝트 vs 로컬이 다르면 <strong>로컬이 우선</strong>. 단, Enterprise Policy는 모든 것을 덮어쓴다.</div>
+</div>
+
+<div>
+<span class="font-bold text-emerald-400">CLAUDE.md는 누적, settings는 머지</span>
+<div class="opacity-70 mt-1">CLAUDE.md 본문은 <em>모두 이어붙여서</em> 컨텍스트로 들어간다 &mdash; 같은 주제를 양쪽에 적으면 양쪽 다 읽는다. settings.json은 <em>키 단위로 머지</em> &mdash; 같은 키는 좁은 스코프가 덮어쓴다.</div>
+</div>
+
+<div>
+<span class="font-bold text-emerald-400">실전 배치 가이드</span>
+<div class="opacity-70 mt-1">
+&middot; <strong>~/.claude/CLAUDE.md</strong>: 답변 언어, 커뮤니케이션 톤, 개인 커밋 규칙<br/>
+&middot; <strong>repo/CLAUDE.md</strong>: 이 프로젝트의 아키텍처·컨벤션·금지사항 (팀 공유)<br/>
+&middot; <strong>settings.local.json</strong>: 내 로컬 경로, 개인 API 키, 실험적 권한
+</div>
+</div>
+
+<div class="p-3 border-l-2 border-emerald-400/60">
+<strong>왜 이 순서가 중요한가:</strong> "AI가 내 지시를 안 듣는다"의 90%는 <em>더 넓은 스코프에 같은 주제가 적혀 있어서</em> 충돌하는 경우다. 우선순위를 알면 어디를 고쳐야 하는지 보인다.
+</div>
+
+</div>
+
+</div>
+
+---
+layout: default
+---
+
 # 핵심 원리 3 &mdash; 로그가 아니라 데이터다
 
 <div class="grid grid-cols-2 gap-8 mt-4">
