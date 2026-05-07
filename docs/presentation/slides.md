@@ -2017,16 +2017,16 @@ class: text-center
 </div>
 
 <div class="text-center">
-<div class="text-6xl font-bold text-emerald-400">63건</div>
+<div class="text-6xl font-bold text-emerald-400">25건</div>
 <div class="text-sm opacity-60 mt-2">자동 구현된 변경</div>
 </div>
 
 </div>
 
 <div class="mt-8 text-center">
-<span class="font-mono text-2xl text-white/70">+19,806</span>
+<span class="font-mono text-2xl text-white/70">+19,894</span>
 <span class="text-sm opacity-40 mx-2">/</span>
-<span class="font-mono text-2xl text-white/70">-740</span>
+<span class="font-mono text-2xl text-white/70">-747</span>
 <span class="text-sm opacity-40 ml-3">lines changed (src + tests)</span>
 </div>
 
