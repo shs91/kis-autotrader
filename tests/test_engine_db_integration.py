@@ -434,6 +434,7 @@ class TestSignalSummaryMetric:
         expected_keys = {
             "cycle", "evaluated", "buy_count", "sell_count",
             "hold_count", "max_confidence", "screened_count",
+            "screening_buy", "screening_sell", "screening_hold",
         }
         assert set(detail.keys()) == expected_keys
 

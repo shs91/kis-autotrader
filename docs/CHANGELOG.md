@@ -1,8 +1,18 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (68건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (69건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-08] 스크리닝 종목 시그널 품질 진단 메트릭 추가
+- 제안서: docs/proposals/2026-05-08_screening-signal-quality-metric.md
+- 카테고리: performance
+- 변경 파일:
+  - src/engine.py: 스크리닝 종목 BUY/SELL/HOLD 카운터 3개 추가 (`_cycle_screening_buy/sell/hold`). SIGNAL_SUMMARY 메트릭에 `screening_buy`, `screening_sell`, `screening_hold` 필드 추가.
+  - tests/test_engine_db_integration.py: SIGNAL_SUMMARY expected_keys에 screening 필드 3개 추가.
+- 검증 결과: pytest ✅ (424 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
 
 ---
 
@@ -41,12 +51,3 @@
   - src/engine.py: `_get_daily_df()`에서 일봉 부족 시 `DAILY_DATA_INSUFFICIENT` 메트릭 적재 (종목코드·반환건수·최소요구건수·사이클). `_process_stock()`에서 일봉 부족 조기 종료 시 `EVAL_SKIP` 메트릭 적재 (종목코드·사유·사이클).
   - tests/test_engine_db_integration.py: `TestDailyDataInsufficientMetric` 클래스 추가 (DAILY_DATA_INSUFFICIENT 적재 검증, EVAL_SKIP 적재 검증 — 2개 테스트).
 - 검증 결과: pytest ✅ (425 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-05-01] 시그널 저장 필터 임계값 하향 — STRATEGY_MIN_CONFIDENCE 0.08→0.05
-- 제안서: docs/proposals/2026-05-01_signal-confidence-threshold-lowering.md
-- 카테고리: param_tuning
-- 변경 파일:
-  - config_overrides.json: `STRATEGY_MIN_CONFIDENCE` 0.08 → 0.05 하향 (BRIDGE_SPEC 허용 최솟값). 14일 연속 시그널 0건 상태 해소 목적.
-- 검증 결과: pytest ✅ (423 passed, 4 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만

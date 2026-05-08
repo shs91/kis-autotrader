@@ -99,6 +99,11 @@ class TradingEngine:
         self._cycle_hold_count = 0
         self._cycle_max_confidence = 0.0
 
+        # 스크리닝 종목 시그널 품질 카운터
+        self._cycle_screening_buy: int = 0
+        self._cycle_screening_sell: int = 0
+        self._cycle_screening_hold: int = 0
+
         # 일봉 캐시: {종목코드: (날짜, DataFrame)}
         self._daily_cache: dict[str, tuple[str, pd.DataFrame]] = {}
         # 잔고 캐시: (조회시각, Balance)
@@ -368,6 +373,9 @@ class TradingEngine:
             self._cycle_sell_count = 0
             self._cycle_hold_count = 0
             self._cycle_max_confidence = 0.0
+            self._cycle_screening_buy = 0
+            self._cycle_screening_sell = 0
+            self._cycle_screening_hold = 0
 
             for stock_code in targets:
                 # 서킷 브레이커가 열려있으면 사이클 즉시 중단
@@ -417,6 +425,9 @@ class TradingEngine:
                     "hold_count": self._cycle_hold_count,
                     "max_confidence": round(self._cycle_max_confidence, 4),
                     "screened_count": len(self._screened_codes),
+                    "screening_buy": self._cycle_screening_buy,
+                    "screening_sell": self._cycle_screening_sell,
+                    "screening_hold": self._cycle_screening_hold,
                 })
         finally:
             limiter = self._client._limiter
@@ -654,6 +665,15 @@ class TradingEngine:
             self._cycle_hold_count += 1
         if signal.confidence > self._cycle_max_confidence:
             self._cycle_max_confidence = signal.confidence
+
+        # 3-1a. 스크리닝 종목 시그널 품질 카운터 갱신
+        if stock_code in self._screened_codes:
+            if signal.signal_type == SignalType.BUY:
+                self._cycle_screening_buy += 1
+            elif signal.signal_type == SignalType.SELL:
+                self._cycle_screening_sell += 1
+            else:
+                self._cycle_screening_hold += 1
 
         # 3-2. 시그널 DB 기록 (BUY/SELL만, action_taken은 아래서 결정)
         will_act = False
