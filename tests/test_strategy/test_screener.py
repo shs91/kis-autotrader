@@ -262,6 +262,11 @@ class TestStockScreener:
 class TestETFFilter:
     """ETF/ETN/레버리지 필터 테스트."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_blocklist_cache(self) -> None:
+        """테스트 간 블록리스트 캐시를 초기화한다."""
+        ScreeningFilter._ETF_BLOCKLIST = None
+
     def test_is_etf_etn_filters_kodex(self) -> None:
         """KODEX ETF 종목이 필터링된다."""
         assert ScreeningFilter._is_etf_etn("252670", "KODEX 200선물인버스2X")
@@ -283,6 +288,19 @@ class TestETFFilter:
         """일반 종목(삼성전자 등)은 통과한다."""
         assert not ScreeningFilter._is_etf_etn("005930", "삼성전자")
         assert not ScreeningFilter._is_etf_etn("000660", "SK하이닉스")
+
+    def test_is_etf_etn_filters_blocklist_code(self) -> None:
+        """블록리스트에 있는 ETF 코드가 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("252670", "알수없는종목")
+        assert ScreeningFilter._is_etf_etn("069500", "알수없는종목")
+
+    def test_is_etf_etn_filters_name_equals_code(self) -> None:
+        """stock_name이 stock_code와 동일하면 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("252670", "252670")
+
+    def test_is_etf_etn_filters_empty_name(self) -> None:
+        """stock_name이 빈 문자열이면 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("123456", "")
 
     def test_screening_excludes_etf(self) -> None:
         """스크리닝 결과에서 ETF가 제외된다."""

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.api.quote import VolumeRankItem
 from src.config import ScreeningConfig, settings
@@ -92,10 +94,30 @@ class ScreeningFilter:
         "HANARO", "ETN", "레버리지", "인버스", "2X", "곱버스",
     )
 
+    _ETF_BLOCKLIST: set[str] | None = None
+
+    @staticmethod
+    def _load_etf_blocklist() -> set[str]:
+        """config/etf_blocklist.json에서 ETF 블록리스트를 로드한다."""
+        if ScreeningFilter._ETF_BLOCKLIST is not None:
+            return ScreeningFilter._ETF_BLOCKLIST
+        try:
+            path = Path(__file__).resolve().parents[2] / "config" / "etf_blocklist.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            ScreeningFilter._ETF_BLOCKLIST = set(data.get("codes", []))
+        except Exception:
+            logger.warning("ETF 블록리스트 로드 실패 — 빈 set으로 fallback")
+            ScreeningFilter._ETF_BLOCKLIST = set()
+        return ScreeningFilter._ETF_BLOCKLIST
+
     @staticmethod
     def _is_etf_etn(stock_code: str, stock_name: str) -> bool:
         """ETF/ETN/레버리지/인버스 종목 여부를 판별한다."""
         if stock_code.startswith("Q"):
+            return True
+        if stock_code in ScreeningFilter._load_etf_blocklist():
+            return True
+        if not stock_name or stock_name == stock_code:
             return True
         upper_name = stock_name.upper()
         for keyword in ScreeningFilter._ETF_BRAND_KEYWORDS:

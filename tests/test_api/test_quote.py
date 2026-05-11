@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -124,6 +124,68 @@ class TestQuoteAPI:
         result = await api.get_daily_price("005930")
 
         assert result == []
+
+    async def test_get_daily_price_pagination_fetches_60_items(self) -> None:
+        """페이지네이션으로 60건 이상을 확보한다."""
+        page1 = [
+            {
+                "STCK_BSOP_DATE": f"202605{30 - i:02d}",
+                "STCK_OPRC": "70000",
+                "STCK_HGPR": "72000",
+                "STCK_LWPR": "69000",
+                "STCK_CLPR": "71000",
+                "ACML_VOL": "1000000",
+            }
+            for i in range(30)
+        ]
+        page2 = [
+            {
+                "STCK_BSOP_DATE": f"202604{30 - i:02d}",
+                "STCK_OPRC": "68000",
+                "STCK_HGPR": "70000",
+                "STCK_LWPR": "67000",
+                "STCK_CLPR": "69000",
+                "ACML_VOL": "900000",
+            }
+            for i in range(30)
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = [
+            {"output": page1},
+            {"output": page2},
+        ]
+
+        api = QuoteAPI(client=mock_client)
+        result = await api.get_daily_price("005930", lookback_days=60)
+
+        assert len(result) == 60
+        assert mock_client.get.call_count == 2
+        assert result[0].date == "20260530"
+        assert result[-1].date == "20260401"
+
+    async def test_get_daily_price_single_page_when_enough(self) -> None:
+        """lookback_days=30 이하이면 단일 페이지로 충분하다."""
+        page = [
+            {
+                "STCK_BSOP_DATE": f"202605{30 - i:02d}",
+                "STCK_OPRC": "70000",
+                "STCK_HGPR": "72000",
+                "STCK_LWPR": "69000",
+                "STCK_CLPR": "71000",
+                "ACML_VOL": "1000000",
+            }
+            for i in range(30)
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = {"output": page}
+
+        api = QuoteAPI(client=mock_client)
+        result = await api.get_daily_price("005930", lookback_days=30)
+
+        assert len(result) == 30
+        assert mock_client.get.call_count == 1
 
     async def test_get_current_price_passes_params(self) -> None:
         """현재가 조회 시 올바른 파라미터가 전달된다."""

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from src.api.client import KISClient
@@ -145,51 +146,83 @@ class QuoteAPI:
         stock_code: str,
         period: str = "D",
         adjusted: bool = True,
+        lookback_days: int = 60,
     ) -> list[DailyPriceItem]:
-        """종목의 일봉 데이터를 조회한다.
+        """종목의 일봉 데이터를 페이지네이션으로 조회한다.
+
+        KIS API는 1회 호출 시 최대 30건만 반환하므로, lookback_days에
+        도달할 때까지 날짜 범위를 조정하며 반복 호출한다.
 
         Args:
             stock_code: 종목코드 (6자리)
             period: 기간 구분 ("D": 일, "W": 주, "M": 월)
             adjusted: 수정주가 반영 여부
+            lookback_days: 확보할 거래일 수 (기본 60)
 
         Returns:
-            일봉 데이터 목록
+            일봉 데이터 목록 (최신→과거 순)
         """
-        logger.info("[일봉 조회] 종목=%s, 기간=%s", stock_code, period)
-
-        end_date = date.today()
-        start_date = end_date - timedelta(days=150)
-
-        params = {
-            "FID_COND_MRKT_DIV_CODE": "J",
-            "FID_INPUT_ISCD": stock_code,
-            "FID_INPUT_DATE_1": start_date.strftime("%Y%m%d"),
-            "FID_INPUT_DATE_2": end_date.strftime("%Y%m%d"),
-            "FID_PERIOD_DIV_CODE": period,
-            "FID_ORG_ADJ_PRC": "0" if adjusted else "1",
-        }
-
-        response = await self._client.get(
-            DAILY_PRICE_PATH, params=params, tr_id=TR_ID_DAILY_PRICE
+        logger.info(
+            "[일봉 조회] 종목=%s, 기간=%s, lookback=%d",
+            stock_code, period, lookback_days,
         )
 
-        output_list = response.get("output", [])
-        results: list[DailyPriceItem] = []
+        all_results: list[DailyPriceItem] = []
+        seen_dates: set[str] = set()
+        page_end = date.today()
+        max_pages = (lookback_days // 30) + 2
 
-        for item in output_list:
-            results.append(
-                DailyPriceItem(
-                    date=_get(item, "STCK_BSOP_DATE"),
-                    open_price=int(_get(item, "STCK_OPRC", "0")),
-                    high_price=int(_get(item, "STCK_HGPR", "0")),
-                    low_price=int(_get(item, "STCK_LWPR", "0")),
-                    close_price=int(_get(item, "STCK_CLPR", "0")),
-                    volume=int(_get(item, "ACML_VOL", "0")),
-                )
+        for page in range(max_pages):
+            page_start = page_end - timedelta(days=150)
+
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": stock_code,
+                "FID_INPUT_DATE_1": page_start.strftime("%Y%m%d"),
+                "FID_INPUT_DATE_2": page_end.strftime("%Y%m%d"),
+                "FID_PERIOD_DIV_CODE": period,
+                "FID_ORG_ADJ_PRC": "0" if adjusted else "1",
+            }
+
+            response = await self._client.get(
+                DAILY_PRICE_PATH, params=params, tr_id=TR_ID_DAILY_PRICE
             )
 
-        return results
+            output_list = response.get("output", [])
+            if not output_list:
+                break
+
+            oldest_date_str: str | None = None
+            for item in output_list:
+                dt = _get(item, "STCK_BSOP_DATE")
+                if not dt or dt in seen_dates:
+                    continue
+                seen_dates.add(dt)
+                all_results.append(
+                    DailyPriceItem(
+                        date=dt,
+                        open_price=int(_get(item, "STCK_OPRC", "0")),
+                        high_price=int(_get(item, "STCK_HGPR", "0")),
+                        low_price=int(_get(item, "STCK_LWPR", "0")),
+                        close_price=int(_get(item, "STCK_CLPR", "0")),
+                        volume=int(_get(item, "ACML_VOL", "0")),
+                    )
+                )
+                oldest_date_str = dt
+
+            if len(all_results) >= lookback_days:
+                break
+
+            if oldest_date_str is None or len(output_list) < 30:
+                break
+
+            page_end = datetime.strptime(oldest_date_str, "%Y%m%d").date() - timedelta(days=1)
+
+            if page > 0:
+                await asyncio.sleep(0.05)
+
+        logger.info("[일봉 조회 완료] 종목=%s, %d건 확보", stock_code, len(all_results))
+        return all_results
 
     async def get_minute_price(
         self,

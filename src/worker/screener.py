@@ -37,7 +37,7 @@ from src.config import settings
 from src.db.repository import ScreeningResultRepository
 from src.db.session import get_session
 from src.strategy.registry import StrategyRegistry
-from src.strategy.screener import ScoredCandidate, StockScreener
+from src.strategy.screener import ScoredCandidate, ScreeningFilter, StockScreener
 from src.strategy.selector import StrategySelector
 from src.utils.logger import setup_logger
 
@@ -188,9 +188,13 @@ class ScreeningWorker:
         """스크리닝 결과를 screening_results 테이블에 배치 기록한다."""
         try:
             candidate_set = set(new_candidates)
+            etf_blocked = 0
             with get_session() as session:
                 repo = ScreeningResultRepository(session)
                 for rank_idx, item in enumerate(ranked, start=1):
+                    if ScreeningFilter._is_etf_etn(item.stock_code, item.stock_name):
+                        etf_blocked += 1
+                        continue
                     repo.record_screening(
                         stock_code=item.stock_code,
                         stock_name=item.stock_name,
@@ -201,6 +205,8 @@ class ScreeningWorker:
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
                     )
+            if etf_blocked:
+                logger.info("스크리닝 DB 적재 시 ETF 블록 %d건 차단", etf_blocked)
         except Exception:
             logger.exception("스크리닝 DB 적재 실패")
 
