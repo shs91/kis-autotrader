@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import datetime
+from typing import Any
 
-from sqlalchemy import create_engine
+from sqlalchemy import DateTime, create_engine, event, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,6 +20,32 @@ logger = setup_logger(__name__)
 
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
+
+
+def validate_timezone_aware(session: Session, *_: Any) -> None:
+    """TIMESTAMPTZ 컬럼에 명시적으로 set된 naive datetime을 차단한다.
+
+    호출자가 직접 set한 값만 검사하므로, 컬럼 default(예: datetime.utcnow)는
+    플러시 시점까지 객체 __dict__에 없어 이 검사를 우회한다.
+    `get_session()`이 만든 세션 인스턴스에만 등록되며, 테스트가 자체 세션을
+    만들 때는 적용되지 않는다.
+    """
+    for obj in list(session.new) + list(session.dirty):
+        mapper = inspect(obj).mapper
+        instance_dict = obj.__dict__
+        for col in mapper.columns:
+            if not isinstance(col.type, DateTime) or not col.type.timezone:
+                continue
+            attr_name = mapper.get_property_by_column(col).key
+            if attr_name not in instance_dict:
+                continue
+            value = instance_dict[attr_name]
+            if isinstance(value, datetime) and value.tzinfo is None:
+                raise ValueError(
+                    f"Naive datetime in TIMESTAMPTZ column "
+                    f"{obj.__class__.__name__}.{attr_name}: "
+                    f"use datetime.now(UTC) or aware datetime"
+                )
 
 
 def get_engine() -> Engine:
@@ -64,6 +92,7 @@ def get_session() -> Generator[Session, None, None]:
     """
     factory = get_session_factory()
     session = factory()
+    event.listen(session, "before_flush", validate_timezone_aware)
     try:
         yield session
         session.commit()

@@ -25,7 +25,8 @@ Redis Rate Limiter를 통해 API 호출 할당량을 관리한다.
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -36,6 +37,7 @@ from src.api.rate_limiter import HybridRateLimiter
 from src.config import settings
 from src.db.repository import ScreeningResultRepository
 from src.db.session import get_session
+from src.scheduler.holidays import is_market_closed
 from src.strategy.registry import StrategyRegistry
 from src.strategy.screener import ScoredCandidate, ScreeningFilter, StockScreener
 from src.strategy.selector import StrategySelector
@@ -45,6 +47,10 @@ logger = setup_logger(__name__)
 
 # 스크리닝 기본 주기 (초)
 DEFAULT_SCREENING_INTERVAL: int = 300  # 5분
+
+_KST = ZoneInfo("Asia/Seoul")
+_MARKET_OPEN_KST = time(9, 0)
+_MARKET_CLOSE_KST = time(15, 30)
 
 
 class ScreeningWorker:
@@ -104,8 +110,20 @@ class ScreeningWorker:
         self._running = False
         logger.info("ScreeningWorker 종료")
 
+    @staticmethod
+    def _is_trading_window() -> bool:
+        """현재 시각이 한국 증시 매매시간(평일 09:00~15:30 KST)인지 판정한다."""
+        now_kst = datetime.now(_KST)
+        if is_market_closed(now_kst.date()):
+            return False
+        t = now_kst.time()
+        return _MARKET_OPEN_KST <= t <= _MARKET_CLOSE_KST
+
     async def _run_screening(self) -> None:
         """스크리닝 1회를 실행한다."""
+        if not self._is_trading_window():
+            logger.debug("매매시간/개장일 외 — 스크리닝 스킵")
+            return
         self._cycle_count += 1
         scfg = settings.screening
 
@@ -201,7 +219,7 @@ class ScreeningWorker:
                         screening_rank=rank_idx,
                         volume=item.volume,
                         price_change_pct=item.change_rate,
-                        screened_at=datetime.now(),
+                        screened_at=datetime.now(UTC),
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
                     )

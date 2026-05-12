@@ -1,8 +1,23 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (72건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (74건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-12] TIMESTAMPTZ에 naive datetime 저장 버그 수정 + listener + 스크리너 매매시간 가드 (v0.2.1)
+- 제안서: docs/proposals/2026-05-12_timestamp-naive-to-aware-utc.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `datetime.now()` 2곳 `datetime.now(UTC)`로 교체 + UTC import.
+  - src/worker/screener.py: `_is_trading_window()` 가드 추가 (휴장일/매매시간 외 스킵), `datetime.now()` → `datetime.now(UTC)`.
+  - src/db/session.py: `before_flush` 리스너로 TIMESTAMPTZ 컬럼에 명시 set된 naive datetime 거부.
+  - tests/test_db/test_timezone_validation.py: 신규 3 케이스 (naive 거부, aware UTC/KST 허용).
+  - tests/test_worker/test_screener.py: 가드 우회 mock 추가.
+- 데이터 처리: `screening_results` 전수 TRUNCATE (24/7 작동 누적 + 시간 어긋남 row 폐기). 손상 trades/signals는 사용자가 별도 백필 완료.
+- 영향: 신규 row의 timestamp 절대 시각 정확. 일자 경계 misclassification 해소. 휴장일 INSERT 차단. 회귀 시 ValueError 즉시 발생.
+- 검증 결과: pytest 461 passed (5 pre-existing) | mypy: pre-existing 에러만 | ruff ✅
 
 ---
 
@@ -51,12 +66,3 @@
 
 ---
 
-## [2026-05-11] 스크리너 ETF/Q-code 필터 누수 수정 — 코드 기반 블록리스트 도입
-- 제안서: docs/proposals/2026-05-09_screener-etf-code-blocklist.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - config/etf_blocklist.json: ETF 코드 블록리스트 신규 생성 (10종목).
-  - src/strategy/screener.py: 블록리스트 로드 + stock_name 결손 차단 + `_is_etf_etn` 보강.
-  - src/worker/screener.py: DB INSERT 직전 ETF 재검증 추가.
-  - tests/test_strategy/test_screener.py: 블록리스트·이름결손 테스트 3건 추가.
-- 검증 결과: pytest ✅ (429 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅

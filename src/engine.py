@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pandas as pd
@@ -966,7 +966,7 @@ class TradingEngine:
                     "quantity": quantity,
                     "price": price,
                     "total_amount": price * quantity,
-                    "traded_at": datetime.now().isoformat(),
+                    "traded_at": datetime.now(UTC).isoformat(),
                     "cycle_number": self._cycle_count,
                     "buy_reason": buy_reason.value if buy_reason else None,
                     "sell_reason": sell_reason.value if sell_reason else None,
@@ -996,7 +996,7 @@ class TradingEngine:
                         screening_rank=rank_idx,
                         volume=item.volume,
                         price_change_pct=item.change_rate,
-                        screened_at=datetime.now(),
+                        screened_at=datetime.now(UTC),
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
                     )

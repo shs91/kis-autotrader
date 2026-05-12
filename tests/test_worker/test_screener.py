@@ -53,5 +53,7 @@ class TestScreeningWorker:
 
         worker._quote.get_volume_rank = AsyncMock(return_value=[])
 
-        await worker._run_screening()
+        # 매매시간/휴장 가드는 테스트 환경에서 임의 우회
+        with patch.object(ScreeningWorker, "_is_trading_window", return_value=True):
+            await worker._run_screening()
         assert worker._cycle_count == 1
