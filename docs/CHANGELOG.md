@@ -6,6 +6,16 @@
 
 ---
 
+## [2026-05-12] 스크리닝 종목명 stocks 테이블 자동 등록 — 코드/알림/캘린더 표시 정상화
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `_screen_stocks`에서 screening_results의 (code, name) 페어를 수집해 `_upsert_stock_names` 호출 — stocks 테이블에 사전 등록되어 `_resolve_stock_name` 폴백이 정상 동작. 현재가 API의 `HTS_KOR_ISNM`이 비어있는 종목도 종목명으로 표시됨.
+- 백필: screening_results 최근 14일치에서 stocks 테이블로 일괄 upsert (신규 338, 보정 4).
+- 영향: DB(trades/signals)·Telegram 알림·Google Calendar 등록 시 종목 코드 대신 종목명 표시. 신규 매매부터 적용 (기존 trades/signals 행은 이력 보존).
+- 검증 결과: pytest test_engine_db_integration.py ✅ (24 passed) | mypy: pre-existing 에러만 | ruff ✅
+
+---
+
 ## [2026-05-11] 앙상블 시그널 최소 신뢰도 2차 상향 (0.15→0.20)
 - 제안서: docs/proposals/2026-05-11_ensemble-confidence-further-raise.md
 - 카테고리: param_tuning
@@ -44,12 +54,3 @@
   - src/engine.py: 스크리닝 종목 BUY/SELL/HOLD 카운터 3개 추가 (`_cycle_screening_buy/sell/hold`). SIGNAL_SUMMARY 메트릭에 `screening_buy`, `screening_sell`, `screening_hold` 필드 추가.
   - tests/test_engine_db_integration.py: SIGNAL_SUMMARY expected_keys에 screening 필드 3개 추가.
 - 검증 결과: pytest ✅ (424 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-05-07] 스크리닝 최소 점수 하향 — 전환율 0% 장기화 해소
-- 제안서: docs/proposals/2026-05-07_screening-min-score-reduction.md
-- 카테고리: param_tuning
-- 변경 파일:
-  - config_overrides.json: `SCREENING_MIN_SCORE` 0.25(기본값) → 0.15 하향 추가. 7일 연속 전환율 0% 교착 해소 목적.
-- 검증 결과: pytest ✅ (424 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만

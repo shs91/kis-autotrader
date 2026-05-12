@@ -557,6 +557,7 @@ class TradingEngine:
                 results = repo.get_by_date(today)
 
             new_codes: list[str] = []
+            name_map: dict[str, str] = {}
             seen: set[str] = set()
             watchlist_set = set(self._get_watchlist_codes())
             converted_count = 0
@@ -566,6 +567,8 @@ class TradingEngine:
                 if r.stock_code in seen:
                     continue
                 seen.add(r.stock_code)
+                if r.stock_name and r.stock_name != r.stock_code:
+                    name_map[r.stock_code] = r.stock_name
                 if r.stock_code in self._screened_codes:
                     continue
                 if r.stock_code in watchlist_set:
@@ -595,6 +598,11 @@ class TradingEngine:
                     "스크리닝 결과 반영 0종목 (이미 등록 %d, 관심종목 제외)",
                     len(self._screened_codes),
                 )
+
+            # screening_results에 있는 종목명을 stocks 테이블에 upsert
+            # → _process_stock의 _resolve_stock_name 폴백 경로에서 사용됨
+            if name_map:
+                self._upsert_stock_names(name_map)
         except Exception:
             logger.exception("스크리닝 결과 DB 조회 실패")
 
@@ -1440,6 +1448,41 @@ class TradingEngine:
 
         except Exception:
             logger.exception("종목명 사전 등록 실패 (매매에 영향 없음)")
+
+    def _upsert_stock_names(self, name_map: dict[str, str]) -> None:
+        """주어진 (코드, 이름) 쌍을 stocks 테이블에 upsert한다.
+
+        스크리닝 결과로 발굴된 종목의 이름을 사전 등록하여,
+        ``_process_stock``에서 현재가 API의 ``HTS_KOR_ISNM`` 응답이
+        비어있을 때 폴백으로 사용할 수 있도록 한다.
+
+        Args:
+            name_map: {종목코드: 종목명} 매핑
+        """
+        if not name_map:
+            return
+        try:
+            registered = 0
+            updated = 0
+            with get_session() as session:
+                stock_repo = StockRepository(session)
+                for code, name in name_map.items():
+                    if not name or name == code:
+                        continue
+                    stock = stock_repo.get_by_code(code)
+                    if stock is None:
+                        stock_repo.create(code, name, "UNKNOWN")
+                        registered += 1
+                    elif stock.name == stock.code or not stock.name:
+                        stock_repo.update_name(code, name)
+                        updated += 1
+            if registered or updated:
+                logger.info(
+                    "스크리닝 종목명 stocks 테이블 반영: 신규 %d / 보정 %d",
+                    registered, updated,
+                )
+        except Exception:
+            logger.exception("스크리닝 종목명 upsert 실패 (매매에 영향 없음)")
 
     def _resolve_stock_name(self, stock_code: str) -> str:
         """DB에서 종목명을 조회한다. 코드와 동일하거나 없으면 빈 문자열 반환."""
