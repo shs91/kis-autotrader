@@ -192,6 +192,36 @@ class TestFormatDailySummary:
         result = format_daily_summary("2026-04-03", 15, 0, 0.0, executions=execs)
         assert "외 5건" in result
 
+    def test_with_version_shows_in_header(self) -> None:
+        result = format_daily_summary("2026-04-03", 0, 0, 0.0, version="0.1.5")
+        assert "[v0.1.5]" in result
+        # 헤더에 한 번만 등장
+        assert result.count("[v0.1.5]") == 1
+
+    def test_without_version_omits_prefix(self) -> None:
+        result = format_daily_summary("2026-04-03", 0, 0, 0.0)
+        # v로 시작하는 버전 토큰이 없어야 함
+        assert "[v" not in result
+
+    def test_with_today_bumps_lists_changes(self) -> None:
+        bumps = [
+            ("0.1.4", "bug_fix", "종목명 누락 보정"),
+            ("0.1.5", "param_tuning", "MIN_CONFIDENCE 0.20 상향"),
+        ]
+        result = format_daily_summary(
+            "2026-04-03", 0, 0, 0.0, version="0.1.5", today_bumps=bumps,
+        )
+        assert "오늘 적용된 변경" in result
+        assert "v0.1.4 (bug_fix)" in result
+        assert "v0.1.5 (param_tuning)" in result
+
+    def test_today_bumps_truncated_at_5(self) -> None:
+        bumps = [(f"0.1.{i}", "bug_fix", f"변경 {i}") for i in range(8)]
+        result = format_daily_summary(
+            "2026-04-03", 0, 0, 0.0, today_bumps=bumps,
+        )
+        assert "외 3건" in result
+
 
 # ── format_error ──────────────────────────────────────────
 

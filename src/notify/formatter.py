@@ -50,15 +50,15 @@ def format_buy(
     total = detail.total_amount if detail and detail.total_amount else quantity * price
     lines = [
         f"\U0001f4c8 <b>[매수]</b> {stock_name}({stock_code})",
-        "\u2500" * 20,
-        f"\u2022 수량: {quantity}주 \u00d7 {price:,}원",
-        f"\u2022 금액: {total:,}원",
+        "─" * 20,
+        f"• 수량: {quantity}주 × {price:,}원",
+        f"• 금액: {total:,}원",
     ]
     if detail and detail.strategy:
-        lines.append(f"\u2022 전략: {detail.strategy}")
+        lines.append(f"• 전략: {detail.strategy}")
     if detail and detail.reason:
         conf = f" (신뢰도 {detail.confidence:.0%})" if detail.confidence > 0 else ""
-        lines.append(f"\u2022 근거: {detail.reason}{conf}")
+        lines.append(f"• 근거: {detail.reason}{conf}")
     return "\n".join(lines)
 
 
@@ -84,19 +84,19 @@ def format_sell(
     total = detail.total_amount if detail and detail.total_amount else quantity * price
     lines = [
         f"{emoji} <b>[{tag}]</b> {stock_name}({stock_code})",
-        "\u2500" * 20,
-        f"\u2022 수량: {quantity}주 \u00d7 {price:,}원",
-        f"\u2022 금액: {total:,}원",
+        "─" * 20,
+        f"• 수량: {quantity}주 × {price:,}원",
+        f"• 금액: {total:,}원",
     ]
     if detail and detail.avg_price > 0:
-        lines.append(f"\u2022 매입가: {detail.avg_price:,.0f}원")
+        lines.append(f"• 매입가: {detail.avg_price:,.0f}원")
     if detail and detail.profit_loss != 0:
         sign = "+" if detail.profit_loss > 0 else ""
         lines.append(
-            f"\u2022 손익: {sign}{detail.profit_loss:,}원 ({sign}{detail.profit_rate:.2f}%)"
+            f"• 손익: {sign}{detail.profit_loss:,}원 ({sign}{detail.profit_rate:.2f}%)"
         )
     if reason not in ("손절", "익절"):
-        lines.append(f"\u2022 사유: {reason}")
+        lines.append(f"• 사유: {reason}")
     return "\n".join(lines)
 
 
@@ -109,26 +109,42 @@ def format_daily_summary(
     sell_count: int = 0,
     executions: list[Execution] | None = None,
     balance: Balance | None = None,
+    version: str | None = None,
+    today_bumps: list[tuple[str, str, str]] | None = None,
 ) -> str:
-    """일일 결산 알림 메시지를 생성한다."""
+    """일일 결산 알림 메시지를 생성한다.
+
+    Args:
+        trade_date: 매매일 (ISO 형식 문자열).
+        count: 총 체결 건수.
+        profit_loss: 실현 손익(원).
+        rate: 실현 수익률(%).
+        buy_count: 매수 체결 건수.
+        sell_count: 매도 체결 건수.
+        executions: 체결 내역.
+        balance: 잔고 정보.
+        version: 현재 프로젝트 버전 (예: "0.1.3"). 지정 시 헤더에 [vX.Y.Z] 표시.
+        today_bumps: 당일 자동 bump 내역. (version, category, title) 튜플 목록.
+    """
     sign = "+" if profit_loss >= 0 else ""
     emoji = "\U0001f4c8" if profit_loss >= 0 else "\U0001f4c9"
 
+    header_prefix = f"[v{version}] " if version else ""
     lines = [
-        f"{emoji} <b>[일일 결산]</b> {trade_date}",
-        "\u2500" * 20,
+        f"{emoji} <b>{header_prefix}[일일 결산]</b> {trade_date}",
+        "─" * 20,
     ]
 
     # 체결 요약
     if buy_count or sell_count:
         lines.append(
-            f"\u2022 체결: {count}건 (매수 {buy_count} / 매도 {sell_count})"
+            f"• 체결: {count}건 (매수 {buy_count} / 매도 {sell_count})"
         )
     else:
-        lines.append(f"\u2022 체결: {count}건")
+        lines.append(f"• 체결: {count}건")
 
     lines.append(
-        f"\u2022 실현손익: {sign}{profit_loss:,}원 ({sign}{rate:.2f}%)"
+        f"• 실현손익: {sign}{profit_loss:,}원 ({sign}{rate:.2f}%)"
     )
 
     # 체결 내역 (최대 10건)
@@ -149,15 +165,24 @@ def format_daily_summary(
         bal_sign = "+" if balance.total_profit_loss >= 0 else ""
         lines.append("")
         lines.append("\U0001f4b0 <b>계좌 현황</b>")
-        lines.append(f"  \u2022 예수금: {balance.deposit:,}원")
-        lines.append(f"  \u2022 평가금: {balance.total_eval_amount:,}원")
+        lines.append(f"  • 예수금: {balance.deposit:,}원")
+        lines.append(f"  • 평가금: {balance.total_eval_amount:,}원")
         lines.append(
-            f"  \u2022 평가손익: {bal_sign}{balance.total_profit_loss:,}원"
+            f"  • 평가손익: {bal_sign}{balance.total_profit_loss:,}원"
             f" ({bal_sign}{balance.total_profit_rate:.2f}%)"
         )
         if balance.holdings:
             held = [h for h in balance.holdings if h.quantity > 0]
-            lines.append(f"  \u2022 보유: {len(held)}종목")
+            lines.append(f"  • 보유: {len(held)}종목")
+
+    # 당일 자동 bump 내역 (최대 5건)
+    if today_bumps:
+        lines.append("")
+        lines.append("\U0001f4e6 <b>오늘 적용된 변경</b>")
+        for ver, category, title in today_bumps[:5]:
+            lines.append(f"  • v{ver} ({category}) — {title}")
+        if len(today_bumps) > 5:
+            lines.append(f"  ... 외 {len(today_bumps) - 5}건")
 
     return "\n".join(lines)
 
@@ -173,4 +198,4 @@ def format_error(context: str, error: str) -> str:
 
 def format_system(message: str) -> str:
     """시스템 알림 메시지를 생성한다."""
-    return f"\u2699\ufe0f <b>[시스템]</b> {message}"
+    return f"⚙️ <b>[시스템]</b> {message}"

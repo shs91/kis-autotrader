@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-05-12] 자동 SemVer 버저닝 시스템 도입 (v0.1.0 → v0.2.0)
+- 카테고리: feature
+- 변경 파일:
+  - src/__version__.py: 단일 버전 출처 신설.
+  - src/utils/versioning.py: 카테고리→bump 매핑, SemVer 파싱/bump, `__version__.py`+`pyproject.toml` 동시 갱신.
+  - scripts/record_implementation.py: 검증 통과 시점 자동 bump + `VERSION=v0.x.x` stdout 출력 (`--no-bump` 플래그 지원).
+  - src/notify/formatter.py & telegram.py: 일일 결산 헤더에 `[vX.Y.Z]` + 당일 bump 내역 섹션 자동 노출.
+  - src/db/models.py + src/db/repository.py + alembic/versions/edb0690663bb_*.py: `implementation_logs.version` 컬럼 추가.
+  - scripts/auto_implement_prompt.txt & auto_heal_prompt.txt: `git tag -a $VERSION` 단계 명시.
+  - docs/BRIDGE_SPEC.md: 자동 버저닝 규칙 명문화.
+  - tests/test_versioning.py + tests/test_notify/test_formatter.py: 단위 테스트 31건 추가.
+- 영향: 검증 통과 시점에만 annotated tag 부여 → 알려진 정상 지점 목록 확보. 결산 헤더에 버전 노출. 롤백은 `git checkout v0.x.y && launchctl restart`.
+- 검증 결과: pytest ✅ (468 passed, 1 pre-existing analytics fail) | mypy: pre-existing 에러만 | ruff (신규 파일) ✅ | end-to-end: 자체 변경 기록 시 0.1.0 → 0.2.0 (minor bump) 정상 동작.
+
+---
+
 ## [2026-05-12] 스크리닝 종목명 stocks 테이블 자동 등록 — 코드/알림/캘린더 표시 정상화
 - 카테고리: bug_fix
 - 변경 파일:
@@ -44,13 +60,3 @@
   - src/worker/screener.py: DB INSERT 직전 ETF 재검증 추가.
   - tests/test_strategy/test_screener.py: 블록리스트·이름결손 테스트 3건 추가.
 - 검증 결과: pytest ✅ (429 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-05-08] 스크리닝 종목 시그널 품질 진단 메트릭 추가
-- 제안서: docs/proposals/2026-05-08_screening-signal-quality-metric.md
-- 카테고리: performance
-- 변경 파일:
-  - src/engine.py: 스크리닝 종목 BUY/SELL/HOLD 카운터 3개 추가 (`_cycle_screening_buy/sell/hold`). SIGNAL_SUMMARY 메트릭에 `screening_buy`, `screening_sell`, `screening_hold` 필드 추가.
-  - tests/test_engine_db_integration.py: SIGNAL_SUMMARY expected_keys에 screening 필드 3개 추가.
-- 검증 결과: pytest ✅ (424 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff ✅

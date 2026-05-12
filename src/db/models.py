@@ -419,6 +419,7 @@ class ImplementationLog(Base):
     verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     background: Mapped[str | None] = mapped_column(Text, nullable=True)
     expected_effect: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     implemented_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -429,7 +430,7 @@ class ImplementationLog(Base):
     def __repr__(self) -> str:
         return (
             f"<ImplementationLog(id={self.id}, title={self.title!r}, "
-            f"category={self.category.value})>"
+            f"category={self.category.value}, version={self.version!r})>"
         )
 
 

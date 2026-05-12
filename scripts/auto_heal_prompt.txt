@@ -62,9 +62,7 @@ ruff check src/
 ### 6. 커밋 및 완료
 
 수정이 성공하면:
-1. git add + commit
-   - 커밋 메시지: "heal: [수정 내용 요약]"
-2. 구현 이력 기록:
+1. 구현 이력 기록 + 버전 자동 bump:
    ```
    .venv/bin/python scripts/record_implementation.py \
      --title "Auto-Heal: [수정 내용]" \
@@ -75,8 +73,16 @@ ruff check src/
      --background "반복 장애 자동 진단으로 발견" \
      --effect "장애 해소"
    ```
-3. docs/CHANGELOG.md rolling 갱신 (최근 5건 유지)
-4. 마지막에 반드시 "HEAL_SUCCESS" 를 출력
+   ▶ 마지막 줄 `VERSION=v0.1.x`를 캡처한다.
+2. git add + commit
+   - 커밋 메시지: "heal: [수정 내용 요약]"
+3. 캡처한 새 버전으로 annotated 태그 생성 + push:
+   ```
+   git tag -a "$NEW_VERSION" -m "auto-heal: [수정 내용]"
+   git push origin main --tags
+   ```
+4. docs/CHANGELOG.md rolling 갱신 (최근 5건 유지)
+5. 마지막에 반드시 "HEAL_SUCCESS" 를 출력
 
 ### 7. 실패 시
 

@@ -1046,6 +1046,7 @@ class ImplementationLogRepository:
         verification: dict | None = None,
         background: str | None = None,
         expected_effect: str | None = None,
+        version: str | None = None,
     ) -> ImplementationLog:
         """구현 이력을 기록한다.
 
@@ -1058,6 +1059,7 @@ class ImplementationLogRepository:
             verification: 검증 결과 (JSON)
             background: 배경 설명
             expected_effect: 기대 효과
+            version: 이 변경 적용 후의 프로젝트 버전 (예: "0.1.3")
 
         Returns:
             생성된 ImplementationLog 객체
@@ -1071,10 +1073,14 @@ class ImplementationLogRepository:
             verification=verification,
             background=background,
             expected_effect=expected_effect,
+            version=version,
         )
         self._session.add(log)
         self._session.flush()
-        logger.info("구현 이력 기록: %s (%s)", title, category.value)
+        logger.info(
+            "구현 이력 기록: %s (%s, v=%s)",
+            title, category.value, version or "-",
+        )
         return log
 
     def list_recent(self, limit: int = 5) -> list[ImplementationLog]:

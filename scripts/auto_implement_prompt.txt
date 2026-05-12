@@ -40,7 +40,7 @@ c) 수동 검토 필요 (구현하지 않음)
    - 전체 테스트 통과 → 다음 단계
    - 테스트 실패 → 변경 롤백, 제안서 상태를 "failed"로 변경, 실패 사유 기록
 5) 제안서 상태를 "implemented"로 변경
-6) DB에 구현 이력 기록 — 아래 스크립트를 Bash로 실행:
+6) DB에 구현 이력 기록 + 버전 자동 bump — 아래 스크립트를 Bash로 실행:
    ```
    .venv/bin/python scripts/record_implementation.py \
      --title "제안서 제목" \
@@ -52,6 +52,9 @@ c) 수동 검토 필요 (구현하지 않음)
      --effect "기대 효과 (선택)"
    ```
    카테고리: bug_fix, refactor, param_tuning, feature, enhancement, performance, docs, config
+   ▶ 스크립트가 카테고리에 따라 SemVer를 자동 bump하고 마지막 줄에
+     `VERSION=v0.1.x` 형태로 새 버전을 출력한다. 이 값을 캡처하여
+     7단계 git tag 생성에 사용한다.
 7) docs/CHANGELOG.md rolling 갱신 (최근 5건만 유지 — 가장 오래된 항목 제거 후 새 항목 맨 위 추가)
 
 ### 5. 에러 수정 우선순위
@@ -61,8 +64,15 @@ c) 수동 검토 필요 (구현하지 않음)
 - system_metrics의 에러 관련 제안
 
 ### 6. 배포
-- 모든 변경 완료 후 git commit & push
+- 모든 변경 완료 후 git commit
 - 커밋 메시지: "auto: [제안서 제목] (proposals/YYYY-MM-DD_제목.md)"
+- 6단계에서 캡처한 `VERSION=v0.1.x` 값으로 annotated 태그 생성 + push:
+  ```
+  git tag -a "$NEW_VERSION" -m "auto-release: [제안서 제목]"
+  git push origin main --tags
+  ```
+  (단, record_implementation.py가 `bump_type=none`을 출력했거나 새
+   버전이 이전 버전과 같다면 태그 생성을 건너뛰고 push만 수행.)
 - Mac Mini에서 자동 pull & restart가 설정돼 있다면 그걸로 배포 완료
   (설정돼 있지 않다면 배포는 수동)
 

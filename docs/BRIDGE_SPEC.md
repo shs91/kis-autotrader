@@ -554,11 +554,47 @@ Claude Code가 구현 완료 시 `scripts/record_implementation.py`를 실행하
 - `background`: 배경 설명
 - `expected_effect`: 기대 효과
 - `implemented_at`: 구현 시각
+- `version`: bump 적용 후의 프로젝트 버전 (예: "0.1.3" — 아래 § 자동 버저닝 참조)
 
 ### 2. `docs/CHANGELOG.md` — 최근 5건 rolling summary
 - 가장 오래된 항목을 제거하고 새 항목을 맨 위에 추가
 - Cowork 컨텍스트 로딩용 (전체 이력은 DB 조회)
 - 기존 CHANGELOG 마크다운 형식 유지
+
+## 자동 버저닝 (SemVer)
+
+검증 통과 시점에 카테고리에 따라 SemVer 버전이 자동 bump되고 `git tag`로 봉인된다.
+버전은 일일 결산 Telegram 헤더에 노출되며, 롤백 지점 식별에 사용된다.
+
+### 단일 버전 출처
+- `src/__version__.py` (`__version__: str`) ↔ `pyproject.toml` (`[project] version`)
+- 두 파일은 항상 동기 상태를 유지하며, `record_implementation.py`가 둘 다 갱신한다.
+
+### 카테고리 → bump 매핑
+| category | bump |
+|----------|------|
+| `bug_fix`, `param_tuning`, `refactor`, `performance`, `config` | patch (0.0.+1) |
+| `feature`, `enhancement` | minor (0.+1.0) |
+| `docs` | bump 없음 (`VERSION` 변경 없이 이력만 기록) |
+| (breaking) | 카테고리 미정의 — major bump는 수동 진행 |
+
+> 같은 사이클에 여러 제안서가 적용되면 각 호출마다 bump가 누적된다.
+> 한 사이클을 한 번에 묶고 싶다면 `--no-bump`로 기록만 하고, 마지막 호출에서 bump.
+
+### 태깅 시점 — pytest/mypy/ruff 모두 pass 직후
+1. `record_implementation.py`가 카테고리에 따라 `src/__version__.py` + `pyproject.toml`을 갱신
+2. 새 버전을 DB(`implementation_logs.version`)에 기록
+3. 마지막 stdout 줄에 `VERSION=v0.1.x` 출력 (자동 파이프라인이 캡처)
+4. 자동 파이프라인은 `git commit` 후 `git tag -a <VERSION> -m "..."` → `git push --tags`
+
+### 롤백 절차
+- 알려진 정상 지점 = annotated tag 목록 (`git tag -l 'v*'`)
+- 롤백: `git checkout v0.1.2 && launchctl stop com.kis.autotrader && launchctl start com.kis.autotrader`
+- 태그는 검증 통과한 커밋에만 부여되므로, 어떤 태그를 골라도 그 시점은 안전한 상태.
+
+### Telegram 결산 노출
+- 일일 결산 헤더에 `[v0.1.x]` 자동 표시
+- 그날 bump가 발생한 경우 결산 하단에 `오늘 적용된 변경` 섹션이 추가됨 (최대 5건, version/category/title)
 
 ## Claude Code 자동 구현 흐름
 

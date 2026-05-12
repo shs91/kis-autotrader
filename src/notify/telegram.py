@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from src.config import settings
+from src.db.repository import ImplementationLogRepository
+from src.db.session import get_session
 from src.notify.formatter import (
     BuyDetail,
     SellDetail,
@@ -17,11 +21,13 @@ from src.notify.formatter import (
     format_system,
 )
 from src.utils.logger import setup_logger
+from src.utils.versioning import read_current_version
 
 if TYPE_CHECKING:
     from src.api.account import Balance, Execution
 
 logger = setup_logger(__name__)
+_KST = ZoneInfo("Asia/Seoul")
 
 SEND_MESSAGE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 REQUEST_TIMEOUT = 10.0
@@ -171,6 +177,8 @@ class TelegramNotifier:
             executions: 체결 내역 목록
             balance: 잔고 정보
         """
+        version = _safe_read_version()
+        today_bumps = _query_today_bumps(trade_date)
         await self.send(
             format_daily_summary(
                 trade_date, count, profit_loss, rate,
@@ -178,6 +186,8 @@ class TelegramNotifier:
                 sell_count=sell_count,
                 executions=executions,
                 balance=balance,
+                version=version,
+                today_bumps=today_bumps,
             )
         )
 
@@ -192,3 +202,47 @@ class TelegramNotifier:
     async def notify_system(self, message: str) -> None:
         """시스템 알림을 전송한다 (무음)."""
         await self.send(format_system(message))
+
+
+def _safe_read_version() -> str | None:
+    """현재 프로젝트 버전을 읽는다. 실패 시 None (알림 실패 방지)."""
+    try:
+        return read_current_version()
+    except Exception:
+        logger.debug("버전 읽기 실패, 결산 헤더 버전 생략")
+        return None
+
+
+def _query_today_bumps(trade_date: str) -> list[tuple[str, str, str]]:
+    """`trade_date`에 적용된 자동 bump 내역을 조회한다.
+
+    Args:
+        trade_date: ISO 날짜 문자열 (예: "2026-05-12"). 파싱 실패 시 빈 목록.
+
+    Returns:
+        (version, category, title) 튜플 목록 (시간순). DB 조회 실패 시 빈 목록.
+    """
+    try:
+        target = date.fromisoformat(trade_date)
+    except ValueError:
+        return []
+
+    start = datetime.combine(target, time.min, tzinfo=_KST)
+    end = start + timedelta(days=1)
+    try:
+        with get_session() as session:
+            repo = ImplementationLogRepository(session)
+            # 최근 50건 안에서 당일 항목만 필터 (보통 하루에 그보다 적음)
+            recent = repo.list_recent(limit=50)
+            bumps: list[tuple[str, str, str]] = []
+            for log in recent:
+                if not log.version:
+                    continue
+                if start <= log.implemented_at < end:
+                    bumps.append((log.version, log.category.value, log.title))
+            # 시간순 (과거 → 현재)
+            bumps.reverse()
+            return bumps
+    except Exception:
+        logger.debug("당일 bump 조회 실패, 결산에 변경 내역 생략", exc_info=True)
+        return []
