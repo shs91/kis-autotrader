@@ -1076,7 +1076,7 @@ class TradingEngine:
                     "stock_code": stock_code,
                     "stock_name": stock_name,
                     "signal_type": signal_type_str,
-                    "detected_at": datetime.now().isoformat(),
+                    "detected_at": datetime.now(UTC).isoformat(),
                     "signal_value": {
                         "confidence": conf,
                         "target_price": target,
@@ -1099,7 +1099,7 @@ class TradingEngine:
                 payload={
                     "metric_type": metric_type,
                     "detail": detail,
-                    "recorded_at": datetime.now().isoformat(),
+                    "recorded_at": datetime.now(UTC).isoformat(),
                 },
                 priority=3,
             )

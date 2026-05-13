@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -145,6 +146,32 @@ class TestRecordSignalToDb:
         ):
             engine._record_signal_to_db("005930", "삼성전자", signal)
 
+    def test_detected_at_is_timezone_aware(self) -> None:
+        """detected_at은 timezone-aware ISO 문자열이어야 한다 (engine.py:1079 회귀).
+
+        naive datetime을 적재하면 validate_timezone_aware 리스너에 의해
+        Signal.detected_at(TIMESTAMPTZ) flush 시점에 ValueError가 발생해
+        시그널이 영속화되지 않는다.
+        """
+        engine = _make_engine()
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.5,
+            reason="앙상블 매수 신호",
+        )
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_signal_to_db(
+                "005930", "삼성전자", signal, action_taken=True,
+            )
+
+            payload = mock_enqueue.call_args.kwargs["payload"]
+            detected_at = datetime.fromisoformat(payload["detected_at"])
+            assert detected_at.tzinfo is not None, (
+                "detected_at는 timezone-aware여야 한다 — "
+                "naive datetime은 TIMESTAMPTZ 컬럼 listener에 의해 차단됨"
+            )
+
 
 # ── _record_screening_to_db 테스트 ─────────────────────────
 
@@ -220,6 +247,25 @@ class TestRecordMetric:
             engine._task_queue, "enqueue", side_effect=Exception("큐 장애")
         ):
             engine._record_metric("ERROR", {"msg": "test"})
+
+    def test_recorded_at_is_timezone_aware(self) -> None:
+        """recorded_at은 timezone-aware ISO 문자열이어야 한다 (engine.py:1102 회귀).
+
+        naive datetime을 적재하면 validate_timezone_aware 리스너에 의해
+        SystemMetric.recorded_at(TIMESTAMPTZ) flush 시점에 ValueError가
+        발생해 메트릭이 영속화되지 않는다.
+        """
+        engine = _make_engine()
+
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_metric("CYCLE_START", {"cycle": 1})
+
+            payload = mock_enqueue.call_args.kwargs["payload"]
+            recorded_at = datetime.fromisoformat(payload["recorded_at"])
+            assert recorded_at.tzinfo is not None, (
+                "recorded_at는 timezone-aware여야 한다 — "
+                "naive datetime은 TIMESTAMPTZ 컬럼 listener에 의해 차단됨"
+            )
 
 
 # ── 매매 사이클 통합: DB 장애에도 매매 정상 동작 ──────────────

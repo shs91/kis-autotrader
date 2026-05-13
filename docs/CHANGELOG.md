@@ -1,8 +1,20 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (74건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (78건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-13] engine.py의 메트릭·시그널 큐 적재 시 naive timestamp 차단 버그 수정 (v0.2.4) — 🔴 핫픽스
+- 제안서: docs/proposals/2026-05-13_engine-metric-signal-naive-timestamp-fix.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `_record_signal_to_db`(L1079) + `_record_metric`(L1102)의 `datetime.now().isoformat()` → `datetime.now(UTC).isoformat()`. naive ISO 문자열이 worker handler를 거쳐 `Signal.detected_at`·`SystemMetric.recorded_at` (TIMESTAMPTZ) 컬럼에 명시 set되면서 `validate_timezone_aware` listener에 의해 ValueError로 차단되던 흐름을 해소.
+  - tests/test_engine_db_integration.py: 회귀 테스트 2건 추가 — `TestRecordMetric.test_recorded_at_is_timezone_aware`, `TestRecordSignalToDb.test_detected_at_is_timezone_aware`.
+- 배경: 2026-05-12 fb7b548에서 도입된 `before_flush` 리스너가 큐 경유 적재 경로의 naive timestamp를 막아 2026-05-12 15:20 UTC 이후 system_metrics·signals 영속화가 16+ 시간 단절. 일일 리포트는 `repository.py:884`를 원인으로 지목했으나 해당 라인은 c44dade에서 이미 정리됨 — 실제 차단 지점은 상류의 큐 적재부.
+- 영향: system_metrics·signals 영속화 즉시 복구. 자동 파이프라인 안전 게이트 룰 C(에러)·룰 D(사이클) 트리거 신뢰성 회복. 일일/주간 리포트의 시그널 정확도·signal_performance 분석 데이터 기반 회복.
+- 검증 결과: pytest 변경 회귀 테스트 ✅ 2 passed | 전체 410 passed, 5 pre-existing fail (KST 17시대 시간대 의존) + 10 pre-existing errors (SQLite JSONB 호환성) — 모두 본 변경 무관 stash 검증 완료 | ruff src/engine.py + tests ✅ | mypy 변경 라인 에러 없음.
 
 ---
 
@@ -51,22 +63,6 @@
 - 데이터 처리: `screening_results` 전수 TRUNCATE (24/7 작동 누적 + 시간 어긋남 row 폐기). 손상 trades/signals는 사용자가 별도 백필 완료.
 - 영향: 신규 row의 timestamp 절대 시각 정확. 일자 경계 misclassification 해소. 휴장일 INSERT 차단. 회귀 시 ValueError 즉시 발생.
 - 검증 결과: pytest 461 passed (5 pre-existing) | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-05-12] 자동 SemVer 버저닝 시스템 도입 (v0.1.0 → v0.2.0)
-- 카테고리: feature
-- 변경 파일:
-  - src/__version__.py: 단일 버전 출처 신설.
-  - src/utils/versioning.py: 카테고리→bump 매핑, SemVer 파싱/bump, `__version__.py`+`pyproject.toml` 동시 갱신.
-  - scripts/record_implementation.py: 검증 통과 시점 자동 bump + `VERSION=v0.x.x` stdout 출력 (`--no-bump` 플래그 지원).
-  - src/notify/formatter.py & telegram.py: 일일 결산 헤더에 `[vX.Y.Z]` + 당일 bump 내역 섹션 자동 노출.
-  - src/db/models.py + src/db/repository.py + alembic/versions/edb0690663bb_*.py: `implementation_logs.version` 컬럼 추가.
-  - scripts/auto_implement_prompt.txt & auto_heal_prompt.txt: `git tag -a $VERSION` 단계 명시.
-  - docs/BRIDGE_SPEC.md: 자동 버저닝 규칙 명문화.
-  - tests/test_versioning.py + tests/test_notify/test_formatter.py: 단위 테스트 31건 추가.
-- 영향: 검증 통과 시점에만 annotated tag 부여 → 알려진 정상 지점 목록 확보. 결산 헤더에 버전 노출. 롤백은 `git checkout v0.x.y && launchctl restart`.
-- 검증 결과: pytest ✅ (468 passed, 1 pre-existing analytics fail) | mypy: pre-existing 에러만 | ruff (신규 파일) ✅ | end-to-end: 자체 변경 기록 시 0.1.0 → 0.2.0 (minor bump) 정상 동작.
 
 ---
 
