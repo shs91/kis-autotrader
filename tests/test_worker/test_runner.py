@@ -102,3 +102,29 @@ class TestWorkerRunner:
         runner._running = True
         runner.stop()
         assert runner._running is False
+
+    @pytest.mark.asyncio()
+    async def test_notify_dead_task_uses_correct_signature(self):
+        """DEAD 태스크 알림이 notify_error를 (context, error) 두 인자로 호출한다."""
+        runner = WorkerRunner(poll_interval=1)
+
+        mock_notifier = AsyncMock()
+        mock_notifier.notify_error = AsyncMock()
+        with patch(
+            "src.notify.telegram.TelegramNotifier", return_value=mock_notifier
+        ):
+            await runner._notify_dead_task(
+                task_id=42,
+                task_type="record_trade",
+                error="DB connection lost",
+            )
+
+        mock_notifier.notify_error.assert_called_once()
+        args, kwargs = mock_notifier.notify_error.call_args
+        all_params = tuple(args) + tuple(kwargs.values())
+        assert len(all_params) == 2
+        joined = " | ".join(str(p) for p in all_params)
+        assert "Worker DEAD" in joined
+        assert "id=42" in joined
+        assert "record_trade" in joined
+        assert "DB connection lost" in joined

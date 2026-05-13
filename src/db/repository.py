@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy import select as sa_select
@@ -179,7 +179,7 @@ class OrderRepository:
         order.status = status
         if order_no is not None:
             order.order_no = order_no
-        order.updated_at = datetime.utcnow()
+        order.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self._session.flush()
         logger.info("주문 상태 갱신: order_id=%d → %s", order_id, status.value)
         return order
@@ -202,7 +202,9 @@ class OrderRepository:
         Returns:
             당일 주문 리스트
         """
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=None,
+        )
         stmt = (
             select(Order)
             .where(Order.created_at >= today_start)
@@ -259,7 +261,9 @@ class ExecutionRepository:
         Returns:
             당일 체결 내역 리스트
         """
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=None,
+        )
         stmt = (
             select(Execution)
             .where(Execution.executed_at >= today_start)
@@ -310,7 +314,7 @@ class PortfolioRepository:
             portfolio.quantity = quantity
             portfolio.avg_price = avg_price
             portfolio.current_price = current_price
-            portfolio.updated_at = datetime.utcnow()
+            portfolio.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self._session.flush()
         logger.info(
             "포지션 갱신: stock_id=%d, qty=%d, avg=%.0f",
@@ -510,7 +514,7 @@ class WatchlistRepository:
         if stock.is_watchlist:
             return False
         stock.is_watchlist = True
-        stock.updated_at = datetime.utcnow()
+        stock.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self._session.flush()
         logger.info("관심종목 추가: %s (%s)", stock.name, stock.code)
         return True
@@ -531,7 +535,7 @@ class WatchlistRepository:
         if stock is None or not stock.is_watchlist:
             return False
         stock.is_watchlist = False
-        stock.updated_at = datetime.utcnow()
+        stock.updated_at = datetime.now(UTC).replace(tzinfo=None)
         self._session.flush()
         logger.info("관심종목 제거: %s (%s)", stock.name, stock.code)
         return True
@@ -881,7 +885,7 @@ class SystemMetricRepository:
         metric = SystemMetric(
             metric_type=metric_type,
             detail=detail,
-            recorded_at=recorded_at or datetime.utcnow(),
+            recorded_at=recorded_at or datetime.now(UTC),
         )
         self._session.add(metric)
         self._session.flush()

@@ -84,7 +84,7 @@ SELECT
   ROUND(100.0 * COUNT(*) FILTER (WHERE action_taken = true) / NULLIF(COUNT(*), 0), 1) AS act_rate_pct,
   ROUND(AVG(confidence)::numeric, 3) AS avg_confidence
 FROM signals
-WHERE (created_at AT TIME ZONE 'Asia/Seoul')::date = (now() AT TIME ZONE 'Asia/Seoul')::date
+WHERE (detected_at AT TIME ZONE 'Asia/Seoul')::date = (now() AT TIME ZONE 'Asia/Seoul')::date
 GROUP BY signal_type
 ORDER BY total DESC;
 ```
@@ -175,7 +175,7 @@ SELECT signal_type,
   ROUND(100.0 * COUNT(*) FILTER (WHERE action_taken = true) / NULLIF(COUNT(*), 0), 1) AS act_rate_pct,
   ROUND(AVG(confidence)::numeric, 3) AS avg_confidence
 FROM signals
-WHERE created_at >= ((now() AT TIME ZONE 'Asia/Seoul')::date - INTERVAL '6 days') AT TIME ZONE 'Asia/Seoul'
+WHERE detected_at >= ((now() AT TIME ZONE 'Asia/Seoul')::date - INTERVAL '6 days') AT TIME ZONE 'Asia/Seoul'
 GROUP BY signal_type ORDER BY total DESC;
 ```
 

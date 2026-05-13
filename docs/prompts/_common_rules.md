@@ -7,6 +7,7 @@
 - `event_logs.timestamp`만 naive UTC다 (timezone 정보 없음).
 - 모든 날짜 경계·그룹핑은 `AT TIME ZONE 'Asia/Seoul'`로 KST 변환한다.
 - `event_logs` 쿼리 시에는 `(timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Seoul'`로 변환한다.
+- `signals` 시간 필터는 항상 `detected_at`을 사용한다 (`created_at`은 DB 메타데이터). `trades` JOIN 윈도우에서도 `detected_at` 기준으로 조인한다.
 
 ## DB Enum 값 목록
 

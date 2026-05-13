@@ -6,6 +6,39 @@
 
 ---
 
+## [2026-05-13] 분석 프롬프트의 signals 시간축을 detected_at으로 통일 (v0.2.3, bump 없음)
+- 제안서: docs/proposals/2026-05-12_signals-time-axis-unify.md
+- 카테고리: docs
+- 변경 파일:
+  - docs/prompts/_common_rules.md: 시간 필터 정책 한 줄 추가 — signals는 항상 `detected_at` 사용.
+  - docs/prompts/daily_routine.md: signal_performance(L87), rolling_7d_signals(L178) 쿼리의 `created_at` → `detected_at`.
+  - docs/prompts/weekly_routine.md: signal_performance(L65) 쿼리의 `created_at` → `detected_at`.
+- 영향: 분석 시간축이 비즈니스 이벤트 시점(`detected_at`)으로 일관화. 일자 경계 근처 트랜잭션 지연으로 인한 미세한 일자 누수 차단. 후속 프롬프트 작성 시 혼용 재발 방지.
+- 검증 결과: 문서 변경 only, pytest 영향 없음 (record_implementation `--category docs`로 bump 없음).
+
+---
+
+## [2026-05-13] repository.py의 datetime.utcnow() 제거 (Python 3.12 deprecation 대응, v0.2.3)
+- 제안서: docs/proposals/2026-05-12_repository-datetime-utcnow-deprecation.md
+- 카테고리: refactor
+- 변경 파일:
+  - src/db/repository.py: `datetime.utcnow()` 7곳을 `datetime.now(UTC)` 패턴으로 치환. TIMESTAMPTZ 컬럼(SystemMetric.recorded_at, L884)은 aware UTC 유지, naive `DateTime` 컬럼(Order/Portfolio/Stock.updated_at 4곳)과 비교 필터 2곳은 `.replace(tzinfo=None)` 으로 동작 동일.
+- 영향: Python 3.12 DeprecationWarning 7건 제거. `datetime.now(UTC)` 패턴 일관화. `engine.py`/`worker/queue.py`/`worker/screener.py`와 정합. L884의 TIMESTAMPTZ listener ValueError 잠재 위험 사전 차단.
+- 검증 결과: pytest ✅ (452 passed, 5 pre-existing fail, 10 pre-existing model errors) | mypy: pre-existing 4 errors만 | ruff ✅ | `python -W error::DeprecationWarning -c "from src.db import repository"` ✅
+
+---
+
+## [2026-05-13] DEAD 태스크 알림의 notify_error 시그니처 불일치 수정 (v0.2.2)
+- 제안서: docs/proposals/2026-05-12_notify-error-signature-fix.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/worker/runner.py: `_notify_dead_task`가 `notify_error`를 (context, error) 두 인자로 호출하도록 수정. 호출 측 `error[:200]` truncate 제거 (책임을 `format_error`로 위임).
+  - tests/test_worker/test_runner.py: `test_notify_dead_task_uses_correct_signature` 회귀 테스트 1건 추가.
+- 영향: DEAD 태스크 발생 시 `TypeError`로 swallow되던 Telegram 알림이 정상 전송됨. 모니터링 사각지대 해소.
+- 검증 결과: pytest ✅ (462 passed, 5 pre-existing fail) | mypy: pre-existing 에러만 | ruff: pre-existing 미사용 import만
+
+---
+
 ## [2026-05-12] TIMESTAMPTZ에 naive datetime 저장 버그 수정 + listener + 스크리너 매매시간 가드 (v0.2.1)
 - 제안서: docs/proposals/2026-05-12_timestamp-naive-to-aware-utc.md
 - 카테고리: bug_fix
@@ -34,35 +67,6 @@
   - tests/test_versioning.py + tests/test_notify/test_formatter.py: 단위 테스트 31건 추가.
 - 영향: 검증 통과 시점에만 annotated tag 부여 → 알려진 정상 지점 목록 확보. 결산 헤더에 버전 노출. 롤백은 `git checkout v0.x.y && launchctl restart`.
 - 검증 결과: pytest ✅ (468 passed, 1 pre-existing analytics fail) | mypy: pre-existing 에러만 | ruff (신규 파일) ✅ | end-to-end: 자체 변경 기록 시 0.1.0 → 0.2.0 (minor bump) 정상 동작.
-
----
-
-## [2026-05-12] 스크리닝 종목명 stocks 테이블 자동 등록 — 코드/알림/캘린더 표시 정상화
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: `_screen_stocks`에서 screening_results의 (code, name) 페어를 수집해 `_upsert_stock_names` 호출 — stocks 테이블에 사전 등록되어 `_resolve_stock_name` 폴백이 정상 동작. 현재가 API의 `HTS_KOR_ISNM`이 비어있는 종목도 종목명으로 표시됨.
-- 백필: screening_results 최근 14일치에서 stocks 테이블로 일괄 upsert (신규 338, 보정 4).
-- 영향: DB(trades/signals)·Telegram 알림·Google Calendar 등록 시 종목 코드 대신 종목명 표시. 신규 매매부터 적용 (기존 trades/signals 행은 이력 보존).
-- 검증 결과: pytest test_engine_db_integration.py ✅ (24 passed) | mypy: pre-existing 에러만 | ruff ✅
-
----
-
-## [2026-05-11] 앙상블 시그널 최소 신뢰도 2차 상향 (0.15→0.20)
-- 제안서: docs/proposals/2026-05-11_ensemble-confidence-further-raise.md
-- 카테고리: param_tuning
-- 변경 파일:
-  - config_overrides.json: `STRATEGY_MIN_CONFIDENCE` 0.15 → 0.20. W19 전환율 19.7% / 평균 신뢰도 0.238 대비 저신뢰 시그널 추가 필터링.
-- 검증 결과: pytest ✅ (429 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
-
----
-
-## [2026-05-11] 일봉 조회 페이지네이션 — 60일 데이터 확보로 MACD 활성화
-- 제안서: docs/proposals/2026-05-09_daily-quote-pagination-60days.md
-- 카테고리: performance
-- 변경 파일:
-  - src/api/quote.py: `get_daily_price`에 `lookback_days` 파라미터 + 30건 단위 페이지네이션 루프 추가. 기본 60건 확보.
-  - tests/test_api/test_quote.py: 페이지네이션 60건 확보 테스트, 단일 페이지 테스트 2건 추가.
-- 검증 결과: pytest ✅ (429 passed, 5 pre-existing failures) | mypy: pre-existing 에러만 | ruff: pre-existing 에러만
 
 ---
 

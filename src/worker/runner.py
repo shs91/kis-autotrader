@@ -122,9 +122,8 @@ class WorkerRunner:
 
             notifier = TelegramNotifier()
             await notifier.notify_error(
-                f"[Worker DEAD] 태스크 영구 실패\n"
-                f"id={task_id}, type={task_type}\n"
-                f"error: {error[:200]}"
+                f"Worker DEAD (id={task_id}, type={task_type})",
+                error,
             )
         except Exception:
             logger.exception("DEAD 태스크 알림 전송 실패 (매매에 영향 없음)")
