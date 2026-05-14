@@ -16,6 +16,13 @@ LOG_FILE="$LOG_DIR/auto_implement_$(date +%Y-%m-%d).log"
 # 로그 디렉토리 확인
 mkdir -p "$LOG_DIR"
 
+# 하네스 pause lock 체크 (Phase 1 T12)
+PAUSE_LOCK="${HARNESS_PAUSE_LOCK_PATH:-$HOME/.kis-autotrader/harness-paused}"
+if [[ -f "$PAUSE_LOCK" ]]; then
+  echo "[auto-implement] paused (lock=$PAUSE_LOCK) — skip cycle at $(date)" >> "$LOG_FILE"
+  exit 0
+fi
+
 echo "=== Auto-implement started at $(date) ===" >> "$LOG_FILE"
 
 # Claude Code 실행 (비대화형 모드, 최대 허용)
