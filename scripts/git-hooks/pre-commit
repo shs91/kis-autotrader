@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Phase 0 pre-commit hook — DTZ/B/S 룰 위반을 커밋 전에 차단.
+#
+# 설치:
+#   ln -sf "$(pwd)/scripts/git-hooks/pre-commit" .git/hooks/pre-commit
+#   chmod +x scripts/git-hooks/pre-commit
+#
+# 동작:
+#   - 스테이지된 Python 파일만 검사
+#   - DTZ/B/S 룰만 강제 (Phase 0 신규 도입 룰)
+#   - pyproject.toml의 per-file-ignores는 그대로 적용 (기존 위반 grandfather)
+#   - ruff 미설치 시 안내 후 통과
+
+set -euo pipefail
+
+# venv 우선 탐지
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+if [ -x "$REPO_ROOT/.venv/bin/ruff" ]; then
+  RUFF="$REPO_ROOT/.venv/bin/ruff"
+elif command -v ruff >/dev/null 2>&1; then
+  RUFF="ruff"
+else
+  echo "[pre-commit] ruff not found; skip (pip install ruff to enable)"
+  exit 0
+fi
+
+# 스테이지된 Python 파일 목록
+mapfile -t files < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+if [ "${#files[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+echo "[pre-commit] ruff --select DTZ,B,S on ${#files[@]} staged file(s)..."
+if ! "$RUFF" check --select DTZ,B,S "${files[@]}"; then
+  echo ""
+  echo "[pre-commit] BLOCKED: Phase 0 신규 룰(DTZ/B/S) 위반."
+  echo "  - DTZ: naive datetime 사용 차단 (datetime.now(UTC) 사용)"
+  echo "  - B:   bugbear 패턴 (zip(..., strict=True) 등)"
+  echo "  - S:   보안 (예외 패스, 0.0.0.0 바인딩 등)"
+  echo "  의도된 위반이면 해당 라인에 '# noqa: DTZ005' 등의 주석 추가 후 재시도."
+  exit 1
+fi
+
+exit 0

@@ -36,7 +36,23 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
+select = ["E", "F", "I", "N", "W", "UP", "DTZ", "B", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/api/account.py" = ["DTZ011"]
+"src/api/auth.py" = ["DTZ005", "DTZ007"]
+"src/api/health.py" = ["S104", "DTZ005"]
+"src/api/quote.py" = ["DTZ007", "DTZ011"]
+"src/api/rate_limiter.py" = ["S110", "DTZ011"]
+"src/db/analytics.py" = ["DTZ001", "DTZ005"]
+"src/db/repository.py" = ["DTZ001", "DTZ011"]
+"src/engine.py" = ["DTZ005", "DTZ011", "S110"]
+"src/scheduler/holidays.py" = ["DTZ011"]
+"src/scheduler/jobs.py" = ["DTZ005", "DTZ011"]
+"src/strategy/ensemble.py" = ["B905"]
+"src/strategy/risk.py" = ["DTZ005"]
+"src/worker/screener.py" = ["DTZ011"]
+"tests/**" = ["S101", "S106", "DTZ"]
 
 [tool.mypy]
 python_version = "3.12"
