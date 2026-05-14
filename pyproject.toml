@@ -52,6 +52,7 @@ select = ["E", "F", "I", "N", "W", "UP", "DTZ", "B", "S"]
 "src/strategy/ensemble.py" = ["B905"]
 "src/strategy/risk.py" = ["DTZ005"]
 "src/worker/screener.py" = ["DTZ011"]
+"main.py" = ["DTZ001", "DTZ011"]
 "tests/**" = ["S101", "S106", "DTZ"]
 
 [tool.mypy]

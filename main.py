@@ -26,6 +26,11 @@ from src.db.models import SystemMetric, Trade, TradeType
 from src.db.repository import WatchlistRepository
 from src.db.session import get_session, init_db
 from src.engine import TradingEngine
+from src.harness.telegram_commands import (
+    cmd_pause_implement,
+    cmd_run_implement,
+    cmd_status_implement,
+)
 from src.notify.bot import TelegramBot
 from src.notify.telegram import TelegramNotifier
 from src.scheduler.jobs import TradingScheduler
@@ -532,6 +537,9 @@ def _register_bot_commands(
     bot.register("resume", cmd_resume)
     bot.register("setlimit", cmd_setlimit)
     bot.register("restart", cmd_restart)
+    bot.register("run_implement", cmd_run_implement)
+    bot.register("status_implement", cmd_status_implement)
+    bot.register("pause_implement", cmd_pause_implement)
     bot.register("help", cmd_help)
 
 
