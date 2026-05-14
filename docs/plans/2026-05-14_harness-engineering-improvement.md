@@ -11,6 +11,10 @@
 
 이 프로젝트는 이미 Cowork(분석/기획) ↔ Claude Code(구현)가 `docs/proposals` ↔ `docs/CHANGELOG.md` ↔ `implementation_logs` 테이블을 브릿지로 사용해 **사람 승인 없이 동작하는 자동 구현 파이프라인**을 운영하고 있다. 평일 17:00 cron이 `scripts/run_auto_implement.sh`를 호출하고, watchdog/health 서버가 런타임을 감시하며, SemVer 자동 bump와 git tag로 롤백 지점을 봉인하는 구조는 일반적인 “LLM CLI 호출 스크립트” 단계를 분명히 넘었다.
 
+**현재 분석/리포트 cadence의 운영 현실은 다음과 같다.** Cowork는 지금 **주간·월간 분석만 실효적으로 수행**하고 있다. 일일 리포트는 BRIDGE_SPEC에 규격이 정의되어 있고 launchd plist(`com.kis.dailyanalysis.plist`)도 존재하지만 Cowork 측 분석 사이클이 일관되게 돌고 있지 않으며, **분기 리포트는 규격·트리거·템플릿 모두 미정의 상태**이다. 즉 의사결정 입력(리포트)이 지금은 “주 1회 + 월 1회”라는 두 박자에 머무르고 있어, 일중 변동·계절성·중장기 전략 평가의 시간 해상도가 비대칭적이다.
+
+**본 계획의 궁극 목표는 분명하다.** 일간·주간·월간·분기 **네 cadence 모두를 동일한 하네스 토폴로지**(Initializer → Data Auditor → Analyst → Critic → Proposal Synthesizer)로 회전시켜, 각 cadence가 자신의 시간 해상도에 맞는 ready 제안서를 안전 게이트를 사전 통과시킨 상태로 생성하고, 그 제안서들이 동일한 자동 구현 사이클을 통해 봉인된다. 일간은 “장 종료 직후 핫픽스성 미세 조정”, 주간은 “파라미터 튜닝·전략 보정”, 월간은 “전략 유효성 재평가”, 분기는 “포트폴리오·리스크 한도·아키텍처 방향성”을 담당하는 식으로 cadence별 역할을 분리한다.
+
 그러나 2026년 들어 업계가 **harness engineering**(혹은 **agentic harness engineering**)이라는 이름으로 정리하고 있는 새로운 정합성·관측성·자기진화 패턴들과 비교해 보면, 현재 시스템은 다음 영역에서 구조적 한계를 노출하고 있다.
 
 1. **컨텍스트 인계의 부재** — 매 사이클마다 LLM이 zero memory로 시작하고, 진척 상태를 `.md` 파일 더미에서 재구성한다.
@@ -51,10 +55,11 @@ Claude Code 네이티브 ADK는 이를 5계층으로 표현한다. **CLAUDE.md**
 | D6 | 관측성이 logfile + Telegram 평문에 머무름 | 사이클별 KPI(성공률, 재시도율, MTTR)·구조적 분석 불가 | `implementation_logs`는 성공 사례만 적재, 실패 traces 부재 |
 | D7 | 제안서 카테고리만 있고 골든 회귀 셋이 없음 | 동일 종류 버그(타임존, rate limit)의 재발을 사전 차단할 evaluator 부재 | ruff DTZ 규칙 미활성, datetime.now() 정적 차단 없음 |
 | D8 | 단일 `claude -p`가 안전/구현/검증/롤백/기록을 모두 수행 | 컨텍스트 폭발, 책임 경계 모호, 병렬화 불가 | `auto_implement_prompt.txt` 90줄 단일 프롬프트 |
-| D9 | 일일/주간 리포트도 동일 단일 프롬프트 구조 — 수치·결론 정합성 자기보고, 제안서 split 수동 | 리포트가 “LLM이 데이터에서 본 인상”에 가까워지고, 다음 사이클의 결정 근거로서의 신뢰도가 낮음 | `com.kis.dailyanalysis.plist`/`weeklyanalysis.plist`가 단일 `claude -p`로 `query_analytics.py` JSON → 마크다운 변환 |
+| D9 | 일일/주간 리포트도 동일 단일 프롬프트 구조 — 수치·결론 정합성 자기보고, 제안서 split 수동 | 리포트가 “LLM이 데이터에서 본 인상”에 가까워지고, 다음 사이클의 결정 근거로서의 신뢰도가 낮음 | 단일 `claude -p`로 `query_analytics.py` JSON → 마크다운 변환 |
 | D10 | 트리거가 cron 단일 채널 — 운영 중 즉시 발동, 이벤트 발동, 안전 일시 정지 등의 운영 도구가 없음 | 핫픽스 직후 사이클을 “지금 한 번만” 돌리고 싶을 때 수동 우회/터미널 SSH 필요 | `launchctl start` 수동 호출 외 표준 경로 없음 |
+| D11 | 리포트 cadence가 “주간 + 월간” 두 박자에 멈춰 있음 | 일중 변동·계절성·중장기 전략 평가의 시간 해상도 비대칭. 일간 결정은 사람 직관에 의존, 분기 단위 구조 점검은 아예 부재 | 일일 plist는 존재하나 Cowork 분석 사이클이 비안정, 분기 리포트는 규격·템플릿·트리거 전무 |
 
-> 위 D1~D10은 다음 절의 5개 개선 축이 각각 어떤 진단을 해결하는지 매핑된다.
+> 위 D1~D11은 다음 절의 5개 개선 축이 각각 어떤 진단을 해결하는지 매핑된다.
 
 ---
 
@@ -211,13 +216,24 @@ Claude Code 네이티브 ADK는 이를 5계층으로 표현한다. **CLAUDE.md**
 
 ---
 
-### 축 E. 리포트 파이프라인의 하네스화 — 일일/주간/월간 리포트도 동일 패턴
+### 축 E. 리포트 파이프라인의 하네스화 — 4-cadence(일/주/월/분기) 전 영역으로 확장
 
-**해결 진단**: D9, 그리고 D2(자기보고 검증)·D6(관측성)·D8(단일 프롬프트)의 리포트 영역 변형
+**해결 진단**: D9, D11, 그리고 D2(자기보고 검증)·D6(관측성)·D8(단일 프롬프트)의 리포트 영역 변형
 
-**왜**: 자동 구현 사이클이 다음 사이클의 결정 근거로 일일/주간 리포트를 사용한다. 즉 **리포트는 자동 구현 파이프라인의 입력**이다. 입력 신뢰도가 낮으면 그 위에 어떤 안전 게이트를 쌓아도 의사결정 품질이 따라오지 않는다. 리포트가 지금처럼 “단일 LLM이 JSON을 보고 마크다운을 쏟아내는 구조”라면, 축 A~D의 개선 효과가 리포트→제안서 경계에서 새는 것이다.
+**왜**: 자동 구현 사이클이 다음 사이클의 결정 근거로 리포트를 사용한다. 즉 **리포트는 자동 구현 파이프라인의 입력**이다. 입력 신뢰도가 낮으면 그 위에 어떤 안전 게이트를 쌓아도 의사결정 품질이 따라오지 않는다. 게다가 현재 cadence는 주간·월간 두 박자만 안정 운영되어 의사결정 시간 해상도가 비대칭이다. 본 축의 궁극 목표는 **네 cadence(일/주/월/분기) 전부를 동일 하네스로 회전**시켜, 각자의 시간 해상도에 맞는 ready 제안서를 안전 게이트를 사전 통과시킨 상태로 흘려보내는 것이다.
 
-**리포트도 정확히 같은 하네스 토폴로지가 깔린다.**
+#### Cadence별 역할 분리
+
+| Cadence | 트리거 시점 | 주된 결정 영역 | 데이터 창 | 생성될 제안서 카테고리(주 사용) |
+|---------|------------|----------------|----------|----------------------------------|
+| **일간 (daily)** | 평일 16:00 (장 종료 직후) | 핫픽스성 미세 조정, 사고 회복, 당일 회귀 위험 알림 | 당일 trades·signals·errors | `bug_fix`, `config`(경량 파라미터 미세 조정) |
+| **주간 (weekly)** | 월요일 09:00 | 파라미터 튜닝, 전략 보정, 스크리닝 임계값 조정 | 직전 주 5거래일 | `param_tuning`, `enhancement` |
+| **월간 (monthly)** | 매월 1영업일 09:00 | 전략 유효성 재평가, 카테고리 가중치, 골든 회귀 셋 보강 후보 | 직전 월 거래일 + 누적 prediction calibration | `refactor`, `enhancement`, 골든 셋 등록 후보 |
+| **분기 (quarterly)** | 매분기 1영업일 09:00 | 포트폴리오·리스크 한도·아키텍처 방향성, BRIDGE_SPEC 범위 자체의 적정성 재평가 | 직전 분기 + 누적 component/decision observability | `refactor`, `feature`, 그리고 **자동 게이트 통과가 아닌 “사람 검토 권고” 태그가 붙은 구조 제안** |
+
+**중요 원칙**: cadence가 길어질수록 제안서의 **자동 적용 범위는 좁아진다.** 일간/주간 제안서는 BRIDGE_SPEC 안전 게이트 사전 검증을 통과하면 자동 구현 사이클로 직행한다. 월간은 자동 적용 + 일부는 사람 검토 권고. 분기는 기본이 “사람 검토 권고”이고, 그중 안전 게이트 범위 안의 항목만 자동 구현으로 흐른다. 이는 “하네스가 자기 자신의 운영 정책을 단기간에 뒤집지 않도록” 막는 안전 장치다.
+
+#### 공통 하네스 토폴로지 (네 cadence 모두 동일)
 
 - **Initializer (리포트 사이클 진입점)**
   - `scripts/query_analytics.py`(`daily|weekly|range|risk`)를 호출해 raw JSON을 수집하고 `report-progress.json`에 적재.
@@ -239,25 +255,38 @@ Claude Code 네이티브 ADK는 이를 5계층으로 표현한다. **CLAUDE.md**
 - **Recorder**
   - 리포트 파일, 분리된 제안서들, Critic 채점 결과, prediction calibration 결과를 `report_runs` 테이블(신설)에 trajectory와 함께 기록.
 
-**Claude Code 5계층 ADK 매핑(리포트 영역)**
+**Claude Code 5계층 ADK 매핑(리포트 영역, 4 cadence 공통)**
 
-- **Skills**
-  - `daily-report-template/SKILL.md`, `weekly-report-template/SKILL.md`, `monthly-report-template/SKILL.md` — BRIDGE_SPEC의 리포트 규격을 작성 패턴으로 정리.
-  - `report-numeric-citation/SKILL.md` — 모든 수치에 `<!-- src: ... -->` 주석을 다는 패턴 강제.
-  - `proposal-synthesis-from-report/SKILL.md` — 리포트의 “개선 포인트”를 안전 게이트 준수 제안서로 분리하는 절차.
+- **Skills** (cadence별 분리)
+  - `daily-report-template/SKILL.md`, `weekly-report-template/SKILL.md`, `monthly-report-template/SKILL.md`, **`quarterly-report-template/SKILL.md`(신설)** — BRIDGE_SPEC의 리포트 규격을 cadence별 작성 패턴으로 분리.
+  - `report-numeric-citation/SKILL.md` — 모든 수치에 `<!-- src: ... -->` 주석을 다는 패턴 강제 (cadence 무관).
+  - `proposal-synthesis-from-report/SKILL.md` — 리포트의 “개선 포인트”를 cadence별 카테고리 매트릭스에 따라 안전 게이트 준수 제안서로 분리하는 절차. **분기 cadence의 경우 “사람 검토 권고” 태그를 기본값으로 부여.**
 - **MCP**
-  - 축 D의 “Pipeline MCP”에 리포트 도구 추가: `fetch_analytics(period)`, `get_last_predictions(period)`, `write_report(path, content, calibration)`, `synthesize_proposals(report_path)`.
+  - 축 D의 “Pipeline MCP”에 리포트 도구 추가: `fetch_analytics(cadence, period)`, `get_last_predictions(cadence, period)`, `write_report(cadence, path, content, calibration)`, `synthesize_proposals(report_path, cadence)`.
 - **Subagents**
-  - `report-data-auditor.md`, `report-analyst.md`, `report-critic.md`, `proposal-synthesizer.md`.
+  - `report-data-auditor.md`, `report-analyst.md`, `report-critic.md`, `proposal-synthesizer.md` — cadence는 입력 파라미터로 처리하고 에이전트 정의는 공유(코드 중복 방지).
 - **Hooks**
   - `PostToolUse(Write)` on `docs/reports/*` → 자동으로 `report-citation-check.py` 실행(주석 누락·숫자 불일치 차단).
   - `Stop` 훅 → Critic FAIL 시 publish(=Telegram 전송, CHANGELOG 갱신, 제안서 split) 단계로 진입 자체를 차단.
 
-**트리거 통합**
+**BRIDGE_SPEC 갱신 필요 항목 (Phase 5에서 PR)**
 
-- 기존 cron 유지: `com.kis.dailyanalysis.plist`(평일 16:00), `com.kis.weeklyanalysis.plist`(월요일 09:00).
-- 축 A에서 정의한 수동 트리거에 같은 패턴 적용: Telegram `/run_report daily|weekly|monthly [date]`, CLI `scripts/trigger_report.sh`.
-- 리포트 사이클이 ready 제안서를 생성하면, 그날의 자동 구현 사이클(17:00)이 그 제안서를 자연스럽게 처리하는 흐름이 표준 파이프라인이 된다.
+- **분기 리포트 규격 신설** — 파일명 `docs/reports/YYYY-Q[1-4]_quarterly.md`, 섹션 템플릿(분기 누적 KPI, 카테고리·전략별 성과, 예측 정확도 분기 추세, 회귀 위험 누적 분석, 구조적 개선 권고).
+- **리포트 cadence별 “자동 적용 카테고리 매트릭스”** — 일/주/월/분기 각각 어떤 카테고리까지 자동 적용 허용인지 명문화.
+- **`query_analytics.py`에 `quarterly` 커맨드 추가** — 출력 JSON 스키마 본 계획서의 cadence 표와 일치하도록.
+
+**트리거 통합 (4 cadence 모두 동일 패턴)**
+
+- **스케줄**
+  - 일간: `com.kis.dailyanalysis.plist`(평일 16:00) — Cowork 측 사이클 정상화 포함.
+  - 주간: `com.kis.weeklyanalysis.plist`(월요일 09:00) — 현행 유지.
+  - 월간: `com.kis.monthlyanalysis.plist`(매월 1영업일 09:00) — 현행 유지 또는 신설(현재 plist 부재 시).
+  - 분기: **`com.kis.quarterlyanalysis.plist`(매분기 1영업일 09:00) 신설.**
+- **수동 트리거**: 축 A의 표준 채널을 그대로 사용.
+  - Telegram: `/run_report daily|weekly|monthly|quarterly [date]`, `/status_report`, `/pause_report`.
+  - CLI: `scripts/trigger_report.sh --cadence {daily|weekly|monthly|quarterly} [--date YYYY-MM-DD]`.
+  - 대시보드: cadence별 “지금 실행” 버튼.
+- 리포트 사이클이 ready 제안서를 생성하면, 그날의 자동 구현 사이클(17:00)이 그 제안서를 자연스럽게 처리하는 흐름이 표준 파이프라인이 된다. 분기 리포트의 “사람 검토 권고” 태그가 붙은 제안서는 자동 구현 사이클이 `skipped (review_required)`로 처리하고 Telegram으로 알림.
 
 **기대 효과**
 
@@ -297,12 +326,26 @@ Claude Code 네이티브 ADK는 이를 5계층으로 표현한다. **CLAUDE.md**
 - trajectory JSONL 적재, component metadata 컬럼 추가, decision prediction 기록.
 - `dashboard/pages/pipeline.py` 추가, Telegram 결산 카드 개편.
 
-### Phase 5 — 리포트 파이프라인 하네스화 (3~4주, 축 E)
-- `report_runs` 테이블 신설 + raw analytics JSON 스냅샷 보존.
-- Data Auditor/Analyst/Critic/Proposal Synthesizer 서브에이전트 도입, 수치 인용 주석 강제 훅 적용.
-- 리포트→제안서 분리 자동화 + Synthesizer 단계의 안전 게이트 사전 검증.
-- 골든 리포트 셋(과거 일/주간) 5~10건 회귀 셋으로 보존.
-- 리포트 수동 트리거(`/run_report`, `scripts/trigger_report.sh`) 도입.
+### Phase 5 — 리포트 파이프라인 하네스화 (단계적 cadence 활성화, 6~8주, 축 E)
+
+> **운영 안전을 위해 cadence를 한 번에 4개 켜지 않는다.** 현재 안정 운영 중인 주간을 기준으로 양옆을 단계적으로 확장한다.
+
+- **Phase 5.0 — 공통 토폴로지 구축 (2주)**
+  - `report_runs` 테이블 신설 + raw analytics JSON 스냅샷 보존.
+  - Data Auditor/Analyst/Critic/Proposal Synthesizer 서브에이전트 도입, 수치 인용 주석 강제 훅 적용.
+  - `report-numeric-citation`·`proposal-synthesis-from-report` Skill, Pipeline MCP의 리포트 도구.
+- **Phase 5.1 — 주간 cadence를 하네스로 이전 (1주)**
+  - 현재 잘 도는 주간을 가장 먼저 새 토폴로지로 옮긴다(리스크 최소).
+  - 골든 주간 리포트 셋 3~5건 보존, Critic Default-FAIL contract 검증.
+- **Phase 5.2 — 월간 cadence 이전 + 분기 리포트 규격 신설 (1~2주)**
+  - 월간 cadence를 하네스로 이전.
+  - BRIDGE_SPEC PR: 분기 리포트 규격, `quarterly-report-template` Skill, `query_analytics.py quarterly` 커맨드, 자동 적용 카테고리 매트릭스.
+- **Phase 5.3 — 일간 cadence 정상화 + 활성화 (1~2주)**
+  - 일간 Cowork 사이클을 새 토폴로지로 부팅. 첫 2주는 “관찰 모드” — 제안서 자동 split은 켜되 자동 구현 사이클에는 `state=draft`로 들어가 사람이 `ready`로 승급해야만 처리.
+  - 관찰 모드 동안 골든 일간 리포트 셋 5건 이상 축적되면 자동 승급 모드로 전환.
+- **Phase 5.4 — 분기 cadence 첫 사이클 + “사람 검토 권고” 태그 정착 (1~2주)**
+  - 분기 cadence를 처음 회전시킨다. 분기는 운영 시작 후 최소 2분기(=6개월) 동안 자동 적용 카테고리를 BRIDGE_SPEC 안전 게이트의 약 70% 수준으로 보수적 운영, 이후 데이터로 범위 확대 여부 판단.
+  - 분기 제안서 중 “사람 검토 권고” 항목은 자동 구현 사이클이 `skipped (review_required)` + Telegram 알림으로 처리하는 흐름 검증.
 
 > **타임라인은 “이상적 페이스” 기준 8~12주.** 실 사이클에서는 다른 매매 기능 변경이 끼므로, 각 Phase 종료 시 회귀 골든 셋 통과를 게이트로 두고 다음 Phase로 진입한다.
 
@@ -319,6 +362,9 @@ Claude Code 네이티브 ADK는 이를 5계층으로 표현한다. **CLAUDE.md**
 - **리포트 수치 정합성률** — Critic 통과한 리포트 / 전체 리포트 사이클 (축 E 도입 후 100% 목표).
 - **리포트→제안서 자동 분리율** — Synthesizer가 자동 split한 제안서 / 전체 ready 제안서 (수작업 감소 측정).
 - **수동 트리거 사용 패턴** — 채널별(Telegram/CLI/대시보드) 발동 빈도와 그 결과 사이클의 성공률.
+- **Cadence 커버리지** — 4 cadence(일/주/월/분기) 중 Critic 통과 사이클이 안정 운영(=4주 연속 성공)되는 cadence 수. Phase 5 종료 시 4/4 목표.
+- **Cadence별 제안서 자동 적용률** — 일/주/월/분기별 `implemented / (ready로 승급된 제안서 수)`. cadence가 길어질수록 낮아지는 것이 의도된 모습.
+- **분기 리포트의 “사람 검토 권고” 비율** — 분기 리포트가 생성한 제안서 중 `review_required` 비중. 초기 70% 이상에서 시간에 따라 자연스러운 감소 추세 확인.
 
 ---
 
