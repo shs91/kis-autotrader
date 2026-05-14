@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=$CLAUDE_PROJECT_DIR $CLAUDE_PROJECT_DIR/.venv/bin/python $CLAUDE_PROJECT_DIR/scripts/claude-hooks/run_hook.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=$CLAUDE_PROJECT_DIR $CLAUDE_PROJECT_DIR/.venv/bin/python $CLAUDE_PROJECT_DIR/scripts/claude-hooks/run_hook.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONPATH=$CLAUDE_PROJECT_DIR $CLAUDE_PROJECT_DIR/.venv/bin/python $CLAUDE_PROJECT_DIR/scripts/claude-hooks/run_hook.py"
+          }
+        ]
+      }
+    ]
+  }
+}
