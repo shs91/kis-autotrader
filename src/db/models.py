@@ -404,6 +404,27 @@ class ImplementationCategory(enum.Enum):
     CONFIG = "config"
 
 
+class ProposalState(enum.Enum):
+    """제안서 상태 머신."""
+
+    DRAFT = "draft"
+    READY = "ready"
+    IN_FLIGHT = "in_flight"
+    IMPLEMENTED = "implemented"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    REVIEW_REQUIRED = "review_required"
+
+
+class ProposalPriority(enum.Enum):
+    """제안서 우선순위."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
 class ImplementationLog(Base):
     """자동 구현 변경 이력 테이블 (CHANGELOG 대체)."""
 
@@ -431,6 +452,51 @@ class ImplementationLog(Base):
         return (
             f"<ImplementationLog(id={self.id}, title={self.title!r}, "
             f"category={self.category.value}, version={self.version!r})>"
+        )
+
+
+class Proposal(Base):
+    """자동 구현 파이프라인의 제안서 상태 테이블.
+
+    md 파일은 사람이 읽는 표현. 본 테이블이 상태의 sole source of truth다.
+    상태 전이는 ProposalRepository의 mark_* 메소드를 통해서만 일어난다.
+    """
+
+    __tablename__ = "proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    path: Mapped[str] = mapped_column(String(300), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    category: Mapped[ImplementationCategory] = mapped_column(
+        SAEnum(ImplementationCategory, name="impl_category_enum", create_type=False),
+        nullable=False,
+    )
+    state: Mapped[ProposalState] = mapped_column(
+        SAEnum(ProposalState, name="proposal_state_enum"),
+        nullable=False,
+        index=True,
+    )
+    priority: Mapped[ProposalPriority] = mapped_column(
+        SAEnum(ProposalPriority, name="proposal_priority_enum"),
+        nullable=False,
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skip_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cycle_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Proposal(id={self.id}, path={self.path!r}, "
+            f"state={self.state.value}, category={self.category.value})>"
         )
 
 
