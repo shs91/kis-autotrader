@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from src.harness.verifier.parsers import (
+    MypyArtifact,
+    parse_mypy_text,
     parse_pytest_junit,
     parse_ruff_json,
 )
@@ -96,3 +98,43 @@ def test_pytest_jsonb_serializable() -> None:
     assert payload["failures"] == 1
     assert payload["passed"] is False
     assert "failed_tests" in payload
+
+
+def test_parse_mypy_success() -> None:
+    raw = "Success: no issues found in 12 source files"
+    art = parse_mypy_text(raw)
+    assert art.passed is True
+    assert art.error_count == 0
+    assert art.files_checked == 12
+
+
+def test_parse_mypy_errors() -> None:
+    err_msg = 'Missing type parameters for generic type "dict"'
+    raw = (
+        f"src/db/repository.py:705: error: {err_msg}  [type-arg]\n"
+        f"src/db/repository.py:875: error: {err_msg}  [type-arg]\n"
+        "Found 2 errors in 1 file (checked 11 source files)"
+    )
+    art = parse_mypy_text(raw)
+    assert art.passed is False
+    assert art.error_count == 2
+    assert art.files_checked == 11
+    assert len(art.errors) == 2
+    assert art.errors[0].file == "src/db/repository.py"
+    assert art.errors[0].line == 705
+    assert art.errors[0].code == "type-arg"
+
+
+def test_parse_mypy_empty() -> None:
+    art = parse_mypy_text("")
+    assert art.passed is False
+    assert art.parse_error is not None
+
+
+def test_mypy_jsonb_serializable() -> None:
+    art = parse_mypy_text("Success: no issues found in 5 source files")
+    p = art.to_jsonb()
+    assert p["passed"] is True
+    assert p["error_count"] == 0
+    # MypyArtifact 미사용 import 안전장치 (typing reference)
+    assert isinstance(art, MypyArtifact)
