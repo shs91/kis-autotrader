@@ -21,6 +21,9 @@ from src.db.models import (
     OrderStatus,
     OrderType,
     Portfolio,
+    Proposal,
+    ProposalPriority,
+    ProposalState,
     ScreeningResult,
     SellReason,
     Signal,
@@ -1127,3 +1130,119 @@ class ImplementationLogRepository:
             sa_select(func.count()).select_from(ImplementationLog)
         ).scalar_one()
         return int(result)
+
+
+class ProposalRepository:
+    """제안서 상태 머신 데이터 접근 클래스.
+
+    상태 전이는 본 클래스의 mark_* 메소드를 통해서만 일어난다.
+    """
+
+    _PRIORITY_ORDER = {
+        ProposalPriority.CRITICAL: 0,
+        ProposalPriority.HIGH: 1,
+        ProposalPriority.MEDIUM: 2,
+        ProposalPriority.LOW: 3,
+    }
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create(
+        self,
+        *,
+        path: str,
+        title: str,
+        category: ImplementationCategory,
+        state: ProposalState,
+        priority: ProposalPriority,
+    ) -> Proposal:
+        """제안서를 신규 생성한다. path UNIQUE 제약 위반 시 예외."""
+        now = datetime.now(UTC)
+        p = Proposal(
+            path=path,
+            title=title,
+            category=category,
+            state=state,
+            priority=priority,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(p)
+        self._session.flush()
+        logger.info("제안서 생성: %s (%s, %s)", path, state.value, priority.value)
+        return p
+
+    def find_by_path(self, path: str) -> Proposal | None:
+        stmt = select(Proposal).where(Proposal.path == path)
+        return self._session.execute(stmt).scalar_one_or_none()
+
+    def list_ready(self) -> list[Proposal]:
+        """READY 상태 제안서를 우선순위순(critical→low), 같은 우선순위는 path순."""
+        stmt = select(Proposal).where(Proposal.state == ProposalState.READY)
+        rows = list(self._session.execute(stmt).scalars().all())
+        rows.sort(key=lambda r: (self._PRIORITY_ORDER[r.priority], r.path))
+        return rows
+
+    def list_in_flight_for_cycle(self, cycle_id: str) -> list[Proposal]:
+        stmt = select(Proposal).where(
+            Proposal.state == ProposalState.IN_FLIGHT,
+            Proposal.cycle_id == cycle_id,
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def mark_in_flight(self, proposal_id: int, *, cycle_id: str) -> None:
+        """READY → IN_FLIGHT 전이."""
+        p = self._require(proposal_id)
+        if p.state != ProposalState.READY:
+            raise ValueError(
+                f"mark_in_flight requires READY, got {p.state.value} (id={proposal_id})"
+            )
+        now = datetime.now(UTC)
+        p.state = ProposalState.IN_FLIGHT
+        p.cycle_id = cycle_id
+        p.last_attempt_at = now
+        p.updated_at = now
+        logger.info("제안서 IN_FLIGHT: %s (cycle=%s)", p.path, cycle_id)
+
+    def mark_implemented(self, proposal_id: int) -> None:
+        """IN_FLIGHT → IMPLEMENTED 전이."""
+        p = self._require(proposal_id)
+        if p.state != ProposalState.IN_FLIGHT:
+            raise ValueError(
+                f"mark_implemented requires IN_FLIGHT, got {p.state.value}"
+            )
+        now = datetime.now(UTC)
+        p.state = ProposalState.IMPLEMENTED
+        p.cycle_id = None
+        p.updated_at = now
+        logger.info("제안서 IMPLEMENTED: %s", p.path)
+
+    def mark_failed(self, proposal_id: int, *, reason: str) -> None:
+        """IN_FLIGHT → FAILED 전이 (사유 기록)."""
+        p = self._require(proposal_id)
+        if p.state != ProposalState.IN_FLIGHT:
+            raise ValueError(f"mark_failed requires IN_FLIGHT, got {p.state.value}")
+        now = datetime.now(UTC)
+        p.state = ProposalState.FAILED
+        p.failure_reason = reason
+        p.cycle_id = None
+        p.updated_at = now
+        logger.info("제안서 FAILED: %s — %s", p.path, reason)
+
+    def mark_skipped(self, proposal_id: int, *, reason: str) -> None:
+        """READY → SKIPPED 전이 (안전 게이트 거절 등)."""
+        p = self._require(proposal_id)
+        if p.state not in (ProposalState.READY, ProposalState.DRAFT):
+            raise ValueError(f"mark_skipped requires READY|DRAFT, got {p.state.value}")
+        now = datetime.now(UTC)
+        p.state = ProposalState.SKIPPED
+        p.skip_reason = reason
+        p.updated_at = now
+        logger.info("제안서 SKIPPED: %s — %s", p.path, reason)
+
+    def _require(self, proposal_id: int) -> Proposal:
+        p = self._session.get(Proposal, proposal_id)
+        if p is None:
+            raise LookupError(f"Proposal id={proposal_id} not found")
+        return p

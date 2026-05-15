@@ -1,0 +1,11 @@
+{
+  "id": "G06_ma_nan_guard",
+  "proposal_path": "docs/proposals/2026-04-06_moving-average-nan-guard.md",
+  "category": "bug_fix",
+  "summary": "moving_average.py에 NaN 가드가 남아 있어야 한다",
+  "invariant": {
+    "type": "regex_present",
+    "file": "src/strategy/moving_average.py",
+    "pattern": "isnan|np\\.isnan|pd\\.isna"
+  }
+}

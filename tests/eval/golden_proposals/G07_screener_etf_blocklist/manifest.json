@@ -1,0 +1,11 @@
+{
+  "id": "G07_screener_etf_blocklist",
+  "proposal_path": "docs/proposals/2026-05-09_screener-etf-code-blocklist.md",
+  "category": "bug_fix",
+  "summary": "screener에 ETF/Q-code 필터 블록리스트가 코드에 남아 있어야 한다",
+  "invariant": {
+    "type": "regex_present",
+    "file": "src/worker/screener.py",
+    "pattern": "ETF|blocklist|등록 코드"
+  }
+}

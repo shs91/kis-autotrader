@@ -1,0 +1,11 @@
+{
+  "id": "G04_screening_query_kst",
+  "proposal_path": "docs/proposals/2026-04-30_screening-query-timezone-fix.md",
+  "category": "bug_fix",
+  "summary": "screening 조회 시 KST 명시가 코드에 남아 있어야 한다",
+  "invariant": {
+    "type": "regex_present",
+    "file": "src/db/repository.py",
+    "pattern": "KST|Asia/Seoul"
+  }
+}
