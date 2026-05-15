@@ -94,3 +94,62 @@ def test_last_safe_tag_outputs_latest_tag() -> None:
     assert code in (0, 1)
     if code == 0:
         assert out.strip()  # 최소 한 줄
+
+
+def test_mark_in_flight_transitions_state(db_session) -> None:
+    code, _, _ = _run(
+        "pipeline_mark_in_flight.py",
+        "--path", "docs/proposals/x.md", "--cycle-id", "c-1",
+    )
+    assert code == 0
+    db_session.expire_all()
+    repo = ProposalRepository(db_session)
+    p = repo.find_by_path("docs/proposals/x.md")
+    assert p.state == ProposalState.IN_FLIGHT
+    assert p.cycle_id == "c-1"
+
+
+def test_mark_implemented_after_in_flight(db_session) -> None:
+    _run("pipeline_mark_in_flight.py", "--path", "docs/proposals/x.md", "--cycle-id", "c-2")
+    code, _, _ = _run("pipeline_mark_implemented.py", "--path", "docs/proposals/x.md")
+    assert code == 0
+    db_session.expire_all()
+    repo = ProposalRepository(db_session)
+    p = repo.find_by_path("docs/proposals/x.md")
+    assert p.state == ProposalState.IMPLEMENTED
+
+
+def test_mark_failed_records_reason(db_session) -> None:
+    _run("pipeline_mark_in_flight.py", "--path", "docs/proposals/x.md", "--cycle-id", "c-3")
+    code, _, _ = _run(
+        "pipeline_mark_failed.py",
+        "--path", "docs/proposals/x.md",
+        "--reason", "verifier contract failed",
+    )
+    assert code == 0
+    db_session.expire_all()
+    repo = ProposalRepository(db_session)
+    p = repo.find_by_path("docs/proposals/x.md")
+    assert p.state == ProposalState.FAILED
+    assert "verifier" in p.failure_reason
+
+
+def test_mark_skipped_from_ready(db_session) -> None:
+    code, _, _ = _run(
+        "pipeline_mark_skipped.py",
+        "--path", "docs/proposals/x.md",
+        "--reason", "safety_gate_violation",
+    )
+    assert code == 0
+    db_session.expire_all()
+    repo = ProposalRepository(db_session)
+    p = repo.find_by_path("docs/proposals/x.md")
+    assert p.state == ProposalState.SKIPPED
+
+
+def test_mark_in_flight_missing_path_exits_nonzero(db_session) -> None:
+    code, _, _ = _run(
+        "pipeline_mark_in_flight.py",
+        "--path", "docs/proposals/nope.md", "--cycle-id", "c-x",
+    )
+    assert code == 1

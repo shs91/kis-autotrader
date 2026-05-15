@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import DateTime, create_engine, event, inspect
@@ -20,6 +20,24 @@ logger = setup_logger(__name__)
 
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None
+
+
+@event.listens_for(Base, "load", propagate=True)
+def _coerce_naive_datetimes_to_utc(target: Any, _context: Any) -> None:
+    """ORM 로드 직후 naive datetime을 UTC-aware로 보정한다.
+
+    SQLite는 TIMESTAMPTZ 컬럼을 naive datetime으로 돌려주는데, 이를 그대로 두면
+    이후 dirty 플러시 때 `validate_timezone_aware`가 트립한다. PostgreSQL은 이미
+    aware로 반환하므로 본 핸들러는 사실상 SQLite 테스트 환경에서만 동작한다.
+    """
+    mapper = inspect(target).mapper
+    for col in mapper.columns:
+        if not isinstance(col.type, DateTime) or not col.type.timezone:
+            continue
+        attr_name = mapper.get_property_by_column(col).key
+        value = target.__dict__.get(attr_name)
+        if isinstance(value, datetime) and value.tzinfo is None:
+            target.__dict__[attr_name] = value.replace(tzinfo=UTC)
 
 
 def validate_timezone_aware(session: Session, *_: Any) -> None:
