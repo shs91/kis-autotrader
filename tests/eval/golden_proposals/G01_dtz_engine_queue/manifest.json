@@ -1,0 +1,11 @@
+{
+  "id": "G01_dtz_engine_queue",
+  "proposal_path": "docs/proposals/2026-05-13_engine-metric-signal-naive-timestamp-fix.md",
+  "category": "bug_fix",
+  "summary": "engine.py가 system_metrics/signals 큐에 naive timestamp을 적재하지 않아야 한다",
+  "invariant": {
+    "type": "regex_absent",
+    "file": "src/engine.py",
+    "pattern": "datetime\\.now\\(\\)(?!\\.timestamp)(?!.*tz)"
+  }
+}

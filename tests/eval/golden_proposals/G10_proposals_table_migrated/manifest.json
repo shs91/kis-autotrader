@@ -1,0 +1,11 @@
+{
+  "id": "G10_proposals_table_migrated",
+  "proposal_path": "docs/harness/phase1_completion.md",
+  "category": "config",
+  "summary": "Alembic 최신 마이그레이션에 proposals 테이블 생성이 남아 있어야 한다",
+  "invariant": {
+    "type": "regex_present",
+    "file": "alembic/versions/ecdd397b8238_add_proposals_table.py",
+    "pattern": "(?s)create_table.*proposals"
+  }
+}
