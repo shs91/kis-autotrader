@@ -1,8 +1,22 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (78건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (79건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-15] 스크리닝→매매 매핑 진단 메트릭 추가 (SCREENING_CANDIDATE / SCREENING_HIT·MISS) (v0.2.5)
+- 제안서: docs/proposals/2026-05-15_screening-conversion-diagnostic-metric.md
+- 카테고리: performance
+- 변경 파일:
+  - src/worker/screener.py: `_record_to_db` 안에서 `SystemMetricRepository.record_metric`으로 `SCREENING_CANDIDATE` 1건 기록 (`cycle / ranked_total / candidate_count`).
+  - src/engine.py: `_execute_buy` 체결 직후 `_record_screening_match_metric(stock_code)` 헬퍼 호출 — 당일 KST 기준 `screening_results`에 동일 stock_code 존재 시 `SCREENING_HIT`, 없으면 `SCREENING_MISS`. 매수 본 흐름과 분리(예외 swallow).
+  - tests/test_worker/test_screener.py: `SCREENING_CANDIDATE` 기록 검증 2건 + ranked item 헬퍼 추가.
+  - tests/test_engine_db_integration.py: HIT/MISS/예외/`_execute_buy` 통합 호출 검증 4건 추가.
+- 배경: 룰 B(3일 연속 스크리닝 전환율 <10%) 트리거. 현 `converted_to_trade`는 워커 자체 추천 후보 마킹일 뿐 실제 매수와 매핑되지 않아 룰 B 의미가 모호. 5-14는 BUY 3건 + 스크리닝 전환 0건, 5-15는 BUY 0건 + 전환 0건이 동일하게 "전환율 0%"로 보여 진단 변별력 부재.
+- 영향: 1~2주 누적 후 룰 B 측정값을 (워커 후보 / 엔진 매수 / 매핑 일치율)로 분해 가능. 무차별 임계값 조정으로 인한 매매 위축 위험 회피. 기록 실패 시 fallback 처리되어 매매·스크리닝 본 흐름에 영향 없음.
+- 검증 결과: pytest ✅ 470 passed, 5 pre-existing fail(KST 시간대 의존) | mypy 변경 라인 에러 없음 (66 pre-existing 동일) | ruff src/ 16 pre-existing 동일.
 
 ---
 
@@ -48,21 +62,6 @@
   - tests/test_worker/test_runner.py: `test_notify_dead_task_uses_correct_signature` 회귀 테스트 1건 추가.
 - 영향: DEAD 태스크 발생 시 `TypeError`로 swallow되던 Telegram 알림이 정상 전송됨. 모니터링 사각지대 해소.
 - 검증 결과: pytest ✅ (462 passed, 5 pre-existing fail) | mypy: pre-existing 에러만 | ruff: pre-existing 미사용 import만
-
----
-
-## [2026-05-12] TIMESTAMPTZ에 naive datetime 저장 버그 수정 + listener + 스크리너 매매시간 가드 (v0.2.1)
-- 제안서: docs/proposals/2026-05-12_timestamp-naive-to-aware-utc.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: `datetime.now()` 2곳 `datetime.now(UTC)`로 교체 + UTC import.
-  - src/worker/screener.py: `_is_trading_window()` 가드 추가 (휴장일/매매시간 외 스킵), `datetime.now()` → `datetime.now(UTC)`.
-  - src/db/session.py: `before_flush` 리스너로 TIMESTAMPTZ 컬럼에 명시 set된 naive datetime 거부.
-  - tests/test_db/test_timezone_validation.py: 신규 3 케이스 (naive 거부, aware UTC/KST 허용).
-  - tests/test_worker/test_screener.py: 가드 우회 mock 추가.
-- 데이터 처리: `screening_results` 전수 TRUNCATE (24/7 작동 누적 + 시간 어긋남 row 폐기). 손상 trades/signals는 사용자가 별도 백필 완료.
-- 영향: 신규 row의 timestamp 절대 시각 정확. 일자 경계 misclassification 해소. 휴장일 INSERT 차단. 회귀 시 ValueError 즉시 발생.
-- 검증 결과: pytest 461 passed (5 pre-existing) | mypy: pre-existing 에러만 | ruff ✅
 
 ---
 
