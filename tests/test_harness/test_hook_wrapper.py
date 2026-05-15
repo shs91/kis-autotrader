@@ -11,8 +11,13 @@ from pathlib import Path
 WRAPPER = Path(__file__).resolve().parents[2] / "scripts" / "claude-hooks" / "run_hook.py"
 
 
-def _run(payload: dict[str, object]) -> tuple[int, str]:
+def _run(
+    payload: dict[str, object],
+    extra_env: dict[str, str] | None = None,
+) -> tuple[int, str]:
     env = {**os.environ, "PYTHONPATH": str(WRAPPER.parents[2])}
+    if extra_env:
+        env.update(extra_env)
     proc = subprocess.run(  # noqa: S603 — fixed wrapper path, controlled test input
         [sys.executable, str(WRAPPER)],
         input=json.dumps(payload),
@@ -59,12 +64,25 @@ def test_pre_bash_blocks_force_push() -> None:
     assert "dangerous" in err.lower()
 
 
-def test_stop_blocks_when_artifacts_missing() -> None:
+def test_stop_blocks_when_artifacts_missing_in_cycle_context() -> None:
+    """자동 구현 사이클 컨텍스트에서 verification artifacts 부재 시 차단."""
     code, err = _run(
+        {
+            "hook_event_name": "Stop",
+            "verification_artifacts": {},
+        },
+        extra_env={"HARNESS_CYCLE_VERIFICATION_REQUIRED": "1"},
+    )
+    assert code == 2
+    assert "verification" in err.lower()
+
+
+def test_stop_passes_in_normal_session_without_env() -> None:
+    """일반 Claude Code 세션(env 미설정)에서는 Stop hook이 통과."""
+    code, _ = _run(
         {
             "hook_event_name": "Stop",
             "verification_artifacts": {},
         }
     )
-    assert code == 2
-    assert "verification" in err.lower()
+    assert code == 0

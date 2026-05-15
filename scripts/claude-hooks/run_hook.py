@@ -12,6 +12,7 @@ src.harness.hooks의 적절한 evaluator를 호출한다.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from src.harness.hooks import post_edit, pre_bash, pre_tool_use, stop
@@ -56,6 +57,12 @@ def main() -> int:
         return 0
 
     if event == "Stop":
+        # Phase 3 hotfix: 자동 구현 사이클(run_auto_implement.sh/Cycle Orchestrator)이
+        # HARNESS_CYCLE_VERIFICATION_REQUIRED=1을 export한 상태에서만 강제.
+        # 일반 Claude Code 세션은 verification_artifacts 페이로드 부재로 무조건
+        # 차단되던 디자인 결함 해결.
+        if not os.environ.get("HARNESS_CYCLE_VERIFICATION_REQUIRED"):
+            return 0
         stop_decision = stop.evaluate(
             verification_artifacts=payload.get("verification_artifacts", {}) or {},
         )
