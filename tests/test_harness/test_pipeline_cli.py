@@ -153,3 +153,30 @@ def test_mark_in_flight_missing_path_exits_nonzero(db_session) -> None:
         "--path", "docs/proposals/nope.md", "--cycle-id", "c-x",
     )
     assert code == 1
+
+
+def test_append_progress_records_transition(tmp_path) -> None:
+    progress_file = tmp_path / "progress.json"
+    # 먼저 빈 progress 생성
+    from src.harness.progress import CycleProgress, save_progress
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    cp = CycleProgress(
+        cycle_id="t-1", started_at=datetime.now(KST), env="virtual",
+    )
+    save_progress(progress_file, cp)
+
+    code, _, _ = _run(
+        "pipeline_append_progress.py",
+        "--progress", str(progress_file),
+        "--proposal", "docs/proposals/x.md",
+        "--from-state", "ready",
+        "--to-state", "in_flight",
+    )
+    assert code == 0
+    from src.harness.progress import load_progress
+    refreshed = load_progress(progress_file)
+    assert refreshed is not None
+    assert len(refreshed.history) == 1
+    assert refreshed.history[0].path == "docs/proposals/x.md"
+    assert refreshed.history[0].to_state == "in_flight"
