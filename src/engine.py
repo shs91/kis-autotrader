@@ -826,6 +826,7 @@ class TradingEngine:
                 stock_code, stock_name, TradeType.BUY, quantity, price,
                 signal=signal,
             )
+            self._record_screening_match_metric(stock_code)
 
             self._task_queue.enqueue(
                 task_type="telegram_notify",
@@ -1105,6 +1106,30 @@ class TradingEngine:
             )
         except Exception:
             logger.exception("메트릭 큐 적재 실패: %s", metric_type)
+
+    def _record_screening_match_metric(self, stock_code: str) -> None:
+        """신규 BUY 직후 동일 stock_code의 screening_results 매칭 여부를 메트릭으로 기록한다.
+
+        proposal 2026-05-15: 룰 B(스크리닝→매매 전환율) 진단용. 당일 KST 범위의
+        screening_results에 해당 종목이 존재하면 SCREENING_HIT, 없으면
+        SCREENING_MISS로 기록한다. 매수 본 흐름과 분리(예외 시 swallow).
+        """
+        try:
+            today = date.today()
+            with get_session() as session:
+                repo = ScreeningResultRepository(session)
+                results = repo.get_by_date(today)
+                matched = any(r.stock_code == stock_code for r in results)
+            self._record_metric(
+                "SCREENING_HIT" if matched else "SCREENING_MISS",
+                {
+                    "cycle": self._cycle_count,
+                    "stock_code": stock_code,
+                    "matched": matched,
+                },
+            )
+        except Exception:
+            logger.exception("SCREENING_HIT/MISS 메트릭 기록 실패: %s", stock_code)
 
     # truncate 임계값: detail.targets 배열이 길어져 JSON이 과도하게 커지는
     # 것을 방지한다. 50개 초과 시 앞 50개만 남기고 truncated=True 플래그를 기록한다.

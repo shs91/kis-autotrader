@@ -35,7 +35,7 @@ from src.api.client import KISClient
 from src.api.quote import QuoteAPI
 from src.api.rate_limiter import HybridRateLimiter
 from src.config import settings
-from src.db.repository import ScreeningResultRepository
+from src.db.repository import ScreeningResultRepository, SystemMetricRepository
 from src.db.session import get_session
 from src.scheduler.holidays import is_market_closed
 from src.strategy.registry import StrategyRegistry
@@ -223,6 +223,17 @@ class ScreeningWorker:
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
                     )
+                try:
+                    SystemMetricRepository(session).record_metric(
+                        metric_type="SCREENING_CANDIDATE",
+                        detail={
+                            "cycle": self._cycle_count,
+                            "ranked_total": len(ranked),
+                            "candidate_count": len(candidate_set),
+                        },
+                    )
+                except Exception:
+                    logger.exception("SCREENING_CANDIDATE 메트릭 기록 실패")
             if etf_blocked:
                 logger.info("스크리닝 DB 적재 시 ETF 블록 %d건 차단", etf_blocked)
         except Exception:
