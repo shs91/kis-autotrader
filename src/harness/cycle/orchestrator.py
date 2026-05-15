@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,13 +57,15 @@ def run_cycle(
             prompt = ""
     else:
         logger.warning("prompt %s missing, invoke claude with empty prompt", prompt_path)
+    # Stop hook 활성화 — claude -p 종료 시 Verifier 검증 강제 (Phase 3 hotfix)
+    cycle_env = {**os.environ, "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1"}
     cp = subprocess.run(  # noqa: S603
         [
             claude_bin, "-p", prompt,
             "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,Task",
         ],
         cwd=str(repo_root), capture_output=True, text=True, check=False,
-        timeout=3600,
+        timeout=3600, env=cycle_env,
     )
     claude_exit = cp.returncode
 
