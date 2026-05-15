@@ -33,8 +33,30 @@ cd "$PROJECT_DIR"
 
 echo "=== Auto-implement finished at $(date) ===" >> "$LOG_FILE"
 
-# 구현 성공 시 서비스 재시작 (BRIDGE_SPEC 규격)
-if grep -q "implemented" "$LOG_FILE" 2>/dev/null; then
+# Phase 2: 골든 회귀 셋 사전 검증
+echo "=== Golden regression check started at $(date) ===" >> "$LOG_FILE"
+PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -m pytest \
+  "$PROJECT_DIR/tests/eval/test_golden_runner.py" -q --no-header \
+  >> "$LOG_FILE" 2>&1
+GOLDEN_EXIT=$?
+echo "=== Golden regression check finished at $(date) — exit=$GOLDEN_EXIT ===" >> "$LOG_FILE"
+
+# Phase 2: Verifier 실행 (변경 사항이 있을 때만)
+if git -C "$PROJECT_DIR" diff --quiet HEAD; then
+  echo "[verifier] no diff vs HEAD — skip verifier" >> "$LOG_FILE"
+  VERIFIER_EXIT=0
+else
+  VERIFIER_OUT="$LOG_DIR/verifier_$(date +%Y-%m-%d_%H%M%S).json"
+  PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" \
+    -m scripts.harness.run_verifier \
+    --base-ref HEAD~1 --head-ref HEAD --out "$VERIFIER_OUT" \
+    >> "$LOG_FILE" 2>&1
+  VERIFIER_EXIT=$?
+  echo "[verifier] exit=$VERIFIER_EXIT artifact=$VERIFIER_OUT" >> "$LOG_FILE"
+fi
+
+# 구현 성공 시 서비스 재시작 (BRIDGE_SPEC 규격 + Phase 2 Verifier 통과 강제)
+if [[ "$GOLDEN_EXIT" == "0" && "$VERIFIER_EXIT" == "0" ]] && grep -q "implemented" "$LOG_FILE" 2>/dev/null; then
   echo "=== Service restart started at $(date) ===" >> "$LOG_FILE"
   launchctl stop com.kis.autotrader 2>> "$LOG_FILE" || true
   sleep 5
