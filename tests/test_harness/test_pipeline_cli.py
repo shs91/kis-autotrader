@@ -158,11 +158,12 @@ def test_mark_in_flight_missing_path_exits_nonzero(db_session) -> None:
 def test_append_progress_records_transition(tmp_path) -> None:
     progress_file = tmp_path / "progress.json"
     # 먼저 빈 progress 생성
+    from datetime import datetime, timedelta, timezone
+
     from src.harness.progress import CycleProgress, save_progress
-    from datetime import datetime, timezone, timedelta
-    KST = timezone(timedelta(hours=9))
+    kst = timezone(timedelta(hours=9))
     cp = CycleProgress(
-        cycle_id="t-1", started_at=datetime.now(KST), env="virtual",
+        cycle_id="t-1", started_at=datetime.now(kst), env="virtual",
     )
     save_progress(progress_file, cp)
 
