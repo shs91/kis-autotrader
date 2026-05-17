@@ -519,6 +519,9 @@ def _register_bot_commands(
             "/resume — 매매 재개\n"
             "/setlimit N — 일일 매매 한도 변경\n"
             "/restart — 시스템 재시작\n"
+            "/run_implement [--dry|--force] — 자동 구현 사이클 즉시 발동 (--dry: 가드만 확인)\n"
+            "/status_implement — 자동 구현 사이클 + 가드 상태 조회\n"
+            "/pause_implement [resume] — 자동 구현 일시 중단/재개\n"
             "/help — 명령어 목록"
         )
 
