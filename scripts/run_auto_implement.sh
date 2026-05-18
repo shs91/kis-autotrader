@@ -26,8 +26,17 @@ fi
 
 echo "=== Auto-implement started at $(date) ===" >> "$LOG_FILE"
 
-# Phase 3: Initializer + new top-level prompt (subagent 오케스트레이션)
+# Phase 3 hotfix A: markdown → proposals DB 동기화 (cron 사이클 직전)
+# 분석 단계(주간/일간 Cowork)가 새로 작성한 ready 제안서를 DB에 적재해야
+# Cycle Orchestrator의 list_ready()가 인식한다.
 cd "$PROJECT_DIR"
+echo "=== Proposal sync started at $(date) ===" >> "$LOG_FILE"
+PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" \
+  -m scripts.harness.sync_proposals_md_to_db >> "$LOG_FILE" 2>&1
+SYNC_EXIT=$?
+echo "=== Proposal sync finished at $(date) — exit=$SYNC_EXIT ===" >> "$LOG_FILE"
+
+# Phase 3: Initializer + new top-level prompt (subagent 오케스트레이션)
 PROGRESS_PATH="$HOME/.kis-autotrader/claude-progress.json"
 PROMPT_FILE_V2="$PROJECT_DIR/scripts/auto_implement_prompt_v2.txt"
 
