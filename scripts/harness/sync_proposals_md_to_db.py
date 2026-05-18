@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from src.db.models import ImplementationCategory, ProposalPriority, ProposalState
 from src.db.repository import ProposalRepository
 from src.db.session import get_session
+from src.harness.observability.prediction import parse_prediction
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 META_LINE = re.compile(r"^-\s*([^:]+?)\s*:\s*(.+?)\s*$")
@@ -101,13 +102,16 @@ def sync_directory(directory: Path, session: Session) -> tuple[int, int]:
             skipped += 1
             continue
         parsed = parse_proposal(md)
-        repo.create(
+        proposal = repo.create(
             path=path_str,
             title=parsed["title"],
             category=_coerce_category(parsed["category"]),
             state=_coerce_state(parsed["state"]),
             priority=_coerce_priority(parsed["priority"]),
         )
+        pred = parse_prediction(md)
+        if pred:
+            repo.set_prediction(proposal.id, pred)
         inserted += 1
     return inserted, skipped
 

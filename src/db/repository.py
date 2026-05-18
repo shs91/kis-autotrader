@@ -1244,6 +1244,14 @@ class ProposalRepository:
         p.updated_at = now
         logger.info("제안서 SKIPPED: %s — %s", p.path, reason)
 
+    def set_prediction(self, proposal_id: int, prediction: dict) -> None:
+        """제안서의 prediction JSONB를 갱신."""
+        p = self._require(proposal_id)
+        now = datetime.now(UTC)
+        p.prediction = prediction or None
+        p.updated_at = now
+        logger.info("제안서 prediction 갱신: %s — %d keys", p.path, len(prediction or {}))
+
     def _require(self, proposal_id: int) -> Proposal:
         p = self._session.get(Proposal, proposal_id)
         if p is None:
