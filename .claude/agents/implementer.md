@@ -34,26 +34,45 @@ python scripts/harness/pipeline_append_progress.py \
 - 변경 파일 수가 **5개 초과**면 즉시 중단 → 6단계 실패 처리로 이동
 - `.env`/credentials.json/token.json 편집 시도는 PreToolUse hook이 차단
 
-### 3. **git commit (필수)**
+### 3. 제안서 markdown 상태 갱신
 
-이 단계 생략은 사이클 실패의 가장 흔한 원인이다. Verifier가 `HEAD~1..HEAD` diff을 보므로 commit이 없으면 Verifier는 변경을 인지하지 못한다.
+Edit 도구로 제안서 markdown의 `상태: ready` → `상태: implemented`로 변경.
+분석가가 markdown으로 상태를 읽으므로 갱신 필수.
+
+### 4. **`record_implementation.py` 호출 — implementation_logs DB + CHANGELOG + 버전 bump**
+
+`CLAUDE.md` 규약: 모든 코드 변경은 본 스크립트를 통해 봉인한다. 본 호출이
+다음을 일괄 처리한다:
+- `implementation_logs` 테이블에 INSERT (제목/카테고리/변경 파일/검증/효과)
+- `pyproject.toml` + `src/__version__.py` 버전 bump (patch 기본)
+- `docs/CHANGELOG.md` 5건 rolling 갱신 (가장 오래된 항목 제거)
 
 ```bash
-git add <변경된 src 파일> <변경된 test 파일>
+python scripts/record_implementation.py \
+  --title "<제안서 한 줄 요약>" \
+  --category <bug_fix|refactor|param_tuning|feature|enhancement|performance|docs|config> \
+  --proposal "<proposal_path>" \
+  --files '{"src/x.py":"변경 요지","tests/test_x.py":"테스트 추가"}' \
+  --verification "<pytest/mypy/ruff 결과 요약>" \
+  --background "<왜 변경 필요한가>" \
+  --effect "<변경의 정량/정성 효과>"
+```
+
+버전 bump를 건너뛰려면 `--no-bump` 추가 (예: 문서만 변경한 docs 카테고리).
+
+### 5. **git commit (필수)** — 모든 변경 한 번에 봉인
+
+Verifier가 `HEAD~1..HEAD` diff을 보므로 commit이 없으면 검증 불가.
+3·4단계의 모든 변경(코드 + markdown + CHANGELOG + 버전)을 한 commit으로 묶는다.
+
+```bash
+git add <변경된 src 파일> <변경된 test 파일> \
+        <proposal_path> \
+        docs/CHANGELOG.md pyproject.toml src/__version__.py
 git commit -m "auto: <제안서 제목> (proposals/<파일명>.md)"
 ```
 
-### 4. 제안서 markdown 상태 갱신 + commit
-
-```bash
-# Edit 도구로 제안서 markdown의 "상태: ready" → "상태: implemented" 변경
-git add <proposal_path>
-git commit --amend --no-edit   # 또는 별도 commit
-```
-
-분석가가 markdown으로 상태를 읽으므로 갱신 필수. 갱신 안 하면 분석가가 ready로 오해.
-
-### 5. IMPLEMENTED 마킹 + progress 기록
+### 6. IMPLEMENTED 마킹 + progress 기록
 
 ```bash
 python scripts/harness/pipeline_mark_implemented.py --path <proposal_path>
@@ -63,7 +82,7 @@ python scripts/harness/pipeline_append_progress.py \
   --from-state in_flight --to-state implemented
 ```
 
-### 6. 실패 처리 (변경 파일 수 초과 / 코드 변경 중 에러 / verify 실패 등)
+### 7. 실패 처리 (변경 파일 수 초과 / 코드 변경 중 에러 / verify 실패 등)
 
 ```bash
 python scripts/harness/pipeline_mark_failed.py \
@@ -96,6 +115,7 @@ Dirty 상태로 종료하면 Verifier가 HEAD~1..HEAD diff을 못 보고 contrac
 ## 금지
 
 - ❌ **commit 없이 종료** — Verifier가 변경을 인지 못 함 (가장 흔한 실패 원인)
+- ❌ **`record_implementation.py` 호출 누락** — `implementation_logs` DB / CHANGELOG / 버전 bump 모두 빠져 이후 baseline/대시보드가 깨짐
 - ❌ **제안서 markdown 상태 미갱신** — 분석가가 ready로 오해
 - ❌ **progress.json append 누락** — Phase 4 trajectory가 빈 데이터를 받음
 - ❌ `.env`/credentials.json/token.json 편집 시도
