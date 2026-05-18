@@ -45,10 +45,22 @@ class DiffSummary:
         return self.file_count > threshold
 
     def to_jsonb(self) -> dict[str, Any]:
-        """`implementation_logs.changed_files` JSONB 컬럼용 직렬화."""
+        """`implementation_logs.changed_files` JSONB 컬럼용 직렬화.
+
+        각 파일에 component 분류를 자동으로 채워, Phase 4의 재발률/대시보드
+        분석이 모듈 단위로 동작하도록 한다. 순환 import 회피를 위해
+        `classify_component` import는 함수 내부에서 수행한다.
+        """
+        from src.harness.observability.components import classify_component
+
         return {
             "files": [
-                {"path": f.path, "additions": f.additions, "deletions": f.deletions}
+                {
+                    "path": f.path,
+                    "additions": f.additions,
+                    "deletions": f.deletions,
+                    "component": classify_component(f.path),
+                }
                 for f in self.files
             ],
             "total_additions": self.total_additions,
