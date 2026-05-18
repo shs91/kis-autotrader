@@ -17,7 +17,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from src.harness.progress import (
     CycleProgress,
@@ -54,6 +54,7 @@ class Initializer:
         env: Literal["virtual", "real"],
         progress_path: Path | None = None,
         disk_threshold_gb: float = _DEFAULT_DISK_THRESHOLD_GB,
+        trajectory_repo: Any = None,
     ) -> None:
         self.repo_root = repo_root
         self.env = env
@@ -63,6 +64,7 @@ class Initializer:
             else Path.home() / ".kis-autotrader" / "claude-progress.json"
         )
         self.disk_threshold_gb = disk_threshold_gb
+        self.trajectory_repo = trajectory_repo
 
     def _check_alembic_head_present(self) -> EnvCheckResult:
         try:
@@ -167,7 +169,8 @@ class Initializer:
         return cp.stdout.strip().splitlines()[0]
 
     def run(self) -> InitializerStatus:
-        cycle_id = "auto-" + datetime.now(_KST).strftime("%Y%m%d-%H%M%S")
+        started_at = datetime.now(_KST)
+        cycle_id = "auto-" + started_at.strftime("%Y%m%d-%H%M%S")
         checks = [
             self._check_alembic_head_present(),
             self._check_git_clean(),
@@ -176,7 +179,7 @@ class Initializer:
         ]
         progress = CycleProgress(
             cycle_id=cycle_id,
-            started_at=datetime.now(_KST),
+            started_at=started_at,
             env=self.env,
             last_safe_tag=self._last_safe_tag(),
             initializer_checks=[
@@ -193,6 +196,21 @@ class Initializer:
             logger.warning(
                 "Initializer %s: %d failures (%s)",
                 cycle_id, len(failures), ",".join(failures),
+            )
+        completed_at = datetime.now(_KST)
+        if self.trajectory_repo is not None:
+            from src.db.models import TrajectoryStatus, TrajectoryStep
+            self.trajectory_repo.append(
+                cycle_id=cycle_id,
+                step=TrajectoryStep.INITIALIZER,
+                status=(
+                    TrajectoryStatus.OK if all_passed else TrajectoryStatus.FAIL
+                ),
+                started_at=started_at,
+                completed_at=completed_at,
+                result_summary=", ".join(
+                    f"{c.name}={c.result.value}" for c in checks
+                ),
             )
         return InitializerStatus(
             cycle_id=cycle_id,

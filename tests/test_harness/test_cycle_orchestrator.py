@@ -58,3 +58,19 @@ def test_cycle_returns_claude_exit_code(repo: Path, tmp_path: Path) -> None:
             prompt_path=tmp_path / "prompt.txt", claude_bin="/bin/true",
         )
     assert outcome.claude_exit_code == 2
+
+
+def test_cycle_records_trajectory_when_repo_provided(
+    repo: Path, tmp_path: Path,
+) -> None:
+    fake_traj = MagicMock()
+    progress = tmp_path / "p.json"
+    with patch("src.harness.cycle.orchestrator.subprocess.run") as r:
+        r.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        run_cycle(
+            repo_root=repo, env="virtual", progress_path=progress,
+            prompt_path=tmp_path / "prompt.txt", claude_bin="/bin/true",
+            trajectory_repo=fake_traj,
+        )
+    # Initializer entry + (prompt 없으니 claude entry는 적재 안 됨)
+    assert fake_traj.append.call_count >= 1
