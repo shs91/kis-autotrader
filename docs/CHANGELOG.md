@@ -6,6 +6,16 @@
 
 ---
 
+## [2026-05-18] auto-implement PATH 보강 — verifier ruff FileNotFoundError 수정 (v0.2.8) — 🔴 핫픽스
+- 카테고리: bug_fix
+- 변경 파일:
+  - scripts/run_auto_implement.sh: PATH 선두에 `$HOME/IdeaProjects/kis-autotrader/.venv/bin` prepend. 누락 시 `verifier/runner.py:70`의 `subprocess.run(["ruff", ...])`가 `FileNotFoundError: 'ruff'`로 죽음.
+- 배경: 2026-05-17 16:36 텔레그램 `/run_implement` 트리거로 처음 verifier 통합 흐름이 실행됐을 때 종료코드 1. cycle·golden은 통과했으나 verifier 단계 진입 직후 ruff 바이너리를 PATH에서 못 찾아 실패. ruff는 `.venv/bin/ruff`에만 존재했고 launchd PATH(`~/.local/bin:/usr/local/bin:/usr/bin:/bin`)에 venv 경로가 없었음.
+- 영향: 정규 평일 17:15 / 금 19:00 트리거 및 텔레그램 `/run_implement` 모두 verifier 단계가 정상 ruff 호출. exit 1 재발 차단.
+- 검증 결과: `bash -n scripts/run_auto_implement.sh` ✅ | 새 PATH로 `command -v ruff` → `.venv/bin/ruff` 해결 확인.
+
+---
+
 ## [2026-05-17] 텔레그램 /help 누락 명령 추가 — /run_implement /status_implement /pause_implement (v0.2.7)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -51,18 +61,6 @@
 - 배경: 2026-05-12 fb7b548에서 도입된 `before_flush` 리스너가 큐 경유 적재 경로의 naive timestamp를 막아 2026-05-12 15:20 UTC 이후 system_metrics·signals 영속화가 16+ 시간 단절. 일일 리포트는 `repository.py:884`를 원인으로 지목했으나 해당 라인은 c44dade에서 이미 정리됨 — 실제 차단 지점은 상류의 큐 적재부.
 - 영향: system_metrics·signals 영속화 즉시 복구. 자동 파이프라인 안전 게이트 룰 C(에러)·룰 D(사이클) 트리거 신뢰성 회복. 일일/주간 리포트의 시그널 정확도·signal_performance 분석 데이터 기반 회복.
 - 검증 결과: pytest 변경 회귀 테스트 ✅ 2 passed | 전체 410 passed, 5 pre-existing fail (KST 17시대 시간대 의존) + 10 pre-existing errors (SQLite JSONB 호환성) — 모두 본 변경 무관 stash 검증 완료 | ruff src/engine.py + tests ✅ | mypy 변경 라인 에러 없음.
-
----
-
-## [2026-05-13] 분석 프롬프트의 signals 시간축을 detected_at으로 통일 (v0.2.3, bump 없음)
-- 제안서: docs/proposals/2026-05-12_signals-time-axis-unify.md
-- 카테고리: docs
-- 변경 파일:
-  - docs/prompts/_common_rules.md: 시간 필터 정책 한 줄 추가 — signals는 항상 `detected_at` 사용.
-  - docs/prompts/daily_routine.md: signal_performance(L87), rolling_7d_signals(L178) 쿼리의 `created_at` → `detected_at`.
-  - docs/prompts/weekly_routine.md: signal_performance(L65) 쿼리의 `created_at` → `detected_at`.
-- 영향: 분석 시간축이 비즈니스 이벤트 시점(`detected_at`)으로 일관화. 일자 경계 근처 트랜잭션 지연으로 인한 미세한 일자 누수 차단. 후속 프롬프트 작성 시 혼용 재발 방지.
-- 검증 결과: 문서 변경 only, pytest 영향 없음 (record_implementation `--category docs`로 bump 없음).
 
 ---
 

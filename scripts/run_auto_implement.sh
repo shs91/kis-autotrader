@@ -5,8 +5,9 @@
 set -euo pipefail
 
 # launchd/cron 환경에서 누락될 수 있는 환경변수 설정
+# .venv/bin 선두 prepend — verifier가 subprocess로 호출하는 ruff 바이너리가 venv에만 존재(2026-05-17 실패 사례)
 export HOME="/Users/songhansu"
-export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$HOME/IdeaProjects/kis-autotrader/.venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 PROJECT_DIR="$HOME/IdeaProjects/kis-autotrader"
 PROMPT_FILE="$PROJECT_DIR/scripts/auto_implement_prompt.txt"
