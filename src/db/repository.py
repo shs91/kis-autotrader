@@ -31,6 +31,9 @@ from src.db.models import (
     SystemMetric,
     Trade,
     TradeType,
+    TrajectoryEntry,
+    TrajectoryStatus,
+    TrajectoryStep,
 )
 from src.utils.exceptions import DatabaseError
 from src.utils.logger import setup_logger
@@ -1241,8 +1244,92 @@ class ProposalRepository:
         p.updated_at = now
         logger.info("제안서 SKIPPED: %s — %s", p.path, reason)
 
+    def set_prediction(self, proposal_id: int, prediction: dict) -> None:
+        """제안서의 prediction JSONB를 갱신."""
+        p = self._require(proposal_id)
+        now = datetime.now(UTC)
+        p.prediction = prediction or None
+        p.updated_at = now
+        logger.info("제안서 prediction 갱신: %s — %d keys", p.path, len(prediction or {}))
+
     def _require(self, proposal_id: int) -> Proposal:
         p = self._session.get(Proposal, proposal_id)
         if p is None:
             raise LookupError(f"Proposal id={proposal_id} not found")
         return p
+
+
+class TrajectoryRepository:
+    """사이클 trajectory entries 데이터 접근."""
+
+    def __init__(self, session: Session) -> None:
+        """초기화.
+
+        Args:
+            session: SQLAlchemy 세션
+        """
+        self._session = session
+
+    def append(
+        self,
+        *,
+        cycle_id: str,
+        step: TrajectoryStep,
+        status: TrajectoryStatus,
+        started_at: datetime,
+        completed_at: datetime,
+        proposal_path: str | None = None,
+        agent: str | None = None,
+        input_summary: str | None = None,
+        result_summary: str | None = None,
+        duration_seconds: float | None = None,
+        token_usage_input: int | None = None,
+        token_usage_output: int | None = None,
+        meta: dict | None = None,
+    ) -> TrajectoryEntry:
+        """trajectory entry 한 건 추가."""
+        if duration_seconds is None:
+            duration_seconds = max(
+                (completed_at - started_at).total_seconds(), 0.0,
+            )
+        entry = TrajectoryEntry(
+            cycle_id=cycle_id,
+            step=step,
+            status=status,
+            proposal_path=proposal_path,
+            agent=agent,
+            input_summary=input_summary,
+            result_summary=result_summary,
+            duration_seconds=duration_seconds,
+            token_usage_input=token_usage_input,
+            token_usage_output=token_usage_output,
+            started_at=started_at,
+            completed_at=completed_at,
+            meta=meta,
+            created_at=datetime.now(UTC),
+        )
+        self._session.add(entry)
+        self._session.flush()
+        logger.info(
+            "trajectory entry: cycle=%s step=%s status=%s",
+            cycle_id, step.value, status.value,
+        )
+        return entry
+
+    def list_for_cycle(self, cycle_id: str) -> list[TrajectoryEntry]:
+        """특정 사이클의 trajectory entries를 started_at 순으로 조회한다."""
+        stmt = (
+            select(TrajectoryEntry)
+            .where(TrajectoryEntry.cycle_id == cycle_id)
+            .order_by(TrajectoryEntry.started_at)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def list_recent(self, limit: int = 50) -> list[TrajectoryEntry]:
+        """최신 trajectory entries를 started_at 역순으로 조회한다."""
+        stmt = (
+            select(TrajectoryEntry)
+            .order_by(TrajectoryEntry.started_at.desc())
+            .limit(limit)
+        )
+        return list(self._session.execute(stmt).scalars().all())

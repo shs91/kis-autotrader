@@ -7,7 +7,7 @@ Telegram HTML parse_mode를 사용한다.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.api.account import Balance, Execution
@@ -199,3 +199,61 @@ def format_error(context: str, error: str) -> str:
 def format_system(message: str) -> str:
     """시스템 알림 메시지를 생성한다."""
     return f"⚙️ <b>[시스템]</b> {message}"
+
+
+# ── 하네스 사이클 결산 (Phase 4) ────────────────────────────────
+
+_MAX_APPLIED = 5
+_MAX_RECURRENCE = 5
+_MAX_PREDICTION = 5
+
+
+def format_pipeline_summary(
+    *,
+    cycle_id: str,
+    applied: list[dict[str, Any]],
+    recurrence_risks: list[dict[str, Any]],
+    prediction_misses: list[dict[str, Any]],
+) -> str:
+    """사이클 종료 후 3섹션 결산 카드 — Phase 4."""
+    lines = [f"🛠 <b>하네스 사이클 결산</b> ({cycle_id})", ""]
+
+    # 1. 오늘 적용
+    lines.append("<b>📦 오늘 적용된 변경</b>")
+    if not applied:
+        lines.append("  변경 없음")
+    else:
+        for entry in applied[:_MAX_APPLIED]:
+            title = entry.get("title", "(no title)")
+            version = entry.get("version") or "-"
+            lines.append(f"  • <code>{version}</code> {title}")
+        if len(applied) > _MAX_APPLIED:
+            lines.append(f"  외 {len(applied) - _MAX_APPLIED}건")
+    lines.append("")
+
+    # 2. 회귀 위험
+    lines.append("<b>⚠️ 회귀 위험 (7일)</b>")
+    if not recurrence_risks:
+        lines.append("  회귀 위험 없음")
+    else:
+        for r in recurrence_risks[:_MAX_RECURRENCE]:
+            comp = r.get("component") or r.get("path", "?")
+            count = r.get("edit_count", 0)
+            lines.append(f"  • {comp} — {count}회")
+        if len(recurrence_risks) > _MAX_RECURRENCE:
+            lines.append(f"  외 {len(recurrence_risks) - _MAX_RECURRENCE}건")
+    lines.append("")
+
+    # 3. 예측 미달
+    lines.append("<b>📉 예측 미달 (지난주 대비)</b>")
+    if not prediction_misses:
+        lines.append("  예측 미달 없음")
+    else:
+        for m in prediction_misses[:_MAX_PREDICTION]:
+            cat = m.get("category", "?")
+            metric = m.get("metric", "?")
+            lines.append(f"  • {cat} / {metric}")
+        if len(prediction_misses) > _MAX_PREDICTION:
+            lines.append(f"  외 {len(prediction_misses) - _MAX_PREDICTION}건")
+
+    return "\n".join(lines)

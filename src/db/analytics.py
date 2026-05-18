@@ -14,6 +14,8 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from src.db.models import (
+    ImplementationLog,
+    Proposal,
     ScreeningResult,
     SellReason,
     Signal,
@@ -1050,4 +1052,109 @@ def get_strategy_win_rates(
     return {
         name: stats["wins"] / stats["total"] if stats["total"] > 0 else 0.5
         for name, stats in by_strategy.items()
+    }
+
+
+def get_prediction_calibration(
+    session: Session,
+    window_days: int = 30,
+) -> dict[str, Any]:
+    """제안서의 prediction과 실측을 카테고리별로 집계한다.
+
+    Phase 4 Decision Observability. 실측 비교는 후속 Phase 5(리포트 사이클)에서
+    win_rate 등을 매핑해 채운다. 본 함수는 prediction 분포만 우선 노출.
+    """
+    from datetime import UTC as _UTC
+    since = datetime.now(_UTC) - timedelta(days=window_days)
+    stmt = select(Proposal).where(Proposal.created_at >= since)
+    rows = list(session.execute(stmt).scalars().all())
+    categories: dict[str, dict[str, dict[str, Any]]] = {}
+    with_pred = 0
+    for p in rows:
+        if not p.prediction:
+            continue
+        with_pred += 1
+        cat_key = p.category.value
+        cat_bucket = categories.setdefault(cat_key, {})
+        for k, v in p.prediction.items():
+            metric = cat_bucket.setdefault(
+                k, {"count": 0, "sum_predicted": 0.0, "avg_predicted": 0.0},
+            )
+            metric["count"] += 1
+            metric["sum_predicted"] += float(v)
+            metric["avg_predicted"] = metric["sum_predicted"] / metric["count"]
+    return {
+        "window_days": window_days,
+        "proposal_count": len(rows),
+        "with_prediction_count": with_pred,
+        "categories": categories,
+    }
+
+
+def get_recurrence_risk(
+    session: Session,
+    window_days: int = 7,
+    min_edits: int = 3,
+) -> dict[str, Any]:
+    """동일 component/파일을 윈도우 내 min_edits회 이상 수정한 케이스 집계.
+
+    재발 위험 신호 — 같은 모듈을 단기에 반복 수정한다는 것은 일회성 fix가
+    부족했음을 의미. Telegram 결산과 대시보드에 노출.
+    """
+    from datetime import UTC as _UTC
+    since = datetime.now(_UTC) - timedelta(days=window_days)
+    stmt = (
+        select(ImplementationLog)
+        .where(ImplementationLog.implemented_at >= since)
+        .order_by(ImplementationLog.implemented_at)
+    )
+    logs = list(session.execute(stmt).scalars().all())
+
+    file_counts: dict[str, int] = {}
+    comp_counts: dict[str, int] = {}
+    for log in logs:
+        if not log.changed_files:
+            continue
+        files = (
+            log.changed_files.get("files")
+            if isinstance(log.changed_files, dict)
+            else None
+        )
+        if not files:
+            continue
+        seen_in_log_files: set[str] = set()
+        seen_in_log_comps: set[str] = set()
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            path = f.get("path", "")
+            comp = f.get("component", "other")
+            if path and path not in seen_in_log_files:
+                file_counts[path] = file_counts.get(path, 0) + 1
+                seen_in_log_files.add(path)
+            if comp and comp not in seen_in_log_comps:
+                comp_counts[comp] = comp_counts.get(comp, 0) + 1
+                seen_in_log_comps.add(comp)
+
+    risk_files = sorted(
+        (
+            {"path": p, "edit_count": c}
+            for p, c in file_counts.items()
+            if c >= min_edits
+        ),
+        key=lambda x: -x["edit_count"],
+    )
+    risk_components = sorted(
+        (
+            {"component": comp, "edit_count": c}
+            for comp, c in comp_counts.items()
+            if c >= min_edits
+        ),
+        key=lambda x: -x["edit_count"],
+    )
+    return {
+        "window_days": window_days,
+        "min_edits": min_edits,
+        "risk_files": risk_files,
+        "risk_components": risk_components,
     }

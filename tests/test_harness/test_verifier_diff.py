@@ -35,11 +35,18 @@ def test_parse_numstat_empty() -> None:
 
 
 def test_jsonb_serializable() -> None:
-    raw = "10\t5\tsrc/x.py\n"
+    raw = "10\t5\tsrc/strategy/rsi.py\n"
     diff = parse_numstat(raw)
     payload = diff.to_jsonb()
     assert payload == {
-        "files": [{"path": "src/x.py", "additions": 10, "deletions": 5}],
+        "files": [
+            {
+                "path": "src/strategy/rsi.py",
+                "additions": 10,
+                "deletions": 5,
+                "component": "code/strategy",
+            }
+        ],
         "total_additions": 10,
         "total_deletions": 5,
         "file_count": 1,
