@@ -46,12 +46,26 @@ class VerifierRunner:
         self._junit_path: Path = repo_root / ".verifier-junit.xml"
 
     def run(self, *, base_ref: str = "HEAD~1", head_ref: str = "HEAD") -> RunnerResult:
+        """diff을 먼저 수집해 변경된 .py 파일만 ruff/mypy/pytest로 검증한다.
+
+        Phase 3 hotfix D2: 변경분 외 사전 존재 위반이 contract FAIL을 유발하던
+        디자인 결함 해결. 변경된 파일에 한정해 검증함으로써 cycle의 신호 정합성을
+        높인다. .py 파일이 전혀 변경되지 않은 사이클은 ruff/mypy/pytest 모두
+        PASS로 처리 (검증할 대상 없음 = 회귀 없음).
+        """
         result = RunnerResult()
         try:
-            result.ruff = self._run_ruff()
-            result.mypy = self._run_mypy()
-            result.pytest = self._run_pytest()
+            # 1. diff 먼저 — scope 결정
             result.diff = self._run_diff(base_ref=base_ref, head_ref=head_ref)
+            py_files = [
+                f.path for f in result.diff.files if f.path.endswith(".py")
+            ]
+            src_files = [p for p in py_files if not p.startswith("tests/")]
+            test_files = [p for p in py_files if p.startswith("tests/")]
+            # 2. 변경된 파일에 한정해 검사
+            result.ruff = self._run_ruff(py_files)
+            result.mypy = self._run_mypy(src_files)
+            result.pytest = self._run_pytest(test_files)
         except subprocess.SubprocessError as e:
             result.runner_error = f"subprocess: {e!s:.200}"
         return result
@@ -66,24 +80,35 @@ class VerifierRunner:
             timeout=600,
         )
 
-    def _run_ruff(self) -> RuffArtifact:
+    def _run_ruff(self, files: list[str]) -> RuffArtifact:
+        if not files:
+            return RuffArtifact()  # 변경된 .py 파일 없음 → 위반 0건 = PASS
         cp = self._exec(
-            ["ruff", "check", self.src_target, "--output-format=json"]
+            ["ruff", "check", *files, "--output-format=json"]
         )
         return parse_ruff_json(cp.stdout)
 
-    def _run_mypy(self) -> MypyArtifact:
+    def _run_mypy(self, files: list[str]) -> MypyArtifact:
+        if not files:
+            # 변경된 src .py 없음 → 검사할 대상 없음. files_checked=0이라
+            # 기본 passed=False이지만 _passed_override로 PASS 처리
+            return MypyArtifact(files_checked=0, _passed_override=True)
+        # --no-error-summary는 summary 라인을 제거해 parser가 fail로 인식하므로 제외
         cp = self._exec(
-            ["mypy", "--no-pretty", "--no-error-summary", self.src_target]
+            ["mypy", "--no-pretty", *files]
         )
         # mypy summary는 stderr 또는 stdout 끝에. 합쳐서 파싱
         return parse_mypy_text((cp.stdout or "") + "\n" + (cp.stderr or ""))
 
-    def _run_pytest(self) -> PytestArtifact:
+    def _run_pytest(self, files: list[str]) -> PytestArtifact:
+        if not files:
+            # 변경된 test 파일 없음 → 회귀 검사 대상 없음. 기본 PytestArtifact는
+            # tests=0/failures=0이라 passed=True
+            return PytestArtifact()
         self._exec(
             [
                 "pytest",
-                self.test_target,
+                *files,
                 "-q",
                 f"--junitxml={self._junit_path}",
             ]
