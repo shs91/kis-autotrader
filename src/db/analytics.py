@@ -14,6 +14,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from src.db.models import (
+    Proposal,
     ScreeningResult,
     SellReason,
     Signal,
@@ -1050,4 +1051,40 @@ def get_strategy_win_rates(
     return {
         name: stats["wins"] / stats["total"] if stats["total"] > 0 else 0.5
         for name, stats in by_strategy.items()
+    }
+
+
+def get_prediction_calibration(
+    session: Session,
+    window_days: int = 30,
+) -> dict[str, Any]:
+    """제안서의 prediction과 실측을 카테고리별로 집계한다.
+
+    Phase 4 Decision Observability. 실측 비교는 후속 Phase 5(리포트 사이클)에서
+    win_rate 등을 매핑해 채운다. 본 함수는 prediction 분포만 우선 노출.
+    """
+    from datetime import UTC as _UTC
+    since = datetime.now(_UTC) - timedelta(days=window_days)
+    stmt = select(Proposal).where(Proposal.created_at >= since)
+    rows = list(session.execute(stmt).scalars().all())
+    categories: dict[str, dict[str, dict[str, Any]]] = {}
+    with_pred = 0
+    for p in rows:
+        if not p.prediction:
+            continue
+        with_pred += 1
+        cat_key = p.category.value
+        cat_bucket = categories.setdefault(cat_key, {})
+        for k, v in p.prediction.items():
+            metric = cat_bucket.setdefault(
+                k, {"count": 0, "sum_predicted": 0.0, "avg_predicted": 0.0},
+            )
+            metric["count"] += 1
+            metric["sum_predicted"] += float(v)
+            metric["avg_predicted"] = metric["sum_predicted"] / metric["count"]
+    return {
+        "window_days": window_days,
+        "proposal_count": len(rows),
+        "with_prediction_count": with_pred,
+        "categories": categories,
     }
