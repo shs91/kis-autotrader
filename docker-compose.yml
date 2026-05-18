@@ -1,6 +1,10 @@
 services:
   db:
-    image: postgres:16-alpine
+    # pgvector extension 포함된 PG16 이미지. alpine 미지원이라 debian-bookworm 사용.
+    # pgdata volume은 PG16 호환이므로 in-place 교체 가능 (덤프/복구 불필요).
+    # 적용: docker compose up -d --force-recreate db
+    # 활성화: psql ... -c "CREATE EXTENSION IF NOT EXISTS vector;"  (또는 Alembic이 처리)
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-kis_trader}
