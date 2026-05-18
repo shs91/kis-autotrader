@@ -221,3 +221,85 @@ class TestValidateOrder:
             target_price=50000.0,
         )
         assert self.rm.validate_order(signal, balance=1_000_000.0, current_positions=1) is True
+
+
+class TestCheckBuyGates:
+    """RiskManager.check_buy_gates 테스트 (proposal 2026-05-18)."""
+
+    def setup_method(self) -> None:
+        """테스트 설정."""
+        self.rm = RiskManager()
+
+    def test_all_gates_pass_returns_none(self) -> None:
+        """모든 게이트 통과 시 None을 반환한다."""
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            target_price=50_000.0,
+        )
+        assert self.rm.check_buy_gates(signal, balance=1_000_000.0) is None
+
+    def test_non_buy_signal_returns_none(self) -> None:
+        """BUY 시그널이 아니면 None을 반환한다."""
+        sell_signal = Signal(
+            signal_type=SignalType.SELL,
+            confidence=0.8,
+            target_price=50_000.0,
+        )
+        hold_signal = Signal(signal_type=SignalType.HOLD, confidence=0.0)
+        assert self.rm.check_buy_gates(sell_signal, balance=1_000_000.0) is None
+        assert self.rm.check_buy_gates(hold_signal, balance=1_000_000.0) is None
+
+    def test_low_confidence_returns_code(self) -> None:
+        """저신뢰도 시 'LOW_CONFIDENCE'를 반환한다."""
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.001,  # min_confidence보다 낮음
+            target_price=50_000.0,
+        )
+        assert self.rm.check_buy_gates(signal, balance=1_000_000.0) == "LOW_CONFIDENCE"
+
+    def test_zero_balance_returns_insufficient_cash(self) -> None:
+        """잔고 0 시 'INSUFFICIENT_CASH'를 반환한다."""
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            target_price=50_000.0,
+        )
+        assert self.rm.check_buy_gates(signal, balance=0.0) == "INSUFFICIENT_CASH"
+
+    def test_target_exceeds_balance_returns_insufficient_cash(self) -> None:
+        """목표가가 잔고를 초과하면 'INSUFFICIENT_CASH'를 반환한다."""
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            target_price=200_000.0,
+        )
+        assert self.rm.check_buy_gates(signal, balance=50_000.0) == "INSUFFICIENT_CASH"
+
+    def test_risk_halted_returns_risk_gate(self) -> None:
+        """포트폴리오 halt 상태에서 'RISK_GATE'를 반환한다."""
+        # 연패 누적으로 halt 트립
+        rm = RiskManager()
+        for _ in range(rm._max_consecutive_losses):
+            rm.record_trade_result(-10_000)
+        assert rm.is_portfolio_halted is True
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            target_price=50_000.0,
+        )
+        assert rm.check_buy_gates(signal, balance=1_000_000.0) == "RISK_GATE"
+
+    def test_risk_gate_takes_priority_over_other_gates(self) -> None:
+        """포트폴리오 halt가 최우선 게이트로 반환된다."""
+        rm = RiskManager()
+        for _ in range(rm._max_consecutive_losses):
+            rm.record_trade_result(-10_000)
+        # 낮은 신뢰도 + 0 잔고이지만 RISK_GATE가 먼저 트립
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.001,
+            target_price=10_000.0,
+        )
+        assert rm.check_buy_gates(signal, balance=0.0) == "RISK_GATE"

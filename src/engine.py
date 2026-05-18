@@ -718,9 +718,64 @@ class TradingEngine:
             )
             return
 
-        # BUY 시그널 처리
-        if not self._risk.validate_order(signal, float(deposit), 0):
+        # BUY 시그널 — 일일 매매 한도 체크 (proposal 2026-05-18: BUY_REJECT 진단)
+        if self._risk.check_daily_trade_limit(self._today_trade_count):
+            skip_reason = "daily_trade_limit"
+            self._record_buy_reject(
+                stock_code=stock_code,
+                reason="DAILY_TRADE_LIMIT",
+                confidence=signal.confidence,
+                context={"trade_count": self._today_trade_count},
+            )
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason=skip_reason,
+            )
+            return
+
+        # BUY 시그널 — 게이트 사유 진단 (저신뢰/잔고/리스크)
+        gate_reason = self._risk.check_buy_gates(signal, float(deposit))
+        if gate_reason is not None:
             skip_reason = "risk_rejected"
+            self._record_buy_reject(
+                stock_code=stock_code,
+                reason=gate_reason,
+                confidence=signal.confidence,
+                context={"balance": float(deposit)},
+            )
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason=skip_reason,
+            )
+            return
+
+        # BUY 시그널 처리 — validate_order는 하위 호환 유지용으로 그대로 호출
+        try:
+            ok = self._risk.validate_order(signal, float(deposit), 0)
+        except Exception:
+            # 잔고/주문 검증에서 RiskLimitError 발생 시 OTHER로 분류 후 흐름 유지
+            logger.exception("[%s] 매수 검증 중 예외", stock_code)
+            self._record_buy_reject(
+                stock_code=stock_code,
+                reason="OTHER",
+                confidence=signal.confidence,
+                context={"error": "validate_order_exception"},
+            )
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason="risk_rejected",
+            )
+            return
+        if not ok:
+            skip_reason = "risk_rejected"
+            # check_buy_gates 통과 후에도 validate_order가 False면 잔여 사유
+            # (예: 장 마감 임박 차단)는 OTHER로 기록 — 본 흐름 영향 없음.
+            self._record_buy_reject(
+                stock_code=stock_code,
+                reason="OTHER",
+                confidence=signal.confidence,
+                context={"balance": float(deposit)},
+            )
             self._record_signal_to_db(
                 stock_code, current.stock_name, signal, action_taken=False,
                 skip_reason=skip_reason,
@@ -732,6 +787,15 @@ class TradingEngine:
         if quantity <= 0:
             skip_reason = "zero_quantity"
             logger.info("[%s] 매수 가능 수량 0, 스킵", stock_code)
+            self._record_buy_reject(
+                stock_code=stock_code,
+                reason="POSITION_RATIO",
+                confidence=signal.confidence,
+                context={
+                    "balance": float(deposit),
+                    "price": float(current.current_price),
+                },
+            )
             self._record_signal_to_db(
                 stock_code, current.stock_name, signal, action_taken=False,
                 skip_reason=skip_reason,
@@ -1106,6 +1170,50 @@ class TradingEngine:
             )
         except Exception:
             logger.exception("메트릭 큐 적재 실패: %s", metric_type)
+
+    def _record_buy_reject(
+        self,
+        *,
+        stock_code: str,
+        reason: str,
+        confidence: float | None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """매수 게이트 거절 사유를 ``BUY_REJECT`` 메트릭으로 기록한다.
+
+        proposal 2026-05-18: 시그널→매수 전환 0% anomaly 분해용 진단 메트릭.
+        시그널이 매수 단계까지 도달했으나 게이트(잔고/포지션/리스크/신뢰도)에
+        막혀 차단된 경우 1건씩 기록한다.
+
+        ``reason`` 코드는 BRIDGE 제안서의 분류를 따른다:
+        ``LOW_CONFIDENCE``, ``POSITION_LIMIT``, ``POSITION_RATIO``,
+        ``INSUFFICIENT_CASH``, ``DAILY_TRADE_LIMIT``, ``RISK_GATE``,
+        ``OTHER``. 기록 실패는 매매 본 흐름에 영향이 없도록 swallow 한다.
+
+        Args:
+            stock_code: 종목코드.
+            reason: 거절 사유 코드.
+            confidence: 시그널 신뢰도 (없으면 ``None``).
+            context: 추가 메타데이터(예: ``{"balance": 0}``).
+        """
+        try:
+            detail: dict[str, Any] = {
+                "cycle": self._cycle_count,
+                "stock_code": stock_code,
+                "reason": reason,
+                "confidence": (
+                    round(float(confidence), 4) if confidence is not None else None
+                ),
+            }
+            if context:
+                detail["context"] = context
+            self._record_metric("BUY_REJECT", detail)
+        except Exception:
+            logger.exception(
+                "BUY_REJECT 메트릭 기록 실패: %s reason=%s",
+                stock_code,
+                reason,
+            )
 
     def _record_screening_match_metric(self, stock_code: str) -> None:
         """신규 BUY 직후 동일 stock_code의 screening_results 매칭 여부를 메트릭으로 기록한다.

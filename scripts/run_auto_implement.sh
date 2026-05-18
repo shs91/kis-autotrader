@@ -5,8 +5,9 @@
 set -euo pipefail
 
 # launchd/cron 환경에서 누락될 수 있는 환경변수 설정
+# .venv/bin 선두 prepend — verifier가 subprocess로 호출하는 ruff 바이너리가 venv에만 존재(2026-05-17 실패 사례)
 export HOME="/Users/songhansu"
-export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$HOME/IdeaProjects/kis-autotrader/.venv/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 PROJECT_DIR="$HOME/IdeaProjects/kis-autotrader"
 PROMPT_FILE="$PROJECT_DIR/scripts/auto_implement_prompt.txt"
@@ -25,12 +26,22 @@ fi
 
 echo "=== Auto-implement started at $(date) ===" >> "$LOG_FILE"
 
-# Phase 3: Initializer + new top-level prompt (subagent 오케스트레이션)
+# Phase 3 hotfix A: markdown → proposals DB 동기화 (cron 사이클 직전)
+# 분석 단계(주간/일간 Cowork)가 새로 작성한 ready 제안서를 DB에 적재해야
+# Cycle Orchestrator의 list_ready()가 인식한다.
 cd "$PROJECT_DIR"
+echo "=== Proposal sync started at $(date) ===" >> "$LOG_FILE"
+PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" \
+  -m scripts.harness.sync_proposals_md_to_db >> "$LOG_FILE" 2>&1
+SYNC_EXIT=$?
+echo "=== Proposal sync finished at $(date) — exit=$SYNC_EXIT ===" >> "$LOG_FILE"
+
+# Phase 3: Initializer + new top-level prompt (subagent 오케스트레이션)
 PROGRESS_PATH="$HOME/.kis-autotrader/claude-progress.json"
 PROMPT_FILE_V2="$PROJECT_DIR/scripts/auto_implement_prompt_v2.txt"
 
-PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -c "
+# Phase 3 hotfix D1: if-then-else로 감싸 set -e가 cycle 실패에 트리거되지 않게 함
+if PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -c "
 from pathlib import Path
 from src.config import settings
 from src.harness.cycle.orchestrator import run_cycle
@@ -43,17 +54,23 @@ outcome = run_cycle(
 print(f'[cycle] {outcome.cycle_id} claude_exit={outcome.claude_exit_code} '
       f'completed={outcome.completed_count} failed={outcome.failed_count} '
       f'skipped={outcome.skipped_count}')
-" >> "$LOG_FILE" 2>&1
-CYCLE_EXIT=$?
+" >> "$LOG_FILE" 2>&1; then
+  CYCLE_EXIT=0
+else
+  CYCLE_EXIT=$?
+fi
 
 echo "=== Auto-implement finished at $(date) — cycle_exit=$CYCLE_EXIT ===" >> "$LOG_FILE"
 
-# Phase 2: 골든 회귀 셋 사전 검증
+# Phase 2: 골든 회귀 셋 사전 검증 (D1: set -e 우회)
 echo "=== Golden regression check started at $(date) ===" >> "$LOG_FILE"
-PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -m pytest \
+if PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -m pytest \
   "$PROJECT_DIR/tests/eval/test_golden_runner.py" -q --no-header \
-  >> "$LOG_FILE" 2>&1
-GOLDEN_EXIT=$?
+  >> "$LOG_FILE" 2>&1; then
+  GOLDEN_EXIT=0
+else
+  GOLDEN_EXIT=$?
+fi
 echo "=== Golden regression check finished at $(date) — exit=$GOLDEN_EXIT ===" >> "$LOG_FILE"
 
 # Phase 2: Verifier 실행 (변경 사항이 있을 때만)
@@ -62,11 +79,15 @@ if git -C "$PROJECT_DIR" diff --quiet HEAD; then
   VERIFIER_EXIT=0
 else
   VERIFIER_OUT="$LOG_DIR/verifier_$(date +%Y-%m-%d_%H%M%S).json"
-  PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" \
+  # Phase 3 hotfix D1: set -e가 verifier exit 2를 잡지 않도록 if-then-else
+  if PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" \
     -m scripts.harness.run_verifier \
     --base-ref HEAD~1 --head-ref HEAD --out "$VERIFIER_OUT" \
-    >> "$LOG_FILE" 2>&1
-  VERIFIER_EXIT=$?
+    >> "$LOG_FILE" 2>&1; then
+    VERIFIER_EXIT=0
+  else
+    VERIFIER_EXIT=$?
+  fi
   echo "[verifier] exit=$VERIFIER_EXIT artifact=$VERIFIER_OUT" >> "$LOG_FILE"
 fi
 
