@@ -486,6 +486,7 @@ class Proposal(Base):
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     skip_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cycle_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    prediction: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -497,6 +498,66 @@ class Proposal(Base):
         return (
             f"<Proposal(id={self.id}, path={self.path!r}, "
             f"state={self.state.value}, category={self.category.value})>"
+        )
+
+
+class TrajectoryStep(enum.Enum):
+    """사이클 trajectory 단계."""
+
+    INITIALIZER = "initializer"
+    VALIDATOR = "validator"
+    IMPLEMENTER = "implementer"
+    VERIFIER = "verifier"
+    EVALUATOR = "evaluator"
+    RECORDER = "recorder"
+    ROLLBACK = "rollback"
+
+
+class TrajectoryStatus(enum.Enum):
+    """trajectory entry 결과."""
+
+    OK = "ok"
+    FAIL = "fail"
+    SKIP = "skip"
+
+
+class TrajectoryEntry(Base):
+    """사이클 단계별 trajectory entry — Experience Observability."""
+
+    __tablename__ = "trajectory_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cycle_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    step: Mapped[TrajectoryStep] = mapped_column(
+        SAEnum(TrajectoryStep, name="trajectory_step_enum"),
+        nullable=False, index=True,
+    )
+    proposal_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    agent: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[TrajectoryStatus] = mapped_column(
+        SAEnum(TrajectoryStatus, name="trajectory_status_enum"),
+        nullable=False,
+    )
+    input_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    token_usage_input: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_usage_output: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True,
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<TrajectoryEntry(cycle={self.cycle_id}, step={self.step.value}, "
+            f"status={self.status.value})>"
         )
 
 
