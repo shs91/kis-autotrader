@@ -26,6 +26,11 @@ from src.db.models import SystemMetric, Trade, TradeType
 from src.db.repository import WatchlistRepository
 from src.db.session import get_session, init_db
 from src.engine import TradingEngine
+from src.harness.telegram_commands import (
+    cmd_pause_implement,
+    cmd_run_implement,
+    cmd_status_implement,
+)
 from src.notify.bot import TelegramBot
 from src.notify.telegram import TelegramNotifier
 from src.scheduler.jobs import TradingScheduler
@@ -514,6 +519,9 @@ def _register_bot_commands(
             "/resume — 매매 재개\n"
             "/setlimit N — 일일 매매 한도 변경\n"
             "/restart — 시스템 재시작\n"
+            "/run_implement [--dry|--force] — 자동 구현 사이클 즉시 발동 (--dry: 가드만 확인)\n"
+            "/status_implement — 자동 구현 사이클 + 가드 상태 조회\n"
+            "/pause_implement [resume] — 자동 구현 일시 중단/재개\n"
             "/help — 명령어 목록"
         )
 
@@ -532,6 +540,9 @@ def _register_bot_commands(
     bot.register("resume", cmd_resume)
     bot.register("setlimit", cmd_setlimit)
     bot.register("restart", cmd_restart)
+    bot.register("run_implement", cmd_run_implement)
+    bot.register("status_implement", cmd_status_implement)
+    bot.register("pause_implement", cmd_pause_implement)
     bot.register("help", cmd_help)
 
 

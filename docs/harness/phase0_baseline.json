@@ -1,0 +1,172 @@
+{
+  "generated_at": "2026-05-14T02:54:35.305015+00:00",
+  "window_days": 90,
+  "proposals": {
+    "total_proposals": 37,
+    "state_distribution": {
+      "implemented": 36,
+      "unknown": 1
+    },
+    "category_distribution": {
+      "bug_fix": 20,
+      "unknown": 1,
+      "performance": 3,
+      "refactor": 4,
+      "param_tuning": 8,
+      "docs": 1
+    },
+    "priority_distribution": {
+      "high": 19,
+      "unknown": 1,
+      "medium": 3,
+      "critical": 11,
+      "low": 3
+    },
+    "success_rate": 1.0,
+    "success_rate_denominator": 36
+  },
+  "implementations": {
+    "window_days": 90,
+    "implemented_count": 77,
+    "category_distribution": {
+      "enhancement": 27,
+      "bug_fix": 31,
+      "refactor": 5,
+      "config": 1,
+      "performance": 3,
+      "docs": 2,
+      "feature": 2,
+      "param_tuning": 6
+    },
+    "reedit_within_7d": {
+      "unique_files": 0,
+      "reedited_files": 0,
+      "ratio": null
+    },
+    "implementations_per_active_day": 2.75,
+    "active_days_count": 28,
+    "version_progression_tail": [
+      {
+        "implemented_at": "2026-04-24T21:00:00+00:00",
+        "version": null,
+        "title": "시그널 가뭄 진단 로깅 추가",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-04-27T21:00:00+00:00",
+        "version": null,
+        "title": "시그널 가뭄 진단 정보 DB 적재 — SIGNAL_SUMMARY 메트릭",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-04-28T08:22:03.404759+00:00",
+        "version": null,
+        "title": "스크리닝→엔진 평가 파이프라인 단절 수정 — converted_to_trade 필터 제거",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-04-29T08:16:25.645077+00:00",
+        "version": null,
+        "title": "auto-implement 후 서비스 재시작 누락 수정",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-04-30T08:17:59.515615+00:00",
+        "version": null,
+        "title": "스크리닝 DB 조회 타임존 불일치 수정 — get_by_date KST 명시",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-05-01T08:16:56.944925+00:00",
+        "version": null,
+        "title": "시그널 저장 필터 임계값 하향 — STRATEGY_MIN_CONFIDENCE 0.08→0.05",
+        "category": "param_tuning"
+      },
+      {
+        "implemented_at": "2026-05-04T08:18:09.700473+00:00",
+        "version": null,
+        "title": "일봉 데이터 부족 / 평가 조기 종료 진단 메트릭 추가",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-05-06T08:18:11.762615+00:00",
+        "version": null,
+        "title": "엔진 일봉 데이터 최소 요구량 하향 — 매매 교착 해소",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-05-07T08:18:38.227538+00:00",
+        "version": null,
+        "title": "시그널 최소 신뢰도 상향 조정 — 저신뢰 시그널 필터링",
+        "category": "param_tuning"
+      },
+      {
+        "implemented_at": "2026-05-07T08:18:44.499532+00:00",
+        "version": null,
+        "title": "스크리닝 최소 점수 하향 — 전환율 0% 장기화 해소",
+        "category": "param_tuning"
+      },
+      {
+        "implemented_at": "2026-05-08T08:18:13.743292+00:00",
+        "version": null,
+        "title": "스크리닝 종목 시그널 품질 진단 메트릭 추가",
+        "category": "performance"
+      },
+      {
+        "implemented_at": "2026-05-11T08:20:52.544852+00:00",
+        "version": null,
+        "title": "스크리너 ETF/Q-code 필터 누수 수정 — 코드 기반 블록리스트 도입",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-05-11T08:21:01.765442+00:00",
+        "version": null,
+        "title": "일봉 조회 페이지네이션 — 60일 데이터 확보로 MACD 활성화",
+        "category": "performance"
+      },
+      {
+        "implemented_at": "2026-05-11T08:21:08.452638+00:00",
+        "version": null,
+        "title": "앙상블 시그널 최소 신뢰도 2차 상향 (0.15→0.20)",
+        "category": "param_tuning"
+      },
+      {
+        "implemented_at": "2026-05-12T04:17:03.877185+00:00",
+        "version": "0.2.0",
+        "title": "버저닝 시스템 도입 (자동 SemVer bump + git tag)",
+        "category": "feature"
+      },
+      {
+        "implemented_at": "2026-05-12T12:17:01.131759+00:00",
+        "version": "0.2.1",
+        "title": "TIMESTAMPTZ에 naive datetime 저장 버그 수정 + listener + 스크리너 매매시간 가드",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-05-13T08:17:15.401175+00:00",
+        "version": "0.2.2",
+        "title": "DEAD 태스크 알림의 notify_error 시그니처 불일치 수정",
+        "category": "bug_fix"
+      },
+      {
+        "implemented_at": "2026-05-13T08:20:09.957103+00:00",
+        "version": "0.2.3",
+        "title": "repository.py의 datetime.utcnow() 제거 (Python 3.12 deprecation 대응)",
+        "category": "refactor"
+      },
+      {
+        "implemented_at": "2026-05-13T08:21:41.286815+00:00",
+        "version": "0.2.3",
+        "title": "분석 프롬프트의 signals 시간축을 detected_at으로 통일",
+        "category": "docs"
+      },
+      {
+        "implemented_at": "2026-05-13T14:30:25.398309+00:00",
+        "version": "0.2.4",
+        "title": "engine.py의 메트릭·시그널 큐 적재 시 naive timestamp 차단 버그 수정",
+        "category": "bug_fix"
+      }
+    ],
+    "token_usage": "N/A (currently not tracked; planned for Phase 3 trajectory table)"
+  }
+}

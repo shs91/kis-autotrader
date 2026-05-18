@@ -338,6 +338,104 @@ class TestTradingCycleWithDbFailure:
         assert engine._cycle_count == 1
 
 
+# ── SCREENING_HIT/MISS 메트릭 테스트 (proposal 2026-05-15) ──
+
+
+class TestRecordScreeningMatch:
+    """`_record_screening_match_metric` 동작 검증.
+
+    proposal 2026-05-15: 신규 BUY 시 동일 stock_code가 당일 screening_results에
+    존재하면 SCREENING_HIT, 없으면 SCREENING_MISS로 기록한다.
+    """
+
+    def test_records_hit_when_screening_exists(self) -> None:
+        engine = _make_engine()
+        engine._cycle_count = 3
+
+        matched_row = MagicMock()
+        matched_row.stock_code = "005930"
+        other_row = MagicMock()
+        other_row.stock_code = "000660"
+
+        mock_session = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_session)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_date = MagicMock(return_value=[other_row, matched_row])
+
+        with patch(
+            "src.engine.ScreeningResultRepository", return_value=mock_repo
+        ), patch(
+            "src.engine.get_session", return_value=mock_ctx
+        ), patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_screening_match_metric("005930")
+
+        payload = mock_enqueue.call_args.kwargs["payload"]
+        assert payload["metric_type"] == "SCREENING_HIT"
+        assert payload["detail"] == {
+            "cycle": 3,
+            "stock_code": "005930",
+            "matched": True,
+        }
+
+    def test_records_miss_when_screening_absent(self) -> None:
+        engine = _make_engine()
+        engine._cycle_count = 5
+
+        other_row = MagicMock()
+        other_row.stock_code = "000660"
+
+        mock_session = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_session)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        mock_repo = MagicMock()
+        mock_repo.get_by_date = MagicMock(return_value=[other_row])
+
+        with patch(
+            "src.engine.ScreeningResultRepository", return_value=mock_repo
+        ), patch(
+            "src.engine.get_session", return_value=mock_ctx
+        ), patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_screening_match_metric("005930")
+
+        payload = mock_enqueue.call_args.kwargs["payload"]
+        assert payload["metric_type"] == "SCREENING_MISS"
+        assert payload["detail"] == {
+            "cycle": 5,
+            "stock_code": "005930",
+            "matched": False,
+        }
+
+    def test_db_failure_does_not_raise(self) -> None:
+        """DB 조회 실패 시 매수 본 흐름 보호 — 예외 swallow."""
+        engine = _make_engine()
+
+        with patch(
+            "src.engine.get_session", side_effect=RuntimeError("세션 장애")
+        ):
+            engine._record_screening_match_metric("005930")
+
+    @pytest.mark.asyncio
+    async def test_execute_buy_invokes_screening_match(self) -> None:
+        """`_execute_buy` 성공 시 SCREENING_HIT/MISS 기록 헬퍼가 호출된다."""
+        engine = _make_engine()
+
+        order_result = MagicMock()
+        order_result.order_no = "KIS-AUTO-1"
+        engine._order.buy = AsyncMock(return_value=order_result)
+
+        with patch.object(
+            engine, "_record_screening_match_metric"
+        ) as mock_match, patch.object(engine._task_queue, "enqueue"):
+            await engine._execute_buy("005930", "삼성전자", 10, 70_000)
+
+        mock_match.assert_called_once_with("005930")
+
+
 # ── EVAL_TARGETS 메트릭 테스트 (proposal 2026-04-16) ──────────
 
 

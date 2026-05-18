@@ -1,0 +1,11 @@
+{
+  "id": "G03_dtz_repository_utcnow",
+  "proposal_path": "docs/proposals/2026-05-12_repository-datetime-utcnow-deprecation.md",
+  "category": "refactor",
+  "summary": "repository.py가 datetime.utcnow()를 호출하지 않아야 한다",
+  "invariant": {
+    "type": "regex_absent",
+    "file": "src/db/repository.py",
+    "pattern": "datetime\\.utcnow\\("
+  }
+}

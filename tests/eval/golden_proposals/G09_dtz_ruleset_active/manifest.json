@@ -1,0 +1,11 @@
+{
+  "id": "G09_dtz_ruleset_active",
+  "proposal_path": "docs/harness/phase0_baseline.md",
+  "category": "config",
+  "summary": "pyproject.toml의 ruff select에 DTZ가 남아 있어야 한다",
+  "invariant": {
+    "type": "regex_present",
+    "file": "pyproject.toml",
+    "pattern": "\"DTZ\""
+  }
+}

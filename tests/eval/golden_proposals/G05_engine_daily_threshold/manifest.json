@@ -1,0 +1,11 @@
+{
+  "id": "G05_engine_daily_threshold",
+  "proposal_path": "docs/proposals/2026-05-06_engine-daily-data-threshold-reduction.md",
+  "category": "bug_fix",
+  "summary": "engine.py에 일봉 데이터 최소 요구량 가드가 남아 있어야 한다",
+  "invariant": {
+    "type": "regex_present",
+    "file": "src/engine.py",
+    "pattern": "min_daily_data|MIN_DAILY|일봉 데이터 부족"
+  }
+}

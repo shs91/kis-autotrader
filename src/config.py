@@ -413,6 +413,27 @@ class RedisConfig:
 
 
 @dataclass(frozen=True)
+class HarnessSettings:
+    """하네스 자동 구현 파이프라인 운영 설정."""
+
+    min_cycle_interval_seconds: int = field(
+        default_factory=lambda: int(_env("HARNESS_MIN_CYCLE_INTERVAL_SECONDS", "300"))
+    )
+    pause_lock_path: str = field(
+        default_factory=lambda: _env(
+            "HARNESS_PAUSE_LOCK_PATH",
+            os.path.expanduser("~/.kis-autotrader/harness-paused"),
+        )
+    )
+    cycle_lock_path: str = field(
+        default_factory=lambda: _env(
+            "HARNESS_CYCLE_LOCK_PATH",
+            os.path.expanduser("~/.kis-autotrader/harness-cycle-in-flight"),
+        )
+    )
+
+
+@dataclass(frozen=True)
 class Settings:
     """전체 설정을 통합 관리한다."""
 
@@ -427,6 +448,7 @@ class Settings:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
+    harness: HarnessSettings = field(default_factory=HarnessSettings)
     overrides: OverrideState = field(default_factory=_build_override_state)
 
 

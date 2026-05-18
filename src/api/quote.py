@@ -15,13 +15,18 @@ logger = setup_logger(__name__)
 
 # 시세 조회 엔드포인트
 CURRENT_PRICE_PATH: str = "/uapi/domestic-stock/v1/quotations/inquire-price"
-DAILY_PRICE_PATH: str = "/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+# 일봉 조회는 `inquire-daily-itemchartprice` 엔드포인트를 사용한다.
+# 기존 `inquire-daily-price`는 응답이 항상 최근 30거래일로 고정되어
+# 60일 페이지네이션이 의도대로 동작하지 않는 한계가 있어 교체했다.
+# (참고: 제안서 docs/proposals/2026-05-16_daily-quote-endpoint-switch-itemchartprice.md)
+DAILY_PRICE_PATH: str = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 MINUTE_PRICE_PATH: str = "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
 VOLUME_RANK_PATH: str = "/uapi/domestic-stock/v1/quotations/volume-rank"
 
 # tr_id
 TR_ID_CURRENT_PRICE: str = "FHKST01010100"
-TR_ID_DAILY_PRICE: str = "FHKST01010400"
+# 일/주/월/년 기간별 시세 조회 TR_ID (실전·모의 공통)
+TR_ID_DAILY_PRICE: str = "FHKST03010100"
 TR_ID_MINUTE_PRICE: str = "FHKST03010200"
 TR_ID_VOLUME_RANK: str = "FHPST01710000"
 
@@ -148,14 +153,22 @@ class QuoteAPI:
         adjusted: bool = True,
         lookback_days: int = 60,
     ) -> list[DailyPriceItem]:
-        """종목의 일봉 데이터를 페이지네이션으로 조회한다.
+        """종목의 일봉 데이터를 조회한다.
 
-        KIS API는 1회 호출 시 최대 30건만 반환하므로, lookback_days에
-        도달할 때까지 날짜 범위를 조정하며 반복 호출한다.
+        `inquire-daily-itemchartprice` 엔드포인트는 1회 호출로 최대 100건의
+        일봉 데이터를 반환하므로 통상 페이지네이션이 불필요하다. 다만
+        영업일 외 휴장 영향 등으로 1회 응답이 ``lookback_days`` 미달인
+        경우에 한해 더 이른 날짜 범위를 한 번만 더 조회하는 fallback을
+        둔다(최대 2회 호출).
+
+        응답 구조는 ``output1``(헤더)·``output2``(일봉 리스트)이며 본
+        메서드는 ``output2``만 사용한다. 응답 필드명(``STCK_BSOP_DATE``,
+        ``STCK_OPRC/HGPR/LWPR/CLPR``, ``ACML_VOL``)은 기존 엔드포인트와
+        호환된다.
 
         Args:
             stock_code: 종목코드 (6자리)
-            period: 기간 구분 ("D": 일, "W": 주, "M": 월)
+            period: 기간 구분 ("D": 일, "W": 주, "M": 월, "Y": 년)
             adjusted: 수정주가 반영 여부
             lookback_days: 확보할 거래일 수 (기본 60)
 
@@ -170,10 +183,14 @@ class QuoteAPI:
         all_results: list[DailyPriceItem] = []
         seen_dates: set[str] = set()
         page_end = date.today()
-        max_pages = (lookback_days // 30) + 2
+        # 1차 호출에서 lookback_days * 2 만큼의 캘린더 범위를 요청하면
+        # 통상 응답이 lookback_days 거래일을 충분히 포함한다.
+        first_window_days = max(lookback_days * 2, 60)
+        max_calls = 2
 
-        for page in range(max_pages):
-            page_start = page_end - timedelta(days=150)
+        for call_idx in range(max_calls):
+            window_days = first_window_days if call_idx == 0 else first_window_days
+            page_start = page_end - timedelta(days=window_days)
 
             params = {
                 "FID_COND_MRKT_DIV_CODE": "J",
@@ -188,7 +205,9 @@ class QuoteAPI:
                 DAILY_PRICE_PATH, params=params, tr_id=TR_ID_DAILY_PRICE
             )
 
-            output_list = response.get("output", [])
+            # `inquire-daily-itemchartprice`는 output2에 일봉 리스트가 들어온다.
+            # 일부 환경/응답 형태 호환을 위해 output도 보조로 확인한다.
+            output_list = response.get("output2") or response.get("output") or []
             if not output_list:
                 break
 
@@ -213,12 +232,13 @@ class QuoteAPI:
             if len(all_results) >= lookback_days:
                 break
 
-            if oldest_date_str is None or len(output_list) < 30:
+            # fallback 1회: 첫 호출이 lookback 미달인 경우 더 이른 날짜로 1회만 추가 조회
+            if oldest_date_str is None:
                 break
 
             page_end = datetime.strptime(oldest_date_str, "%Y%m%d").date() - timedelta(days=1)
 
-            if page > 0:
+            if call_idx + 1 < max_calls:
                 await asyncio.sleep(0.05)
 
         logger.info("[일봉 조회 완료] 종목=%s, %d건 확보", stock_code, len(all_results))
