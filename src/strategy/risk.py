@@ -293,6 +293,69 @@ class RiskManager:
 
         return should_profit
 
+    # ── 매수 게이트 진단 (proposal 2026-05-18) ────────────────
+    #
+    # ``check_buy_gates``는 ``validate_order``의 검사 로직과 동일한 의사결정을
+    # 수행하되, 거절 시 거절 사유 코드(``LOW_CONFIDENCE``/``INSUFFICIENT_CASH``
+    # /``RISK_GATE`` 등)를 반환하여 호출자가 ``BUY_REJECT`` 메트릭의 reason
+    # 필드로 매핑할 수 있도록 한다. ``validate_order``는 하위 호환을 위해
+    # 그대로 유지한다(시그니처·반환 타입 비파괴).
+    #
+    # 반환 규약:
+    # - ``None``   : 모든 게이트 통과 (매수 진행 가능)
+    # - 문자열     : 첫번째로 트립된 게이트 사유 코드
+    #
+    # 게이트 평가 순서:
+    #   1) ``RISK_GATE``       (포트폴리오 halted: MDD/연패)
+    #   2) ``LOW_CONFIDENCE``  (signal.confidence < min_confidence)
+    #   3) ``INSUFFICIENT_CASH`` (balance <= 0 or target_price > balance)
+    #
+    # 본 메서드는 BUY 시그널에 한해서만 사유를 반환하고, HOLD/SELL 시그널이나
+    # 장 마감 임박 차단 같이 BUY 게이트 진단 범위 밖의 사유는 ``None``을 반환한다.
+    # 호출자(engine)는 BUY 시그널 경로에 진입한 직후 본 메서드를 호출해야 한다.
+
+    def check_buy_gates(
+        self,
+        signal: Signal,
+        balance: float,
+    ) -> str | None:
+        """매수 시그널에 대해 게이트 검증을 수행하고 거절 사유 코드를 반환한다.
+
+        ``validate_order``를 대체하지 않으며, 추가 진단용 메서드로
+        동작한다 (하위 호환 보장).
+
+        Args:
+            signal: 매매 시그널 (signal_type=BUY 가정).
+            balance: 가용 잔고.
+
+        Returns:
+            거절 사유 코드 문자열 또는 None(모든 게이트 통과).
+            반환 가능한 코드:
+
+            - ``"RISK_GATE"``         : 포트폴리오 리스크 차단(연패/MDD)
+            - ``"LOW_CONFIDENCE"``    : ``signal.confidence < min_confidence``
+            - ``"INSUFFICIENT_CASH"`` : 잔고 부족
+        """
+        # BUY 시그널이 아니면 본 메서드의 진단 대상이 아님
+        if signal.signal_type != SignalType.BUY:
+            return None
+
+        # 1) 포트폴리오 리스크 게이트 (MDD/연패)
+        if self._portfolio_halted:
+            return "RISK_GATE"
+
+        # 2) 잔고 부족 — RiskLimitError 대신 사유 코드로 매핑
+        if balance <= 0:
+            return "INSUFFICIENT_CASH"
+        if signal.target_price is not None and signal.target_price > balance:
+            return "INSUFFICIENT_CASH"
+
+        # 3) 저신뢰도
+        if signal.confidence < self._min_confidence:
+            return "LOW_CONFIDENCE"
+
+        return None
+
     def validate_order(
         self,
         signal: Signal,

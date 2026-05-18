@@ -33,3 +33,6 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Phase 2 Verifier 부산물 (pytest --junitxml)
+.verifier-junit.xml

@@ -1,8 +1,23 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (80건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (81건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-18] 매수 게이트 진단 메트릭 신설 — BUY_REJECT enqueue + check_buy_gates (v0.2.9)
+- 제안서: docs/proposals/2026-05-18_buy-gate-diagnostic-metric.md
+- 카테고리: performance
+- 변경 파일:
+  - src/engine.py: BUY 시그널 경로에 `check_daily_trade_limit` + `check_buy_gates` 진단 추가, 거절 시 `_record_buy_reject(stock_code, reason, confidence, context)` 호출로 BUY_REJECT 메트릭 enqueue.
+  - src/strategy/risk.py: `check_buy_gates(signal, balance) -> str | None` 신설. 게이트 평가 순서 RISK_GATE > LOW_CONFIDENCE > INSUFFICIENT_CASH. `validate_order` 하위 호환 유지.
+  - tests/test_strategy/test_risk.py: `TestCheckBuyGates` 7건 (게이트별 사유 반환 + 우선순위 검증).
+  - tests/test_engine_buy_gate_metric.py: BUY_REJECT 메트릭 통합 테스트 7건 (저신뢰/잔고 부족/리스크/일일 한도 분기 + 기록 실패 swallow).
+- 배경: 5/15~17 분석에서 시그널→매수 전환 0% anomaly 재현. `validate_order` 단일 boolean으로는 거절 사유 불명 — 운영자가 어떤 게이트가 트립했는지 진단 불가.
+- 영향: BUY_REJECT 메트릭이 `LOW_CONFIDENCE`/`INSUFFICIENT_CASH`/`RISK_GATE`/`DAILY_TRADE_LIMIT`/`OTHER` 분류로 적재. 다음 daily 분석부터 거절 사유 분포 진단 가능. 자동 파이프라인 D5(시그널→매수 전환 0%) 룰의 변별력 확보.
+- 검증 결과: pytest 14 passed (TestCheckBuyGates 7 + BUY_REJECT 통합 7) | ruff ✅ All checks passed | mypy --strict 신규 모듈 ✅ (사전 존재 12건은 본 변경 무관).
+- 비고: 21:35 KST `/run_implement` cycle은 implementer agent의 git commit 누락 + Verifier `set -e` 스크립트 중단으로 정상 종료 안 됨 → 수동 완료(옵션 A). D1~D5 결함(set -e/Verifier scope/agent commit/progress.json/markdown 갱신)은 후속 hotfix 대상.
 
 ---
 
@@ -49,18 +64,6 @@
 - 배경: 룰 B(3일 연속 스크리닝 전환율 <10%) 트리거. 현 `converted_to_trade`는 워커 자체 추천 후보 마킹일 뿐 실제 매수와 매핑되지 않아 룰 B 의미가 모호. 5-14는 BUY 3건 + 스크리닝 전환 0건, 5-15는 BUY 0건 + 전환 0건이 동일하게 "전환율 0%"로 보여 진단 변별력 부재.
 - 영향: 1~2주 누적 후 룰 B 측정값을 (워커 후보 / 엔진 매수 / 매핑 일치율)로 분해 가능. 무차별 임계값 조정으로 인한 매매 위축 위험 회피. 기록 실패 시 fallback 처리되어 매매·스크리닝 본 흐름에 영향 없음.
 - 검증 결과: pytest ✅ 470 passed, 5 pre-existing fail(KST 시간대 의존) | mypy 변경 라인 에러 없음 (66 pre-existing 동일) | ruff src/ 16 pre-existing 동일.
-
----
-
-## [2026-05-13] engine.py의 메트릭·시그널 큐 적재 시 naive timestamp 차단 버그 수정 (v0.2.4) — 🔴 핫픽스
-- 제안서: docs/proposals/2026-05-13_engine-metric-signal-naive-timestamp-fix.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: `_record_signal_to_db`(L1079) + `_record_metric`(L1102)의 `datetime.now().isoformat()` → `datetime.now(UTC).isoformat()`. naive ISO 문자열이 worker handler를 거쳐 `Signal.detected_at`·`SystemMetric.recorded_at` (TIMESTAMPTZ) 컬럼에 명시 set되면서 `validate_timezone_aware` listener에 의해 ValueError로 차단되던 흐름을 해소.
-  - tests/test_engine_db_integration.py: 회귀 테스트 2건 추가 — `TestRecordMetric.test_recorded_at_is_timezone_aware`, `TestRecordSignalToDb.test_detected_at_is_timezone_aware`.
-- 배경: 2026-05-12 fb7b548에서 도입된 `before_flush` 리스너가 큐 경유 적재 경로의 naive timestamp를 막아 2026-05-12 15:20 UTC 이후 system_metrics·signals 영속화가 16+ 시간 단절. 일일 리포트는 `repository.py:884`를 원인으로 지목했으나 해당 라인은 c44dade에서 이미 정리됨 — 실제 차단 지점은 상류의 큐 적재부.
-- 영향: system_metrics·signals 영속화 즉시 복구. 자동 파이프라인 안전 게이트 룰 C(에러)·룰 D(사이클) 트리거 신뢰성 회복. 일일/주간 리포트의 시그널 정확도·signal_performance 분석 데이터 기반 회복.
-- 검증 결과: pytest 변경 회귀 테스트 ✅ 2 passed | 전체 410 passed, 5 pre-existing fail (KST 17시대 시간대 의존) + 10 pre-existing errors (SQLite JSONB 호환성) — 모두 본 변경 무관 stash 검증 완료 | ruff src/engine.py + tests ✅ | mypy 변경 라인 에러 없음.
 
 ---
 
