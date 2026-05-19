@@ -18,6 +18,7 @@ from src.db.models import (
     Execution,
     ImplementationCategory,
     ImplementationLog,
+    MarketAction,
     NewsChunk,
     NewsCollectionState,
     Order,
@@ -1404,3 +1405,46 @@ class NewsChunkRepository:
             state.last_collected_at = last_time
             state.last_cursor = cursor
         self._session.flush()
+
+
+class MarketActionRepository:
+    """종목별 시장조치 상태 lookup + upsert.
+
+    매매 엔진은 `is_blocked(code)`만 호출한다. KIS 종목마스터 일일 sync 잡이
+    `upsert`로 전체 종목을 한 번에 갱신.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, stock_code: str) -> MarketAction | None:
+        return self._session.get(MarketAction, stock_code)
+
+    def is_blocked(self, stock_code: str) -> bool:
+        """매수 차단 여부. 미등록 종목은 False (안전 기본값)."""
+        ma = self.get(stock_code)
+        return ma.should_block_buy if ma is not None else False
+
+    def upsert(self, actions: list[MarketAction]) -> int:
+        """배치 upsert. dialect-portable per-row 패턴.
+
+        Returns: 처리된(insert 또는 update) 행 수.
+        """
+        if not actions:
+            return 0
+        processed = 0
+        for action in actions:
+            existing = self._session.get(MarketAction, action.stock_code)
+            if existing is None:
+                self._session.add(action)
+            else:
+                existing.is_trading_halted = action.is_trading_halted
+                existing.is_administrative = action.is_administrative
+                existing.is_liquidation = action.is_liquidation
+                existing.is_market_warning = action.is_market_warning
+                existing.is_warning_pretrigger = action.is_warning_pretrigger
+                existing.is_dishonest_disclosure = action.is_dishonest_disclosure
+                existing.snapshot_at = action.snapshot_at
+            processed += 1
+        self._session.flush()
+        return processed

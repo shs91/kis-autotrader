@@ -657,6 +657,63 @@ class NewsChunk(Base):
         )
 
 
+class MarketAction(Base):
+    """종목별 시장조치 상태 (KIS 종목마스터 일일 sync 결과).
+
+    매매 엔진이 매수 직전 `MarketActionRepository.is_blocked(code)`로 차단
+    여부를 확인한다. 어떤 플래그라도 True면 매수 차단.
+    """
+
+    __tablename__ = "market_actions"
+
+    stock_code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    is_trading_halted: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false",
+    )
+    is_administrative: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false",
+    )
+    is_liquidation: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false",
+    )
+    is_market_warning: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false",
+    )
+    is_warning_pretrigger: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false",
+    )
+    is_dishonest_disclosure: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false",
+    )
+    snapshot_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+
+    _REASON_MAP = (
+        ("is_trading_halted", "trading_halted"),
+        ("is_administrative", "administrative"),
+        ("is_liquidation", "liquidation"),
+        ("is_market_warning", "market_warning"),
+        ("is_warning_pretrigger", "warning_pretrigger"),
+        ("is_dishonest_disclosure", "dishonest_disclosure"),
+    )
+
+    @property
+    def block_reasons(self) -> list[str]:
+        """True인 플래그들의 사유 라벨 리스트."""
+        return [label for attr, label in self._REASON_MAP if getattr(self, attr)]
+
+    @property
+    def should_block_buy(self) -> bool:
+        return bool(self.block_reasons)
+
+    def __repr__(self) -> str:
+        return (
+            f"<MarketAction(code={self.stock_code!r}, "
+            f"blocked={self.should_block_buy}, reasons={self.block_reasons})>"
+        )
+
+
 class NewsCollectionState(Base):
     """소스별 마지막 수집 시각 추적 (증분 수집용)."""
 
