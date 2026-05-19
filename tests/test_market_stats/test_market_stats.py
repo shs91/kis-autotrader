@@ -88,6 +88,22 @@ class TestResolveTargetTickers:
         )
         assert sorted(tickers) == ["000660", "005930", "035420"]
 
+    def test_skips_non_6digit_codes(self) -> None:
+        """ETF/ETN/ELW/파생 등 비정상 코드는 제외 (pykrx 미지원)."""
+        stock_repo = MagicMock()
+        trade_repo = MagicMock()
+        stock_repo.list_watchlist.return_value = [
+            MagicMock(code="005930"),
+            MagicMock(code="Q760027"),   # 9자리 영문 prefix
+            MagicMock(code="F70100026"), # 9자리 F prefix
+        ]
+        trade_repo.distinct_codes_since.return_value = ["12345", "1234567"]  # 5/7 자리
+
+        tickers = resolve_target_tickers(
+            stock_repo=stock_repo, trade_repo=trade_repo, days=30,
+        )
+        assert tickers == ["005930"]
+
 
 @pytest.mark.parametrize("kind", ["short", "investor"])
 class TestCollectorIntegration:
