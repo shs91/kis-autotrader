@@ -20,7 +20,11 @@ from src.strategy.base import Signal, SignalType
 
 
 def _make_engine() -> TradingEngine:
-    """최소한의 mock으로 TradingEngine을 생성한다."""
+    """최소한의 mock으로 TradingEngine을 생성한다.
+
+    시간 의존성 격리: MARKET_CLOSE_GUARD를 트립시키는 테스트만 명시적으로
+    True로 모킹하도록 기본 False로 설정.
+    """
     with patch("src.engine.KISClient"), \
          patch("src.engine.QuoteAPI"), \
          patch("src.engine.OrderAPI"), \
@@ -29,6 +33,9 @@ def _make_engine() -> TradingEngine:
          patch("src.engine.StrategyRegistry"), \
          patch("src.engine.StrategySelector"):
         engine = TradingEngine(watchlist=["005930"])
+    engine._risk.is_near_market_close = (  # type: ignore[method-assign]
+        lambda *a, **kw: False
+    )
     return engine
 
 
@@ -207,8 +214,7 @@ async def test_process_stock_position_ratio_records_buy_reject() -> None:
     strategy_stub.analyze = MagicMock(return_value=signal)
     engine._selector.get_strategy = MagicMock(return_value=strategy_stub)
 
-    # validate_order는 통과시키되 calculate_position_size에서 0 반환
-    engine._risk.validate_order = MagicMock(return_value=True)  # type: ignore[method-assign]
+    # check_buy_gates 통과(default rm 상태 + balance 충분) + calculate_position_size 0
     engine._risk.calculate_position_size = MagicMock(return_value=0)  # type: ignore[method-assign]
 
     with patch.object(engine._task_queue, "enqueue") as mock_enqueue, \
@@ -265,3 +271,85 @@ async def test_process_stock_daily_trade_limit_records_buy_reject() -> None:
         rejects = _extract_buy_reject_calls(mock_enqueue)
         assert len(rejects) == 1
         assert rejects[0]["detail"]["reason"] == "DAILY_TRADE_LIMIT"
+
+
+# ── 사유 코드 정밀화 (OTHER 분해) ─────────────────────────────
+
+
+async def _process_high_conf_buy(
+    engine: TradingEngine, *, stock_code: str = "005930", deposit: int = 1_000_000,
+) -> MagicMock:
+    """공통 헬퍼: 충분한 신뢰도의 BUY 시그널 + 정상 시세를 주입 후 _process_stock 호출.
+
+    enqueue mock을 반환해 호출자가 BUY_REJECT 분류를 검증한다.
+    """
+    df = pd.DataFrame([{"close": 70000.0, "date": "2026-05-15"}])
+    engine._get_daily_df = AsyncMock(return_value=df)  # type: ignore[method-assign]
+
+    current_mock = MagicMock()
+    current_mock.current_price = 70_000
+    current_mock.stock_name = "삼성전자"
+    engine._quote.get_current_price = AsyncMock(return_value=current_mock)
+
+    signal = Signal(
+        signal_type=SignalType.BUY,
+        confidence=0.8,
+        target_price=70_000.0,
+        reason="golden",
+    )
+    strategy_stub = MagicMock()
+    strategy_stub.name = "ma"
+    strategy_stub.analyze = MagicMock(return_value=signal)
+    engine._selector.get_strategy = MagicMock(return_value=strategy_stub)
+
+    with patch.object(engine._task_queue, "enqueue") as mock_enqueue, \
+         patch.object(engine, "_update_stock_name_if_needed"), \
+         patch.object(engine, "_resolve_stock_name", return_value=""):
+        await engine._process_stock(
+            stock_code=stock_code,
+            deposit=deposit,
+            is_held=False,
+            holding_info=None,
+        )
+        return mock_enqueue
+
+
+@pytest.mark.asyncio
+async def test_process_stock_market_close_guard_records_buy_reject() -> None:
+    """장 마감 임박 시 BUY_REJECT(MARKET_CLOSE_GUARD)로 기록된다."""
+    engine = _make_engine()
+    # MARKET_CLOSE_GUARD를 트립시킨다 (기본은 False로 모킹되어 있음)
+    engine._risk.is_near_market_close = (  # type: ignore[method-assign]
+        lambda *a, **kw: True
+    )
+    mock_enqueue = await _process_high_conf_buy(engine)
+    rejects = _extract_buy_reject_calls(mock_enqueue)
+    assert len(rejects) == 1
+    assert rejects[0]["detail"]["reason"] == "MARKET_CLOSE_GUARD"
+
+
+@pytest.mark.asyncio
+async def test_process_stock_max_consecutive_losses_records_buy_reject() -> None:
+    """연패 한도 도달 시 BUY_REJECT(MAX_CONSECUTIVE_LOSSES) 기록 (RISK_GATE 분할)."""
+    engine = _make_engine()
+    for _ in range(engine._risk._max_consecutive_losses):
+        engine._risk.record_trade_result(-10_000)
+    assert engine._risk.is_portfolio_halted is True
+    mock_enqueue = await _process_high_conf_buy(engine)
+    rejects = _extract_buy_reject_calls(mock_enqueue)
+    assert len(rejects) == 1
+    assert rejects[0]["detail"]["reason"] == "MAX_CONSECUTIVE_LOSSES"
+
+
+@pytest.mark.asyncio
+async def test_process_stock_max_daily_drawdown_records_buy_reject() -> None:
+    """일일 MDD 한도 도달 시 BUY_REJECT(MAX_DAILY_DRAWDOWN) 기록 (RISK_GATE 분할)."""
+    engine = _make_engine()
+    # 피크 만들고 MDD 임계치 이상 하락
+    engine._risk.record_trade_result(+100_000)
+    engine._risk.record_trade_result(-50_000)
+    assert engine._risk.is_portfolio_halted is True
+    mock_enqueue = await _process_high_conf_buy(engine)
+    rejects = _extract_buy_reject_calls(mock_enqueue)
+    assert len(rejects) == 1
+    assert rejects[0]["detail"]["reason"] == "MAX_DAILY_DRAWDOWN"

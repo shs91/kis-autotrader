@@ -750,38 +750,9 @@ class TradingEngine:
             )
             return
 
-        # BUY 시그널 처리 — validate_order는 하위 호환 유지용으로 그대로 호출
-        try:
-            ok = self._risk.validate_order(signal, float(deposit), 0)
-        except Exception:
-            # 잔고/주문 검증에서 RiskLimitError 발생 시 OTHER로 분류 후 흐름 유지
-            logger.exception("[%s] 매수 검증 중 예외", stock_code)
-            self._record_buy_reject(
-                stock_code=stock_code,
-                reason="OTHER",
-                confidence=signal.confidence,
-                context={"error": "validate_order_exception"},
-            )
-            self._record_signal_to_db(
-                stock_code, current.stock_name, signal, action_taken=False,
-                skip_reason="risk_rejected",
-            )
-            return
-        if not ok:
-            skip_reason = "risk_rejected"
-            # check_buy_gates 통과 후에도 validate_order가 False면 잔여 사유
-            # (예: 장 마감 임박 차단)는 OTHER로 기록 — 본 흐름 영향 없음.
-            self._record_buy_reject(
-                stock_code=stock_code,
-                reason="OTHER",
-                confidence=signal.confidence,
-                context={"balance": float(deposit)},
-            )
-            self._record_signal_to_db(
-                stock_code, current.stock_name, signal, action_taken=False,
-                skip_reason=skip_reason,
-            )
-            return
+        # check_buy_gates가 halt(MAX_CONSECUTIVE_LOSSES/MAX_DAILY_DRAWDOWN) +
+        # MARKET_CLOSE_GUARD + INSUFFICIENT_CASH + LOW_CONFIDENCE 모두 잡으므로
+        # validate_order 호출은 잉여. POSITION_RATIO만 quantity ≤ 0 분기에서 분류.
         quantity = self._risk.calculate_position_size(
             float(deposit), float(current.current_price)
         )
@@ -1198,9 +1169,10 @@ class TradingEngine:
         막혀 차단된 경우 1건씩 기록한다.
 
         ``reason`` 코드는 BRIDGE 제안서의 분류를 따른다:
-        ``LOW_CONFIDENCE``, ``POSITION_LIMIT``, ``POSITION_RATIO``,
-        ``INSUFFICIENT_CASH``, ``DAILY_TRADE_LIMIT``, ``RISK_GATE``,
-        ``OTHER``. 기록 실패는 매매 본 흐름에 영향이 없도록 swallow 한다.
+        ``LOW_CONFIDENCE``, ``POSITION_RATIO``, ``INSUFFICIENT_CASH``,
+        ``DAILY_TRADE_LIMIT``, ``MARKET_CLOSE_GUARD``,
+        ``MAX_CONSECUTIVE_LOSSES``, ``MAX_DAILY_DRAWDOWN``.
+        기록 실패는 매매 본 흐름에 영향이 없도록 swallow 한다.
 
         Args:
             stock_code: 종목코드.
