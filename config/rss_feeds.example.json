@@ -1,0 +1,64 @@
+{
+  "_meta": {
+    "description": "RSSCollector 피드 설정. 운영자가 cp 후 활성 피드만 남겨 편집한다.",
+    "schema": "label(영문 ID, 메트릭 키) · category(한글 분류) · provider(발행사) · url",
+    "ref": "docs/plans/2026-05-18_data-collection-pipeline.md §4.4",
+    "robots_txt_check": "운영 전 각 사이트의 robots.txt 확인 필수"
+  },
+  "feeds": [
+    {
+      "label": "yonhap_market",
+      "category": "증권",
+      "provider": "yonhap",
+      "url": "https://www.yna.co.kr/rss/market.xml"
+    },
+    {
+      "label": "yonhap_economy",
+      "category": "경제",
+      "provider": "yonhap",
+      "url": "https://www.yna.co.kr/rss/economy.xml"
+    },
+    {
+      "label": "yonhap_industry",
+      "category": "산업",
+      "provider": "yonhap",
+      "url": "https://www.yna.co.kr/rss/industry.xml"
+    },
+    {
+      "label": "yonhap_international",
+      "category": "해외",
+      "provider": "yonhap",
+      "url": "https://www.yna.co.kr/rss/international.xml"
+    },
+    {
+      "label": "yonhap_politics",
+      "category": "정치",
+      "provider": "yonhap",
+      "url": "https://www.yna.co.kr/rss/politics.xml"
+    },
+    {
+      "label": "yonhap_northkorea",
+      "category": "지정학",
+      "provider": "yonhap",
+      "url": "https://www.yna.co.kr/rss/northkorea.xml"
+    },
+    {
+      "label": "edaily_economy",
+      "category": "경제",
+      "provider": "edaily",
+      "url": "https://rss.edaily.co.kr/economy_news.xml"
+    },
+    {
+      "label": "edaily_stock",
+      "category": "증권",
+      "provider": "edaily",
+      "url": "https://rss.edaily.co.kr/stock_news.xml"
+    },
+    {
+      "label": "edaily_finance",
+      "category": "금융",
+      "provider": "edaily",
+      "url": "https://rss.edaily.co.kr/finance_news.xml"
+    }
+  ]
+}
