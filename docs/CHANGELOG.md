@@ -1,8 +1,20 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (81건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (82건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-19] CircuitBreaker `is_open` lazy reset — engine 자가 복구 결함 수정 (v0.2.10) — 🔴 핫픽스
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/api/client.py: `CircuitBreaker.is_open` property가 timer 만료를 검사해 자동 반개방하도록 변경. 신규 `_try_half_open()` 헬퍼로 `is_open` property와 `is_available()` 메서드의 reset 로직 일관화. 미사용 import `RateLimitExceededError` 정리.
+  - tests/test_api/test_client.py: 회귀 테스트 2건 추가 — `test_is_open_resets_after_timeout` / `test_is_open_consistent_with_is_available`. 미사용 import 정리.
+- 배경: 2026-05-19 09:34~09:40 약 8분간 장중 매매가 차단됨. `is_available()`은 timer 만료 시 `_failure_count = 0` 리셋하지만 `_is_open` 필드는 그대로 True 유지. `engine.py:317/382`가 `circuit_breaker.is_open` property를 검사 → 영원히 True → `record_success` 호출 기회 자체가 없어 자가 복구 불가.
+- 영향: 서킷 브레이커가 timer 만료 후 자동으로 반개방되어 `engine.py`의 다음 사이클이 정상 진입. 첫 실제 요청 성공 시 `record_success()`가 호출되어 완전 close. 추후 같은 패턴의 영구 차단 재발 차단.
+- 검증 결과: pytest 11 passed (CircuitBreaker 6 = 기존 4 + 신규 2, KISClient 5) | ruff All checks passed | mypy --strict src/api/client.py ✅.
+- 비고: 운영자 액션 — autotrader 재시작 시점에 효과 발생. 장중 위험 회피 위해 15:30 장 마감 후 재시작 권장.
 
 ---
 
@@ -50,20 +62,6 @@
 - 배경: W19~W20 기간 동안 `series_len`이 30으로 고정되어 MACD가 영구 비활성화됨. 페이지네이션 코드는 이미 적용됐으나 `inquire-daily-price` 엔드포인트가 일자 파라미터를 무시하여 항상 동일 30건만 반환. 진짜 차단 지점은 엔드포인트 선택이었다.
 - 영향: 1회 호출로 최대 100건 일봉 확보. `series_len`이 `ma_long_period + 2` 이상으로 회복되어 MACD/볼린저 등 장기 지표 정상 가동. KIS API 호출량도 페이지네이션 4~5회 → 1회로 감소(rate-limit 안전 마진 확보).
 - 검증 결과: pytest `tests/test_api/test_quote.py` ✅ 11/11 (신규 4건 포함) | 전체 회귀 ✅ 신규 회귀 0건 (6 pre-existing fail baseline 동일) | mypy 변경 라인 에러 없음 | ruff 위반 2건 개선(F401), 신규 위반 0.
-
----
-
-## [2026-05-15] 스크리닝→매매 매핑 진단 메트릭 추가 (SCREENING_CANDIDATE / SCREENING_HIT·MISS) (v0.2.5)
-- 제안서: docs/proposals/2026-05-15_screening-conversion-diagnostic-metric.md
-- 카테고리: performance
-- 변경 파일:
-  - src/worker/screener.py: `_record_to_db` 안에서 `SystemMetricRepository.record_metric`으로 `SCREENING_CANDIDATE` 1건 기록 (`cycle / ranked_total / candidate_count`).
-  - src/engine.py: `_execute_buy` 체결 직후 `_record_screening_match_metric(stock_code)` 헬퍼 호출 — 당일 KST 기준 `screening_results`에 동일 stock_code 존재 시 `SCREENING_HIT`, 없으면 `SCREENING_MISS`. 매수 본 흐름과 분리(예외 swallow).
-  - tests/test_worker/test_screener.py: `SCREENING_CANDIDATE` 기록 검증 2건 + ranked item 헬퍼 추가.
-  - tests/test_engine_db_integration.py: HIT/MISS/예외/`_execute_buy` 통합 호출 검증 4건 추가.
-- 배경: 룰 B(3일 연속 스크리닝 전환율 <10%) 트리거. 현 `converted_to_trade`는 워커 자체 추천 후보 마킹일 뿐 실제 매수와 매핑되지 않아 룰 B 의미가 모호. 5-14는 BUY 3건 + 스크리닝 전환 0건, 5-15는 BUY 0건 + 전환 0건이 동일하게 "전환율 0%"로 보여 진단 변별력 부재.
-- 영향: 1~2주 누적 후 룰 B 측정값을 (워커 후보 / 엔진 매수 / 매핑 일치율)로 분해 가능. 무차별 임계값 조정으로 인한 매매 위축 위험 회피. 기록 실패 시 fallback 처리되어 매매·스크리닝 본 흐름에 영향 없음.
-- 검증 결과: pytest ✅ 470 passed, 5 pre-existing fail(KST 시간대 의존) | mypy 변경 라인 에러 없음 (66 pre-existing 동일) | ruff src/ 16 pre-existing 동일.
 
 ---
 

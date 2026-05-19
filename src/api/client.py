@@ -11,7 +11,7 @@ import httpx
 from src.api.auth import KISAuth
 from src.api.rate_limiter import RateLimiter, rate_limiter
 from src.config import settings
-from src.utils.exceptions import KISAutoTraderError, RateLimitExceededError
+from src.utils.exceptions import KISAutoTraderError
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -79,12 +79,10 @@ class CircuitBreaker:
                 self._trip_count,
             )
 
-    def is_available(self) -> bool:
-        """요청이 가능한 상태인지 확인한다."""
+    def _try_half_open(self) -> bool:
+        """timer 만료 시 반개방 상태로 lazy 전환. 전환됐으면 True."""
         if not self._is_open:
-            return True
-
-        # current_reset_timeout이 지났으면 반개방 상태로 전환
+            return False
         elapsed = time.monotonic() - self._last_failure_time
         if elapsed >= self._current_reset_timeout:
             logger.info(
@@ -93,13 +91,29 @@ class CircuitBreaker:
                 self._trip_count,
             )
             self._failure_count = 0
+            self._is_open = False
             return True
+        return False
 
+    def is_available(self) -> bool:
+        """요청이 가능한 상태인지 확인한다 (timer 만료 시 자동 반개방)."""
+        if not self._is_open:
+            return True
+        if self._try_half_open():
+            return True
         return False
 
     @property
     def is_open(self) -> bool:
-        """서킷이 열려있는지 반환한다."""
+        """서킷이 열려있는지 반환 (timer 만료 시 자동 반개방).
+
+        Phase 운영 결함 수정: engine.py 등 호출자가 is_open property를
+        통해 검사할 때, timer가 만료됐다면 자동으로 반개방하여 다음
+        record_success/failure가 정상 동작하도록 한다.
+        is_available()과 일관된 결과 보장.
+        """
+        if self._is_open:
+            self._try_half_open()
         return self._is_open
 
 

@@ -5,11 +5,9 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 from src.api.client import (
-    CIRCUIT_FAILURE_THRESHOLD,
     CircuitBreaker,
     KISClient,
 )
@@ -56,6 +54,39 @@ class TestCircuitBreaker:
         assert cb.is_available() is False
 
         time.sleep(0.15)
+        assert cb.is_available() is True
+
+    def test_is_open_resets_after_timeout(self) -> None:
+        """타임아웃 후 is_open property도 자동으로 False로 전환된다.
+
+        회귀 방지(2026-05-19): engine.py가 `is_open` property로 검사할 때,
+        is_available()만 timer를 처리하고 is_open은 그대로 True였던 문제로
+        서킷 브레이커가 영구 차단 상태로 남아 자가 복구 안 되던 결함.
+        """
+        cb = CircuitBreaker(failure_threshold=1, reset_timeout=0.1)
+        cb.record_failure()
+        assert cb.is_open is True
+
+        time.sleep(0.15)
+        # is_open property가 자동으로 timer를 검사해서 반개방 처리
+        assert cb.is_open is False
+        # is_available()과 일관
+        assert cb.is_available() is True
+
+    def test_is_open_consistent_with_is_available(self) -> None:
+        """is_open과 is_available()의 결과는 항상 일관된다."""
+        cb = CircuitBreaker(failure_threshold=2, reset_timeout=0.1)
+        # 초기 상태
+        assert cb.is_open is False
+        assert cb.is_available() is True
+        # 트립 직후
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.is_open is True
+        assert cb.is_available() is False
+        # 타임아웃 후 (어느 쪽을 먼저 호출해도 일관)
+        time.sleep(0.15)
+        assert cb.is_open is False
         assert cb.is_available() is True
 
 
