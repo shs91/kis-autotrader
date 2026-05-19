@@ -13,7 +13,7 @@ False positive 차단:
 
 from __future__ import annotations
 
-import ahocorasick  # type: ignore[import-untyped]
+import ahocorasick  # type: ignore[import-not-found]
 
 DEFAULT_MIN_NAME_LENGTH = 3
 
