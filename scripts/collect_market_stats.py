@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,7 +32,11 @@ from src.db.repository import (  # noqa: E402
     TradeRepository,
 )
 from src.db.session import get_session  # noqa: E402
-from src.market_stats import MarketStatsCollector, resolve_target_tickers  # noqa: E402
+from src.market_stats import (  # noqa: E402
+    MarketStatsCollector,
+    _nearest_krx_business_day,
+    resolve_target_tickers,
+)
 from src.rag.embedder import Embedder  # noqa: E402
 from src.utils.logger import setup_logger  # noqa: E402
 
@@ -41,8 +45,13 @@ logger = setup_logger(__name__)
 
 
 def _default_target_date() -> date:
-    """T+2 지연 — 오늘 기준 2일 전 (영업일 보정은 pykrx가 빈 응답으로 처리)."""
-    return (datetime.now(UTC).date() - timedelta(days=2))
+    """T+2 지연 — 오늘 기준 2일 전 + KRX 영업일 보정.
+
+    pykrx의 get_nearest_business_day_in_a_week로 토/일/공휴일을 영업일로
+    당겨 잡는다.
+    """
+    today = datetime.now(UTC).date()
+    return _nearest_krx_business_day(today, lookback_days=2)
 
 
 def main(argv: list[str] | None = None) -> int:
