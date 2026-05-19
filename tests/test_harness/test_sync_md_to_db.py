@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from scripts.harness.sync_proposals_md_to_db import (
+    backfill_predictions,
     parse_proposal,
     sync_directory,
 )
@@ -79,3 +80,66 @@ def test_sync_directory_inserts_all_then_skips_existing(tmp_path: Path, session)
     inserted2, skipped2 = sync_directory(tmp_path, session)
     session.commit()
     assert (inserted2, skipped2) == (0, 2)
+
+
+# ── backfill_predictions ────────────────────────────────────────
+
+
+def test_backfill_predictions_updates_existing_when_prediction_present(
+    tmp_path: Path, session
+):
+    md = tmp_path / "p.md"
+    md.write_text(
+        "# P\n\n## 메타데이터\n- 상태: ready\n- 카테고리: bug_fix\n- 우선순위: high\n",
+        encoding="utf-8",
+    )
+    sync_directory(tmp_path, session)
+    session.commit()
+
+    # prediction 섹션을 사후 추가 (백필 시나리오: 기존 row + 나중에 본문 보강)
+    md.write_text(
+        "# P\n\n## 메타데이터\n- 상태: ready\n- 카테고리: bug_fix\n- 우선순위: high\n\n"
+        "## 기대 효과\n- win_rate_delta_pp: 1.5\n- error_count_delta_ratio: -0.25\n",
+        encoding="utf-8",
+    )
+
+    updated, skipped = backfill_predictions(tmp_path, session)
+    session.commit()
+    assert (updated, skipped) == (1, 0)
+
+    repo = ProposalRepository(session)
+    row = repo.find_by_path(str(md.resolve()))
+    assert row is not None
+    assert row.prediction == {
+        "win_rate_delta_pp": 1.5,
+        "error_count_delta_ratio": -0.25,
+    }
+
+
+def test_backfill_predictions_skips_when_no_prediction_section(
+    tmp_path: Path, session
+):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "# Q\n\n## 메타데이터\n- 상태: ready\n- 카테고리: refactor\n- 우선순위: low\n",
+        encoding="utf-8",
+    )
+    sync_directory(tmp_path, session)
+    session.commit()
+
+    updated, skipped = backfill_predictions(tmp_path, session)
+    assert (updated, skipped) == (0, 1)
+
+
+def test_backfill_predictions_skips_unknown_path(tmp_path: Path, session):
+    # DB에 등록되지 않은 markdown은 skip (insert 안 함)
+    md = tmp_path / "new.md"
+    md.write_text(
+        "# N\n\n## 메타데이터\n- 상태: ready\n- 카테고리: bug_fix\n- 우선순위: high\n\n"
+        "## 기대 효과\n- win_rate_delta_pp: 2.0\n",
+        encoding="utf-8",
+    )
+    updated, skipped = backfill_predictions(tmp_path, session)
+    assert (updated, skipped) == (0, 1)
+    repo = ProposalRepository(session)
+    assert repo.find_by_path(str(md.resolve())) is None
