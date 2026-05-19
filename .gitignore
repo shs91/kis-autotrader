@@ -36,3 +36,4 @@ htmlcov/
 
 # Phase 2 Verifier 부산물 (pytest --junitxml)
 .verifier-junit.xml
+config/rss_feeds.json

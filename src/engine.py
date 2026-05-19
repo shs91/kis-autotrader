@@ -20,6 +20,7 @@ from src.db.models import BuyReason, OrderStatus, OrderType, SellReason, TradeTy
 from src.db.repository import (
     DailyPerformanceRepository,
     DailySummaryRepository,
+    MarketActionRepository,
     OrderRepository,
     PortfolioRepository,
     ScreeningResultRepository,
@@ -872,6 +873,17 @@ class TradingEngine:
         signal: Signal | None = None, strategy_name: str = "",
     ) -> None:
         """매수 주문을 실행하고 DB에 기록한다."""
+        # KIS 종목마스터 sync 결과(market_actions) 기반 차단 lookup.
+        # 거래정지/관리종목/정리매매/시장경고/경고예고/불성실공시 중 하나라도 ON이면
+        # 매수를 막는다. 미등록 종목은 통과(안전 기본값 — sync 전 매매 위축 방지).
+        block_reasons = self._check_market_action_block(stock_code)
+        if block_reasons:
+            logger.warning(
+                "[매수 차단] %s(%s) — 사유: %s",
+                stock_name, stock_code, ",".join(block_reasons),
+            )
+            return
+
         try:
             result = await self._order.buy(stock_code=stock_code, quantity=quantity)
             self._today_trade_count += 1
@@ -1214,6 +1226,25 @@ class TradingEngine:
                 stock_code,
                 reason,
             )
+
+    def _check_market_action_block(self, stock_code: str) -> list[str]:
+        """매수 전 시장조치 차단 lookup.
+
+        KIS 종목마스터 일일 sync(`market_actions` 테이블) 결과를 조회해 거래정지/
+        관리종목/정리매매/시장경고/경고예고/불성실공시 중 하나라도 ON이면 차단
+        사유 리스트를 반환한다. 미등록 종목은 빈 리스트(통과 — 안전 기본값).
+        DB 조회 실패는 매매를 막지 않도록 swallow(빈 리스트 반환).
+        """
+        try:
+            with get_session() as session:
+                repo = MarketActionRepository(session)
+                ma = repo.get(stock_code)
+                if ma is None:
+                    return []
+                return ma.block_reasons
+        except Exception:
+            logger.exception("market_action 차단 lookup 실패: %s", stock_code)
+            return []
 
     def _record_screening_match_metric(self, stock_code: str) -> None:
         """신규 BUY 직후 동일 stock_code의 screening_results 매칭 여부를 메트릭으로 기록한다.
