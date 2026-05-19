@@ -61,15 +61,23 @@ def resolve_target_tickers(
 ) -> list[str]:
     """watchlist ∪ 최근 N일 거래 종목 (정렬된 unique 리스트).
 
-    pykrx는 일반 주식(6자리 숫자) 코드만 처리할 수 있으므로 ETF/ETN/ELW/파생
-    코드는 제외한다. 과거 KIS sync에서 비정상 코드가 stocks에 적재됐을 수
-    있어 방어적 필터.
+    필터:
+    - 6자리 숫자 코드만 (Q760027 등 ELW/파생 제외)
+    - stocks 테이블에 존재 + market in ('KOSPI','KOSDAQ')
+      → trades에만 있는 ETF/UNKNOWN 자동 skip
     """
     import re
+    valid_stocks = {
+        s.code for s in stock_repo.list_all()
+        if s.market in ("KOSPI", "KOSDAQ")
+    }
     watchlist = [s.code for s in stock_repo.list_watchlist()]
     recent = trade_repo.distinct_codes_since(days)
-    all_codes = set(watchlist) | set(recent)
-    return sorted(c for c in all_codes if re.fullmatch(r"\d{6}", c))
+    candidates = set(watchlist) | set(recent)
+    return sorted(
+        c for c in candidates
+        if re.fullmatch(r"\d{6}", c) and c in valid_stocks
+    )
 
 
 def _nearest_krx_business_day(reference: date, lookback_days: int = 2) -> date:

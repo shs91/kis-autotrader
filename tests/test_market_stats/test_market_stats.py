@@ -76,29 +76,62 @@ class TestResolveTargetTickers:
     def test_unions_watchlist_and_recent_trades(self) -> None:
         stock_repo = MagicMock()
         trade_repo = MagicMock()
-        # watchlist: 2종목
+        stock_repo.list_all.return_value = [
+            MagicMock(code="005930", market="KOSPI"),
+            MagicMock(code="000660", market="KOSPI"),
+            MagicMock(code="035420", market="KOSPI"),
+        ]
         stock_repo.list_watchlist.return_value = [
             MagicMock(code="005930"), MagicMock(code="000660"),
         ]
-        # recent trades: 2 종목 (1개는 중복)
         trade_repo.distinct_codes_since.return_value = ["000660", "035420"]
-
         tickers = resolve_target_tickers(
             stock_repo=stock_repo, trade_repo=trade_repo, days=30,
         )
         assert sorted(tickers) == ["000660", "005930", "035420"]
 
     def test_skips_non_6digit_codes(self) -> None:
-        """ETF/ETN/ELW/파생 등 비정상 코드는 제외 (pykrx 미지원)."""
         stock_repo = MagicMock()
         trade_repo = MagicMock()
+        stock_repo.list_all.return_value = [MagicMock(code="005930", market="KOSPI")]
         stock_repo.list_watchlist.return_value = [
             MagicMock(code="005930"),
-            MagicMock(code="Q760027"),   # 9자리 영문 prefix
-            MagicMock(code="F70100026"), # 9자리 F prefix
+            MagicMock(code="Q760027"),
+            MagicMock(code="F70100026"),
         ]
-        trade_repo.distinct_codes_since.return_value = ["12345", "1234567"]  # 5/7 자리
+        trade_repo.distinct_codes_since.return_value = ["12345", "1234567"]
+        tickers = resolve_target_tickers(
+            stock_repo=stock_repo, trade_repo=trade_repo, days=30,
+        )
+        assert tickers == ["005930"]
 
+    def test_skips_trades_only_codes_not_in_stocks(self) -> None:
+        """trades에만 있고 stocks에 없는 ETF/잔존 코드 자동 skip."""
+        stock_repo = MagicMock()
+        trade_repo = MagicMock()
+        stock_repo.list_all.return_value = [
+            MagicMock(code="005930", market="KOSPI"),
+            MagicMock(code="000660", market="KOSPI"),
+        ]
+        stock_repo.list_watchlist.return_value = []
+        trade_repo.distinct_codes_since.return_value = ["005930", "114800", "000660"]
+        tickers = resolve_target_tickers(
+            stock_repo=stock_repo, trade_repo=trade_repo, days=30,
+        )
+        assert tickers == ["000660", "005930"]
+
+    def test_skips_unknown_market(self) -> None:
+        """market='UNKNOWN' 은 KIS 마스터에서 분류 못한 종목 — skip."""
+        stock_repo = MagicMock()
+        trade_repo = MagicMock()
+        stock_repo.list_all.return_value = [
+            MagicMock(code="005930", market="KOSPI"),
+            MagicMock(code="274090", market="UNKNOWN"),
+        ]
+        stock_repo.list_watchlist.return_value = [
+            MagicMock(code="005930"), MagicMock(code="274090"),
+        ]
+        trade_repo.distinct_codes_since.return_value = []
         tickers = resolve_target_tickers(
             stock_repo=stock_repo, trade_repo=trade_repo, days=30,
         )
