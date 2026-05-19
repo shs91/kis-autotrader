@@ -41,16 +41,21 @@ PROGRESS_PATH="$HOME/.kis-autotrader/claude-progress.json"
 PROMPT_FILE_V2="$PROJECT_DIR/scripts/auto_implement_prompt_v2.txt"
 
 # Phase 3 hotfix D1: if-then-else로 감싸 set -e가 cycle 실패에 트리거되지 않게 함
+# Phase 4 wiring: TrajectoryRepository를 주입해 사이클 단계별 trajectory 적재
 if PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -c "
 from pathlib import Path
 from src.config import settings
+from src.db.repository import TrajectoryRepository
+from src.db.session import get_session
 from src.harness.cycle.orchestrator import run_cycle
-outcome = run_cycle(
-    repo_root=Path('$PROJECT_DIR'),
-    env=settings.kis.env,
-    progress_path=Path('$PROGRESS_PATH'),
-    prompt_path=Path('$PROMPT_FILE_V2'),
-)
+with get_session() as session:
+    outcome = run_cycle(
+        repo_root=Path('$PROJECT_DIR'),
+        env=settings.kis.env,
+        progress_path=Path('$PROGRESS_PATH'),
+        prompt_path=Path('$PROMPT_FILE_V2'),
+        trajectory_repo=TrajectoryRepository(session),
+    )
 print(f'[cycle] {outcome.cycle_id} claude_exit={outcome.claude_exit_code} '
       f'completed={outcome.completed_count} failed={outcome.failed_count} '
       f'skipped={outcome.skipped_count}')
@@ -107,6 +112,18 @@ if [[ "$CYCLE_EXIT" == "0" && "$GOLDEN_EXIT" == "0" && "$VERIFIER_EXIT" == "0" ]
 else
   echo "구현된 제안서 없음 — 재시작 스킵" >> "$LOG_FILE"
 fi
+
+# Phase 4 wiring: 사이클 결산 카드 Telegram 발송 (실패 사이클도 발송)
+echo "=== Cycle summary notify started at $(date) ===" >> "$LOG_FILE"
+CYCLE_ID=$(grep '^\[cycle\] ' "$LOG_FILE" | tail -1 | awk '{print $2}')
+if [[ -n "$CYCLE_ID" ]]; then
+  PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" \
+    -m scripts.harness.notify_cycle_summary --cycle-id "$CYCLE_ID" \
+    >> "$LOG_FILE" 2>&1 || true
+else
+  echo "[notify] cycle_id 추출 실패 — 결산 스킵" >> "$LOG_FILE"
+fi
+echo "=== Cycle summary notify finished at $(date) ===" >> "$LOG_FILE"
 
 # 패치노트 Google Calendar 등록
 echo "=== Patch note event started at $(date) ===" >> "$LOG_FILE"

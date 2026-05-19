@@ -5,6 +5,7 @@
 
 CLI:
     python -m scripts.harness.sync_proposals_md_to_db [--dir docs/proposals]
+    python -m scripts.harness.sync_proposals_md_to_db --backfill-prediction
 """
 
 from __future__ import annotations
@@ -116,6 +117,29 @@ def sync_directory(directory: Path, session: Session) -> tuple[int, int]:
     return inserted, skipped
 
 
+def backfill_predictions(directory: Path, session: Session) -> tuple[int, int]:
+    """기존 proposals row의 prediction을 markdown에서 재파싱해 갱신.
+
+    insert는 하지 않고 이미 등록된 path만 대상으로 한다. ``## 기대 효과`` 섹션이
+    없거나 파싱 결과가 비면 skip. (updated, skipped) 반환.
+    """
+    repo = ProposalRepository(session)
+    updated = skipped = 0
+    for md in sorted(directory.glob("*.md")):
+        path_str = str(md.resolve())
+        existing = repo.find_by_path(path_str)
+        if existing is None:
+            skipped += 1
+            continue
+        pred = parse_prediction(md)
+        if not pred:
+            skipped += 1
+            continue
+        repo.set_prediction(existing.id, pred)
+        updated += 1
+    return updated, skipped
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -124,12 +148,20 @@ def main(argv: list[str] | None = None) -> int:
         default=REPO_ROOT / "docs" / "proposals",
         help="제안서 디렉토리",
     )
+    parser.add_argument(
+        "--backfill-prediction",
+        action="store_true",
+        help="기존 row의 prediction 컬럼만 markdown에서 재파싱하여 갱신",
+    )
     args = parser.parse_args(argv)
 
     with get_session() as session:
-        inserted, skipped = sync_directory(args.dir, session)
-
-    print(f"inserted={inserted}, skipped={skipped}")
+        if args.backfill_prediction:
+            updated, skipped = backfill_predictions(args.dir, session)
+            print(f"backfilled={updated}, skipped={skipped}")
+        else:
+            inserted, skipped = sync_directory(args.dir, session)
+            print(f"inserted={inserted}, skipped={skipped}")
     return 0
 
 
