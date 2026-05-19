@@ -54,6 +54,21 @@ class MarketStatsResult:
     chunks_inserted: int
 
 
+_ETF_BRAND_PREFIXES = (
+    "KODEX", "TIGER", "KBSTAR", "ARIRANG", "HANARO", "SOL",
+    "ACE", "PLUS", "KOSEF", "TIMEFOLIO", "SMART", "FOCUS",
+    "WOORI", "히어로즈",
+)
+
+
+def _is_etf_like(name: str | None) -> bool:
+    """이름이 ETF/ETN 운용사 brand로 시작하면 True."""
+    if not name:
+        return False
+    upper = name.upper()
+    return any(upper.startswith(p.upper()) for p in _ETF_BRAND_PREFIXES)
+
+
 def resolve_target_tickers(
     stock_repo: StockRepository,
     trade_repo: TradeRepository,
@@ -64,12 +79,13 @@ def resolve_target_tickers(
     필터:
     - 6자리 숫자 코드만 (Q760027 등 ELW/파생 제외)
     - stocks 테이블에 존재 + market in ('KOSPI','KOSDAQ')
-      → trades에만 있는 ETF/UNKNOWN 자동 skip
+    - KIS 마스터가 KODEX 인버스 등 ETF를 KOSPI ST로 잘못 분류하므로
+      stocks.name이 ETF/ETN 운용사 brand로 시작하면 skip
     """
     import re
     valid_stocks = {
         s.code for s in stock_repo.list_all()
-        if s.market in ("KOSPI", "KOSDAQ")
+        if s.market in ("KOSPI", "KOSDAQ") and not _is_etf_like(s.name)
     }
     watchlist = [s.code for s in stock_repo.list_watchlist()]
     recent = trade_repo.distinct_codes_since(days)
@@ -101,11 +117,14 @@ def _nearest_krx_business_day(reference: date, lookback_days: int = 2) -> date:
 def build_short_chunk_text(
     ticker: str, stat_date: date, row: dict[str, Any],
 ) -> str:
-    """공매도 잔고 → 자연어 chunk."""
-    qty = row.get("잔고") or 0
+    """공매도 잔고 → 자연어 chunk.
+
+    pykrx 응답 컬럼명 호환: '잔고'/'잔고수량', '공매도'/'거래량', '공매도금액'/'거래대금'.
+    """
+    qty = row.get("잔고수량") or row.get("잔고") or 0
     value = row.get("잔고금액") or 0
-    short = row.get("공매도") or 0
-    short_value = row.get("공매도금액") or 0
+    short = row.get("거래량") or row.get("공매도") or 0
+    short_value = row.get("거래대금") or row.get("공매도금액") or 0
     return (
         f"[공매도 잔고] {ticker} — {stat_date.isoformat()}\n"
         f"잔고 수량: {int(qty):,}주\n"
@@ -190,6 +209,13 @@ class MarketStatsCollector:
             logger.exception("공매도 fetch 실패 ticker=%s", ticker)
             return []
         if df is None or df.empty:
+            return []
+        # 정상 응답은 한글 컬럼. ETF brand 필터를 통과한 잔존 ETF 등 비정상
+        # 응답(영문 컬럼 CVSRTSELL_TRDVOL 등)은 skip.
+        if "잔고수량" not in df.columns and "잔고" not in df.columns:
+            logger.warning(
+                "공매도 비정상 응답 ticker=%s cols=%s", ticker, list(df.columns),
+            )
             return []
         row = df.iloc[-1].to_dict()
         text = build_short_chunk_text(ticker, self._target_date, row)
