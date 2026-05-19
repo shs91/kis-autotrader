@@ -14,6 +14,7 @@ robots.txt 준수와 분당 호출 제한은 운영자 책임 — 본 모듈은 
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,7 @@ from src.db.models import NewsSourceType
 from src.rag.chunker import RawDocument
 from src.utils.logger import setup_logger
 from src.worker.collectors.base import BaseCollector
+from src.worker.collectors.robots_checker import RobotsChecker
 
 if TYPE_CHECKING:
     from src.db.repository import NewsChunkRepository
@@ -63,16 +65,30 @@ class RSSCollector(BaseCollector):
         ticker_matcher: TickerMatcher,
         user_agent: str,
         client: httpx.AsyncClient | None = None,
+        robots_checker: RobotsChecker | None = None,
     ) -> None:
         super().__init__(embedder=embedder, repo=repo)
         self._feeds = feeds
         self._matcher = ticker_matcher
         self._user_agent = user_agent
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(15.0))
+        self._robots = robots_checker or RobotsChecker(
+            user_agent=user_agent, client=self._client,
+        )
 
     async def collect(self, since: datetime) -> list[RawDocument]:
         docs: list[RawDocument] = []
         for feed in self._feeds:
+            # robots.txt 체크 — 차단된 피드는 fetch 자체를 안 함
+            if not await self._robots.can_fetch(feed.url):
+                logger.warning(
+                    "robots.txt 차단 — skip: %s (%s)", feed.label, feed.url,
+                )
+                continue
+            # 발행자가 권장하는 Crawl-delay 준수
+            delay = self._robots.crawl_delay(feed.url)
+            if delay > 0:
+                await asyncio.sleep(delay)
             try:
                 items = await self._fetch_feed(feed.url)
             except httpx.HTTPError as e:

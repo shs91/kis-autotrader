@@ -13,6 +13,7 @@ import pytest
 
 from src.db.models import NewsSourceType
 from src.rag.ticker_matcher import TickerMatcher
+from src.worker.collectors.robots_checker import RobotsChecker
 from src.worker.collectors.rss import FeedSource, RSSCollector
 
 RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -64,10 +65,19 @@ def _feed(
     return FeedSource(label=label, category=category, url=url, provider=provider)
 
 
+def _allow_all_robots() -> MagicMock:
+    """기본 RobotsChecker mock — 모든 URL 허용, crawl_delay 0."""
+    robots = MagicMock(spec=RobotsChecker)
+    robots.can_fetch = AsyncMock(return_value=True)
+    robots.crawl_delay = MagicMock(return_value=0.0)
+    return robots
+
+
 def _make_collector(
     feeds: list[FeedSource] | None = None,
     client: MagicMock | None = None,
     matcher: TickerMatcher | None = None,
+    robots: MagicMock | None = None,
 ) -> RSSCollector:
     return RSSCollector(
         embedder=MagicMock(),
@@ -79,6 +89,7 @@ def _make_collector(
         ]),
         user_agent="test-agent",
         client=client or _mock_client(),
+        robots_checker=robots or _allow_all_robots(),
     )
 
 
@@ -171,3 +182,40 @@ class TestCollect:
         # 두 번째 피드 결과만 들어와야 함
         labels = {d.metadata["feed_label"] for d in docs}
         assert labels == {"alive"}
+
+
+@pytest.mark.asyncio
+class TestRobotsIntegration:
+    async def test_robots_disallowed_feed_skipped(self) -> None:
+        """robots.txt가 차단한 피드는 fetch 자체를 안 한다."""
+        robots = MagicMock(spec=RobotsChecker)
+        robots.can_fetch = AsyncMock(side_effect=[False, True])
+        robots.crawl_delay = MagicMock(return_value=0.0)
+
+        client = _mock_client()
+        feeds = [
+            _feed(label="blocked", url="https://blocked.example/feed.xml"),
+            _feed(label="allowed", url="https://allowed.example/feed.xml"),
+        ]
+        collector = _make_collector(feeds=feeds, client=client, robots=robots)
+        docs = await collector.collect(since=datetime(2026, 5, 17, tzinfo=UTC))
+
+        # client.get은 1회만 호출되어야 함 (allowed 피드만)
+        assert client.get.call_count == 1
+        # 모든 doc의 metadata.feed_label은 'allowed'
+        labels = {d.metadata["feed_label"] for d in docs}
+        assert labels == {"allowed"}
+
+    async def test_crawl_delay_respected(self) -> None:
+        """robots.txt Crawl-delay가 있으면 fetch 전 대기."""
+        import asyncio as _asyncio
+        from unittest.mock import patch as _patch
+
+        robots = MagicMock(spec=RobotsChecker)
+        robots.can_fetch = AsyncMock(return_value=True)
+        robots.crawl_delay = MagicMock(return_value=2.0)
+
+        collector = _make_collector(robots=robots)
+        with _patch.object(_asyncio, "sleep", new=AsyncMock()) as mock_sleep:
+            await collector.collect(since=datetime(2026, 5, 17, tzinfo=UTC))
+        mock_sleep.assert_any_await(2.0)
