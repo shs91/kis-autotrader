@@ -3,7 +3,8 @@
     "description": "RSSCollector 피드 설정. 운영자가 cp 후 활성 피드만 남겨 편집한다.",
     "schema": "label(영문 ID, 메트릭 키) · category(한글 분류) · provider(발행사) · url",
     "ref": "docs/plans/2026-05-18_data-collection-pipeline.md §4.4",
-    "robots_txt_check": "운영 전 각 사이트의 robots.txt 확인 필수"
+    "robots_txt_check": "운영 전 각 사이트의 robots.txt 확인 필수",
+    "notes": "rss.edaily.co.kr은 HTTPS 인증서 문제로 http://만 사용 (공개 RSS이므로 안전 동급)"
   },
   "feeds": [
     {
@@ -46,19 +47,19 @@
       "label": "edaily_economy",
       "category": "경제",
       "provider": "edaily",
-      "url": "https://rss.edaily.co.kr/economy_news.xml"
+      "url": "http://rss.edaily.co.kr/economy_news.xml"
     },
     {
       "label": "edaily_stock",
       "category": "증권",
       "provider": "edaily",
-      "url": "https://rss.edaily.co.kr/stock_news.xml"
+      "url": "http://rss.edaily.co.kr/stock_news.xml"
     },
     {
       "label": "edaily_finance",
       "category": "금융",
       "provider": "edaily",
-      "url": "https://rss.edaily.co.kr/finance_news.xml"
+      "url": "http://rss.edaily.co.kr/finance_news.xml"
     }
   ]
 }
