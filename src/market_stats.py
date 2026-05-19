@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from src.db.repository import (
         NewsChunkRepository,
         StockRepository,
+        SystemMetricRepository,
         TradeRepository,
     )
     from src.rag.embedder import Embedder
@@ -176,15 +177,19 @@ class MarketStatsCollector:
         repo: NewsChunkRepository,
         tickers: list[str],
         target_date: date,
+        metric_repo: SystemMetricRepository | None = None,
     ) -> None:
         self._embedder = embedder
         self._repo = repo
         self._tickers = tickers
         self._target_date = target_date
         self._date_str = target_date.strftime("%Y%m%d")
+        self._metric_repo = metric_repo
 
     def collect(self) -> int:
         """수집 + 청크 변환 + 일괄 임베딩 + DB 적재. 적재 행 수 반환."""
+        import time as _time
+        start = _time.monotonic()
         stock_mod = _get_pykrx_stock()
         chunks: list[NewsChunk] = []
         for ticker in self._tickers:
@@ -192,13 +197,33 @@ class MarketStatsCollector:
             chunks.extend(self._collect_investor(ticker, stock_mod))
 
         if not chunks:
+            self._record_metric(0, int((_time.monotonic() - start) * 1000))
             return 0
 
         texts = [c.chunk_text for c in chunks]
         vectors = self._embedder.encode(texts)
         for c, v in zip(chunks, vectors, strict=True):
             c.embedding = v.tolist()
-        return self._repo.insert_chunks(chunks)
+        inserted = self._repo.insert_chunks(chunks)
+        self._record_metric(inserted, int((_time.monotonic() - start) * 1000))
+        return inserted
+
+    def _record_metric(self, inserted: int, elapsed_ms: int) -> None:
+        if self._metric_repo is None:
+            return
+        try:
+            self._metric_repo.record_metric(
+                "NEWS_COLLECTED",
+                {
+                    "source": "pykrx",
+                    "documents": len(self._tickers),
+                    "chunks_inserted": inserted,
+                    "elapsed_ms": elapsed_ms,
+                    "target_date": self._target_date.isoformat(),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("NEWS_COLLECTED 메트릭 기록 실패 (pykrx)")
 
     def _collect_short(self, ticker: str, stock_mod: Any) -> list[NewsChunk]:
         try:

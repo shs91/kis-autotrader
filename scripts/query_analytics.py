@@ -27,6 +27,8 @@ from src.db.analytics import (
     get_daily_signals,
     get_daily_summary,
     get_daily_trades,
+    get_news_coverage_by_ticker,
+    get_news_quality_stats,
     get_optimal_risk_params,
     get_screening_conversion_rate,
     get_signal_accuracy,
@@ -89,6 +91,21 @@ def cmd_risk(args: argparse.Namespace) -> dict:
         return get_optimal_risk_params(session, lookback_days=args.days)
 
 
+def cmd_news_quality(args: argparse.Namespace) -> dict:
+    """일별 뉴스 수집 품질 통계."""
+    from datetime import date as _date  # noqa: PLC0415
+    with get_session() as session:
+        return get_news_quality_stats(
+            session, _date.fromisoformat(args.date),
+        )
+
+
+def cmd_news_coverage(args: argparse.Namespace) -> list[dict]:
+    """종목별 최근 N일 뉴스 chunk 수 (top 100)."""
+    with get_session() as session:
+        return get_news_coverage_by_ticker(session, days=args.days)
+
+
 def main() -> None:
     """CLI 엔트리포인트."""
     parser = argparse.ArgumentParser(
@@ -115,6 +132,14 @@ def main() -> None:
     p_risk = subparsers.add_parser("risk", help="리스크 파라미터 분석")
     p_risk.add_argument("--days", type=int, default=30, help="분석 기간 (일수)")
 
+    # news_quality
+    p_nq = subparsers.add_parser("news_quality", help="일별 뉴스 수집 품질")
+    p_nq.add_argument("date", help="날짜 (YYYY-MM-DD)")
+
+    # news_coverage
+    p_nc = subparsers.add_parser("news_coverage", help="종목별 N일 chunk 수")
+    p_nc.add_argument("--days", type=int, default=7)
+
     args = parser.parse_args()
 
     handlers = {
@@ -122,6 +147,8 @@ def main() -> None:
         "weekly": cmd_weekly,
         "range": cmd_range,
         "risk": cmd_risk,
+        "news_quality": cmd_news_quality,
+        "news_coverage": cmd_news_coverage,
     }
 
     result = handlers[args.command](args)

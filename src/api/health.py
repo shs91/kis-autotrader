@@ -35,6 +35,46 @@ def _check_db() -> dict[str, Any]:
         return {"status": "error", "error": str(e)[:100]}
 
 
+def _check_news_collector() -> dict[str, Any]:
+    """뉴스/공시 수집 파이프라인 상태.
+
+    - last_fetched_at: news_chunks의 최신 fetched_at (사이클 정상성 지표)
+    - chunks_last_24h: 최근 24h 적재 chunk 수
+    - embedding_p95_ms: NEWS_COLLECTED 메트릭 최근 24h elapsed_ms p95
+    DB 연결 실패 시 모든 값 None.
+    """
+    out: dict[str, Any] = {
+        "last_fetched_at": None,
+        "chunks_last_24h": None,
+        "embedding_p95_ms": None,
+    }
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT MAX(fetched_at)::text, "
+                "COUNT(*) FILTER (WHERE fetched_at > NOW() - INTERVAL '24 hours') "
+                "FROM news_chunks"
+            )).first()
+            if row is not None:
+                out["last_fetched_at"] = row[0]
+                out["chunks_last_24h"] = row[1]
+            # PG percentile_cont로 p95 계산 (elapsed_ms는 detail->>'elapsed_ms')
+            p95 = conn.execute(text(
+                "SELECT percentile_cont(0.95) WITHIN GROUP ("
+                "  ORDER BY (detail->>'elapsed_ms')::numeric"
+                ") FROM system_metrics "
+                "WHERE metric_type='NEWS_COLLECTED' "
+                "AND recorded_at > NOW() - INTERVAL '24 hours' "
+                "AND detail->>'elapsed_ms' ~ '^[0-9]+$'"
+            )).scalar()
+            if p95 is not None:
+                out["embedding_p95_ms"] = int(p95)
+    except Exception as e:  # noqa: BLE001 — DB 실패가 health 자체를 막지 않게
+        logger.debug("news_collector 상태 조회 실패: %s", e)
+    return out
+
+
 def _build_health_response(
     *,
     start_time: float,
@@ -64,6 +104,7 @@ def _build_health_response(
                 "cycle_count": cycle_count,
                 "daily_api_calls": daily_api_count,
             },
+            "news_collector": _check_news_collector(),
         },
     }
     return health

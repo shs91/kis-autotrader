@@ -29,7 +29,7 @@ from src.worker.collectors.base import BaseCollector
 from src.worker.collectors.robots_checker import RobotsChecker
 
 if TYPE_CHECKING:
-    from src.db.repository import NewsChunkRepository
+    from src.db.repository import NewsChunkRepository, SystemMetricRepository
     from src.rag.embedder import Embedder
     from src.rag.ticker_matcher import TickerMatcher
 
@@ -66,8 +66,9 @@ class RSSCollector(BaseCollector):
         user_agent: str,
         client: httpx.AsyncClient | None = None,
         robots_checker: RobotsChecker | None = None,
+        metric_repo: SystemMetricRepository | None = None,
     ) -> None:
-        super().__init__(embedder=embedder, repo=repo)
+        super().__init__(embedder=embedder, repo=repo, metric_repo=metric_repo)
         self._feeds = feeds
         self._matcher = ticker_matcher
         self._user_agent = user_agent

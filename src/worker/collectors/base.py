@@ -18,7 +18,7 @@ from src.rag.chunker import Chunk, RawDocument, get_chunker
 from src.utils.logger import setup_logger
 
 if TYPE_CHECKING:
-    from src.db.repository import NewsChunkRepository
+    from src.db.repository import NewsChunkRepository, SystemMetricRepository
     from src.rag.embedder import Embedder
 
 logger = setup_logger(__name__)
@@ -65,9 +65,11 @@ class BaseCollector(ABC):
         self,
         embedder: Embedder,
         repo: NewsChunkRepository,
+        metric_repo: SystemMetricRepository | None = None,
     ) -> None:
         self._embedder = embedder
         self._repo = repo
+        self._metric_repo = metric_repo
 
     @abstractmethod
     async def collect(self, since: datetime) -> list[RawDocument]:
@@ -86,6 +88,9 @@ class BaseCollector(ABC):
         except Exception as e:  # noqa: BLE001 — collector 실패는 사이클 단위로 격리
             elapsed_ms = int((time.monotonic() - start) * 1000)
             logger.exception("collect 실패: %s", self.source_name)
+            self._record_metric(
+                docs=0, inserted=0, elapsed_ms=elapsed_ms, error=str(e),
+            )
             return CollectionResult(
                 source_name=self.source_name,
                 documents_fetched=0,
@@ -110,12 +115,37 @@ class BaseCollector(ABC):
             "사이클 완료 %s: docs=%d chunks=%d elapsed=%dms",
             self.source_name, len(docs), inserted, elapsed_ms,
         )
+        self._record_metric(
+            docs=len(docs), inserted=inserted, elapsed_ms=elapsed_ms,
+        )
         return CollectionResult(
             source_name=self.source_name,
             documents_fetched=len(docs),
             chunks_inserted=inserted,
             elapsed_ms=elapsed_ms,
         )
+
+    def _record_metric(
+        self, docs: int, inserted: int, elapsed_ms: int, error: str | None = None,
+    ) -> None:
+        """사이클 종료 시 NEWS_COLLECTED 메트릭 1건 기록 (metric_repo 주입 시).
+
+        실패는 사이클 결과에 영향 주지 않도록 swallow.
+        """
+        if self._metric_repo is None:
+            return
+        detail: dict[str, object] = {
+            "source": self.source_name,
+            "documents": docs,
+            "chunks_inserted": inserted,
+            "elapsed_ms": elapsed_ms,
+        }
+        if error is not None:
+            detail["error"] = error
+        try:
+            self._metric_repo.record_metric("NEWS_COLLECTED", detail)
+        except Exception:  # noqa: BLE001 — 메트릭 기록 실패가 사이클 결과 막지 않음
+            logger.exception("NEWS_COLLECTED 메트릭 기록 실패 (%s)", self.source_name)
 
     def _build_chunks(self, docs: list[RawDocument]) -> list[NewsChunk]:
         """모든 doc을 chunker → embedder → NewsChunk 변환."""

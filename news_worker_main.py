@@ -18,7 +18,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.db.repository import NewsChunkRepository, StockRepository
+from src.db.repository import (
+    NewsChunkRepository,
+    StockRepository,
+    SystemMetricRepository,
+)
 from src.db.session import get_session
 from src.rag.embedder import Embedder
 from src.rag.ticker_matcher import TickerMatcher
@@ -92,6 +96,7 @@ def _load_rss_feeds(path: str | None) -> list[FeedSource]:
 def _build_collectors(
     embedder: Embedder,
     repo: NewsChunkRepository,
+    metric_repo: SystemMetricRepository,
 ) -> list[BaseCollector]:
     collectors: list[BaseCollector] = []
 
@@ -106,6 +111,7 @@ def _build_collectors(
                 api_key=dart_key,
                 corp_code_to_ticker=corp_code_map,
                 rate_limit_sec=float(os.getenv("NEWS_DART_RATE_LIMIT_PER_SEC", "1.0")),
+                metric_repo=metric_repo,
             ))
     else:
         logger.warning("NEWS_DART_API_KEY 미설정 — DART 수집 비활성")
@@ -122,6 +128,7 @@ def _build_collectors(
             user_agent=os.getenv(
                 "NEWS_RSS_USER_AGENT", "kis-autotrader/0.1",
             ),
+            metric_repo=metric_repo,
         ))
 
     return collectors
@@ -131,7 +138,8 @@ async def _main() -> int:
     embedder = Embedder.get()  # 5초 워밍업
     with get_session() as session:
         repo = NewsChunkRepository(session)
-        collectors = _build_collectors(embedder, repo)
+        metric_repo = SystemMetricRepository(session)
+        collectors = _build_collectors(embedder, repo, metric_repo)
         if not collectors:
             logger.error("활성 collector 없음 — 종료")
             return 1

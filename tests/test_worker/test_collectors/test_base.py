@@ -26,8 +26,9 @@ class StubCollector(BaseCollector):
         embedder: MagicMock,
         repo: MagicMock,
         docs: list[RawDocument],
+        metric_repo: MagicMock | None = None,
     ) -> None:
-        super().__init__(embedder=embedder, repo=repo)
+        super().__init__(embedder=embedder, repo=repo, metric_repo=metric_repo)
         self._docs = docs
 
     async def collect(self, since: datetime) -> list[RawDocument]:
@@ -135,3 +136,48 @@ class TestRunCycle:
         # 동일 doc 내에서 chunk별로 hash 다름 + 64자
         assert len(hashes) == len(chunks)
         assert all(len(h) == 64 for h in hashes)
+
+
+@pytest.mark.asyncio
+class TestMetricRecording:
+    async def test_records_news_collected_metric_on_success(self) -> None:
+        metric_repo = MagicMock()
+        repo = _mock_repo()
+        collector = StubCollector(
+            _mock_embedder(), repo, docs=[_doc()],
+            metric_repo=metric_repo,
+        )
+        await collector.run_cycle()
+        metric_repo.record_metric.assert_called_once()
+        call = metric_repo.record_metric.call_args
+        assert call.args[0] == "NEWS_COLLECTED"
+        detail = call.args[1]
+        assert detail["source"] == "stub"
+        assert detail["documents"] == 1
+        assert detail["chunks_inserted"] >= 0
+        assert detail["elapsed_ms"] >= 0
+        assert "error" not in detail or detail["error"] is None
+
+    async def test_records_metric_with_error_on_collect_failure(self) -> None:
+        class FailingCollector(StubCollector):
+            async def collect(self, since: datetime) -> list[RawDocument]:
+                raise RuntimeError("API down")
+
+        metric_repo = MagicMock()
+        repo = _mock_repo()
+        collector = FailingCollector(
+            _mock_embedder(), repo, docs=[],
+            metric_repo=metric_repo,
+        )
+        await collector.run_cycle()
+        call = metric_repo.record_metric.call_args
+        detail = call.args[1]
+        assert "error" in detail
+        assert "API down" in detail["error"]
+
+    async def test_no_metric_when_repo_not_provided(self) -> None:
+        """기존 호출자(metric_repo=None) 호환."""
+        repo = _mock_repo()
+        collector = StubCollector(_mock_embedder(), repo, docs=[_doc()])
+        result = await collector.run_cycle()  # no exception
+        assert result.source_name == "stub"

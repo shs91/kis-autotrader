@@ -29,6 +29,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from src.db.repository import (  # noqa: E402
     NewsChunkRepository,
     StockRepository,
+    SystemMetricRepository,
     TradeRepository,
 )
 from src.db.session import get_session  # noqa: E402
@@ -105,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             repo=NewsChunkRepository(session),
             tickers=tickers,
             target_date=target_date,
+            metric_repo=SystemMetricRepository(session),
         )
         inserted = collector.collect()
 
