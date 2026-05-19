@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy import select as sa_select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.db.models import (
@@ -17,6 +18,8 @@ from src.db.models import (
     Execution,
     ImplementationCategory,
     ImplementationLog,
+    NewsChunk,
+    NewsCollectionState,
     Order,
     OrderStatus,
     OrderType,
@@ -1333,3 +1336,71 @@ class TrajectoryRepository:
             .limit(limit)
         )
         return list(self._session.execute(stmt).scalars().all())
+
+
+class NewsChunkRepository:
+    """뉴스/공시 청크 + 수집 상태 접근 클래스.
+
+    중복 적재는 (ticker, content_hash) unique 제약 위반으로 차단된다.
+    `insert_chunks`는 dialect-portable한 per-chunk try/except 패턴을 사용한다 —
+    PG의 ON CONFLICT DO NOTHING과 의미 동등하며 SQLite 테스트에서도 동작.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def insert_chunks(self, chunks: list[NewsChunk]) -> int:
+        """청크 배치를 적재한다. (ticker, content_hash) 중복은 건너뛴다.
+
+        Returns: 실제 삽입된 행 수.
+        """
+        if not chunks:
+            return 0
+        inserted = 0
+        for chunk in chunks:
+            try:
+                with self._session.begin_nested():
+                    self._session.add(chunk)
+                    self._session.flush()
+                inserted += 1
+            except IntegrityError:
+                # SAVEPOINT rollback이 chunk를 session에서 자동 제거한다.
+                pass
+        return inserted
+
+    def exists_by_hash(self, ticker: str, content_hash: str) -> bool:
+        """동일 (ticker, content_hash) 청크가 이미 적재되었는지 조회."""
+        stmt = (
+            select(NewsChunk.id)
+            .where(
+                NewsChunk.ticker == ticker,
+                NewsChunk.content_hash == content_hash,
+            )
+            .limit(1)
+        )
+        return self._session.execute(stmt).first() is not None
+
+    def get_collection_state(self, source: str) -> datetime | None:
+        """소스별 마지막 수집 시각 (`last_collected_at`)을 반환한다."""
+        state = self._session.get(NewsCollectionState, source)
+        return state.last_collected_at if state is not None else None
+
+    def update_collection_state(
+        self,
+        source: str,
+        last_time: datetime,
+        cursor: str | None,
+    ) -> None:
+        """소스 상태를 upsert. `updated_at`은 모델 default/onupdate가 처리."""
+        state = self._session.get(NewsCollectionState, source)
+        if state is None:
+            state = NewsCollectionState(
+                source_name=source,
+                last_collected_at=last_time,
+                last_cursor=cursor,
+            )
+            self._session.add(state)
+        else:
+            state.last_collected_at = last_time
+            state.last_cursor = cursor
+        self._session.flush()
