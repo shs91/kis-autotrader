@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -24,7 +25,7 @@ from src.rag.ticker_matcher import TickerMatcher
 from src.utils.logger import setup_logger
 from src.worker.collectors.base import BaseCollector
 from src.worker.collectors.dart import DARTCollector
-from src.worker.collectors.rss import RSSCollector
+from src.worker.collectors.rss import FeedSource, RSSCollector
 from src.worker.news_collector import NewsCollectorWorker
 
 load_dotenv()
@@ -63,6 +64,31 @@ def _build_ticker_matcher() -> TickerMatcher:
     return TickerMatcher(pairs)
 
 
+def _load_rss_feeds(path: str | None) -> list[FeedSource]:
+    """JSON 설정 파일에서 RSS 피드 목록을 로드.
+
+    파일 형식: `config/rss_feeds.example.json` 참조.
+    파일 없으면 빈 리스트 (RSS 비활성) — 안전 fallback.
+    """
+    if not path or not Path(path).exists():
+        logger.warning("RSS 설정 파일 없음 (%s) — RSS 수집 비활성", path)
+        return []
+    with Path(path).open(encoding="utf-8") as f:
+        data = json.load(f)
+    feeds_data = data.get("feeds") or []
+    feeds = [
+        FeedSource(
+            label=item["label"],
+            category=item["category"],
+            provider=item["provider"],
+            url=item["url"],
+        )
+        for item in feeds_data
+    ]
+    logger.info("RSS 피드 로드: %d개", len(feeds))
+    return feeds
+
+
 def _build_collectors(
     embedder: Embedder,
     repo: NewsChunkRepository,
@@ -84,21 +110,19 @@ def _build_collectors(
     else:
         logger.warning("NEWS_DART_API_KEY 미설정 — DART 수집 비활성")
 
-    rss_feeds_raw = os.getenv("NEWS_RSS_FEEDS", "").strip()
-    if rss_feeds_raw:
-        feed_urls = [u.strip() for u in rss_feeds_raw.split(",") if u.strip()]
+    rss_config_path = os.getenv("NEWS_RSS_CONFIG_PATH", "config/rss_feeds.json")
+    feeds = _load_rss_feeds(rss_config_path)
+    if feeds:
         matcher = _build_ticker_matcher()
         collectors.append(RSSCollector(
             embedder=embedder,
             repo=repo,
-            feed_urls=feed_urls,
+            feeds=feeds,
             ticker_matcher=matcher,
             user_agent=os.getenv(
                 "NEWS_RSS_USER_AGENT", "kis-autotrader/0.1",
             ),
         ))
-    else:
-        logger.warning("NEWS_RSS_FEEDS 미설정 — RSS 수집 비활성")
 
     return collectors
 
