@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
+from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -592,4 +594,86 @@ class DailySummary(Base):
         return (
             f"<DailySummary(date={self.report_date}, "
             f"buys={self.total_buy_count}, sells={self.total_sell_count})>"
+        )
+
+
+class NewsSourceType(enum.Enum):
+    """뉴스/공시 데이터 소스 유형."""
+
+    DISCLOSURE = "disclosure"
+    NEWS = "news"
+    EARNINGS = "earnings"
+    REPORT = "report"
+
+
+class NewsChunk(Base):
+    """뉴스·공시 데이터의 임베딩 청크 테이블 (RAG 컨텍스트).
+
+    한 source 문서가 여러 chunk로 분할될 수 있으며, (ticker, content_hash)로
+    중복 적재를 차단한다. event_time(원천 사건 시각)과 fetched_at(수집 시각)을
+    분리해 retriever가 시점 기반 필터를 정확히 걸 수 있도록 한다.
+    """
+
+    __tablename__ = "news_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    source_type: Mapped[NewsSourceType] = mapped_column(
+        SAEnum(NewsSourceType, name="news_source_type"),
+        nullable=False,
+        index=True,
+    )
+    source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    corr_source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    event_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+    sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    importance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    chunk_metadata: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "content_hash", name="uq_news_chunks_ticker_hash"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<NewsChunk(id={self.id}, ticker={self.ticker!r}, "
+            f"source={self.source_type.value}, idx={self.chunk_index})>"
+        )
+
+
+class NewsCollectionState(Base):
+    """소스별 마지막 수집 시각 추적 (증분 수집용)."""
+
+    __tablename__ = "news_collection_state"
+
+    source_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    last_collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    last_cursor: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<NewsCollectionState(source={self.source_name!r}, "
+            f"last={self.last_collected_at.isoformat()})>"
         )
