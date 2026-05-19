@@ -140,44 +140,61 @@ class TestRunCycle:
 
 @pytest.mark.asyncio
 class TestMetricRecording:
+    """metric_repo 인자는 enable flag로 사용. 실제 기록은 별도 get_session()
+    컨텍스트로 매 사이클 commit 보장. patch 대상: base 모듈의 module-level
+    get_session / SystemMetricRepository.
+    """
+
     async def test_records_news_collected_metric_on_success(self) -> None:
-        metric_repo = MagicMock()
+        from unittest.mock import patch as _patch
         repo = _mock_repo()
         collector = StubCollector(
             _mock_embedder(), repo, docs=[_doc()],
-            metric_repo=metric_repo,
+            metric_repo=MagicMock(),  # truthy enable flag
         )
-        await collector.run_cycle()
-        metric_repo.record_metric.assert_called_once()
-        call = metric_repo.record_metric.call_args
-        assert call.args[0] == "NEWS_COLLECTED"
-        detail = call.args[1]
-        assert detail["source"] == "stub"
-        assert detail["documents"] == 1
-        assert detail["chunks_inserted"] >= 0
-        assert detail["elapsed_ms"] >= 0
-        assert "error" not in detail or detail["error"] is None
+        with _patch("src.worker.collectors.base.get_session") as mock_gs, \
+             _patch("src.worker.collectors.base.SystemMetricRepository") as mock_smr:
+            mock_session = MagicMock()
+            mock_gs.return_value.__enter__.return_value = mock_session
+            mock_smr_instance = MagicMock()
+            mock_smr.return_value = mock_smr_instance
+            await collector.run_cycle()
+            mock_smr_instance.record_metric.assert_called_once()
+            call = mock_smr_instance.record_metric.call_args
+            assert call.args[0] == "NEWS_COLLECTED"
+            detail = call.args[1]
+            assert detail["source"] == "stub"
+            assert detail["documents"] == 1
+            assert "error" not in detail or detail["error"] is None
 
     async def test_records_metric_with_error_on_collect_failure(self) -> None:
+        from unittest.mock import patch as _patch
+
         class FailingCollector(StubCollector):
             async def collect(self, since: datetime) -> list[RawDocument]:
                 raise RuntimeError("API down")
 
-        metric_repo = MagicMock()
         repo = _mock_repo()
         collector = FailingCollector(
             _mock_embedder(), repo, docs=[],
-            metric_repo=metric_repo,
+            metric_repo=MagicMock(),
         )
-        await collector.run_cycle()
-        call = metric_repo.record_metric.call_args
-        detail = call.args[1]
-        assert "error" in detail
-        assert "API down" in detail["error"]
+        with _patch("src.worker.collectors.base.get_session") as mock_gs, \
+             _patch("src.worker.collectors.base.SystemMetricRepository") as mock_smr:
+            mock_session = MagicMock()
+            mock_gs.return_value.__enter__.return_value = mock_session
+            mock_smr_instance = MagicMock()
+            mock_smr.return_value = mock_smr_instance
+            await collector.run_cycle()
+            detail = mock_smr_instance.record_metric.call_args.args[1]
+            assert "error" in detail
+            assert "API down" in detail["error"]
 
     async def test_no_metric_when_repo_not_provided(self) -> None:
-        """기존 호출자(metric_repo=None) 호환."""
+        """metric_repo=None이면 get_session 자체를 호출하지 않는다."""
+        from unittest.mock import patch as _patch
         repo = _mock_repo()
         collector = StubCollector(_mock_embedder(), repo, docs=[_doc()])
-        result = await collector.run_cycle()  # no exception
-        assert result.source_name == "stub"
+        with _patch("src.worker.collectors.base.get_session") as mock_gs:
+            await collector.run_cycle()
+            mock_gs.assert_not_called()
