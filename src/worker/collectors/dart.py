@@ -24,7 +24,7 @@ from src.utils.logger import setup_logger
 from src.worker.collectors.base import BaseCollector
 
 if TYPE_CHECKING:
-    from src.db.repository import NewsChunkRepository
+    from src.db.repository import NewsChunkRepository, SystemMetricRepository
     from src.rag.embedder import Embedder
 
 logger = setup_logger(__name__)
@@ -47,14 +47,16 @@ class DARTCollector(BaseCollector):
         corp_code_to_ticker: dict[str, str],
         client: httpx.AsyncClient | None = None,
         rate_limit_sec: float = 1.0,
+        metric_repo: SystemMetricRepository | None = None,
     ) -> None:
         """
         Args:
             corp_code_to_ticker: DART corp_code(8자리) → 종목코드(6자리) 매핑.
                 관심/추적 종목만 포함하여 일 한도를 통제한다.
             rate_limit_sec: 매 요청 사이 최소 대기 (초). 분당 호출 제한 회피.
+            metric_repo: 사이클 단위 NEWS_COLLECTED 메트릭 기록용 (옵션).
         """
-        super().__init__(embedder=embedder, repo=repo)
+        super().__init__(embedder=embedder, repo=repo, metric_repo=metric_repo)
         self._api_key = api_key
         self._corp_code_to_ticker = corp_code_to_ticker
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(15.0))
