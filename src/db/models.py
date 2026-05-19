@@ -624,8 +624,10 @@ class NewsChunk(Base):
         index=True,
     )
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    corr_source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # 512 = feed_label(영문 prefix) + ':' + 길어질 수 있는 RSS guid/URL 여유분.
+    # DART rcept_no는 12자라 짧지만, RSS guid는 종종 기사 URL을 그대로 사용.
+    source_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    corr_source_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -664,7 +666,7 @@ class NewsCollectionState(Base):
     last_collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    last_cursor: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_cursor: Mapped[str | None] = mapped_column(String(512), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
