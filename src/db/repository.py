@@ -116,6 +116,11 @@ class StockRepository:
         stmt = select(Stock).order_by(Stock.code)
         return list(self._session.execute(stmt).scalars().all())
 
+    def list_watchlist(self) -> list[Stock]:
+        """is_watchlist=True 종목만 조회한다."""
+        stmt = select(Stock).where(Stock.is_watchlist.is_(True)).order_by(Stock.code)
+        return list(self._session.execute(stmt).scalars().all())
+
 
 class OrderRepository:
     """주문 이력 데이터 접근 클래스."""
@@ -593,6 +598,16 @@ class TradeRepository:
             session: SQLAlchemy 세션
         """
         self._session = session
+
+    def distinct_codes_since(self, days: int) -> list[str]:
+        """최근 N일간 거래된 종목코드 unique 리스트."""
+        since = datetime.now(UTC) - timedelta(days=days)
+        stmt = (
+            select(Trade.stock_code)
+            .where(Trade.traded_at >= since)
+            .distinct()
+        )
+        return list(self._session.execute(stmt).scalars().all())
 
     def record_trade(
         self,
