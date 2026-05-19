@@ -6,6 +6,7 @@ pykrx 모듈 자체는 mock — 실제 호출은 통합 테스트에서.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -77,9 +78,9 @@ class TestResolveTargetTickers:
         stock_repo = MagicMock()
         trade_repo = MagicMock()
         stock_repo.list_all.return_value = [
-            MagicMock(code="005930", market="KOSPI"),
-            MagicMock(code="000660", market="KOSPI"),
-            MagicMock(code="035420", market="KOSPI"),
+            SimpleNamespace(code="005930", market="KOSPI", name="삼성전자"),
+            SimpleNamespace(code="000660", market="KOSPI", name="SK하이닉스"),
+            SimpleNamespace(code="035420", market="KOSPI", name="NAVER"),
         ]
         stock_repo.list_watchlist.return_value = [
             MagicMock(code="005930"), MagicMock(code="000660"),
@@ -93,7 +94,9 @@ class TestResolveTargetTickers:
     def test_skips_non_6digit_codes(self) -> None:
         stock_repo = MagicMock()
         trade_repo = MagicMock()
-        stock_repo.list_all.return_value = [MagicMock(code="005930", market="KOSPI")]
+        stock_repo.list_all.return_value = [
+            SimpleNamespace(code="005930", market="KOSPI", name="삼성전자"),
+        ]
         stock_repo.list_watchlist.return_value = [
             MagicMock(code="005930"),
             MagicMock(code="Q760027"),
@@ -110,8 +113,8 @@ class TestResolveTargetTickers:
         stock_repo = MagicMock()
         trade_repo = MagicMock()
         stock_repo.list_all.return_value = [
-            MagicMock(code="005930", market="KOSPI"),
-            MagicMock(code="000660", market="KOSPI"),
+            SimpleNamespace(code="005930", market="KOSPI", name="삼성전자"),
+            SimpleNamespace(code="000660", market="KOSPI", name="SK하이닉스"),
         ]
         stock_repo.list_watchlist.return_value = []
         trade_repo.distinct_codes_since.return_value = ["005930", "114800", "000660"]
@@ -120,13 +123,31 @@ class TestResolveTargetTickers:
         )
         assert tickers == ["000660", "005930"]
 
+    def test_skips_etf_by_name_brand(self) -> None:
+        """KIS 마스터가 KOSPI ST로 분류한 ETF(KODEX/TIGER 등)는 이름 prefix로 skip."""
+        stock_repo = MagicMock()
+        trade_repo = MagicMock()
+        stock_repo.list_all.return_value = [
+            SimpleNamespace(code="005930", market="KOSPI", name="삼성전자"),
+            SimpleNamespace(code="114800", market="KOSPI", name="KODEX 인버스"),
+            SimpleNamespace(code="123456", market="KOSPI", name="TIGER 미국S&P500"),
+        ]
+        stock_repo.list_watchlist.return_value = [
+            SimpleNamespace(code="005930", market="KOSPI", name="삼성전자"),
+        ]
+        trade_repo.distinct_codes_since.return_value = ["114800", "123456"]
+        tickers = resolve_target_tickers(
+            stock_repo=stock_repo, trade_repo=trade_repo, days=30,
+        )
+        assert tickers == ["005930"]
+
     def test_skips_unknown_market(self) -> None:
         """market='UNKNOWN' 은 KIS 마스터에서 분류 못한 종목 — skip."""
         stock_repo = MagicMock()
         trade_repo = MagicMock()
         stock_repo.list_all.return_value = [
-            MagicMock(code="005930", market="KOSPI"),
-            MagicMock(code="274090", market="UNKNOWN"),
+            SimpleNamespace(code="005930", market="KOSPI", name="삼성전자"),
+            SimpleNamespace(code="274090", market="UNKNOWN", name="켄코아에어로스페이스"),
         ]
         stock_repo.list_watchlist.return_value = [
             MagicMock(code="005930"), MagicMock(code="274090"),
