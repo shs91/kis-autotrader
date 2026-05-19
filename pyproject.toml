@@ -25,6 +25,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "opendartreader>=0.2.0",
     "pyahocorasick>=2.0.0",
+    "pykrx>=1.2.8",
 ]
 
 
