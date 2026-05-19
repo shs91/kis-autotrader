@@ -131,8 +131,18 @@ def parse_master_file(path: Path, market: MasterMarket) -> list[MasterRow]:
             if not stock_code:
                 continue
 
-            # part2 offset 계산 (KOSPI/KOSDAQ 동일 — '거래정지'가 시장경고 직전):
-            # 누적: 합산해서 거래정지 시작 offset 도출.
+            # 일반 주식 종목코드는 6자리 숫자(KOSPI/KOSDAQ 동일).
+            # F-prefix(파생/ELW) · 9자리 영문 코드 등은 매매 대상이 아니므로 제외.
+            if not (len(stock_code) == 6 and stock_code.isdigit()):
+                continue
+
+            # 그룹코드 필터 — 'ST'(주식)만 통과. EF=ETF, EN=ETN, EW=ELW, ...
+            # part2의 첫 2자가 그룹코드여야 하나, 실제 마스터 파일은 한글명 패딩
+            # 때문에 part2 시작에 공백 1자가 추가됨(`' ST...'`). lstrip으로 흡수.
+            group_code = part2.lstrip()[:2]
+            if group_code != "ST":
+                continue
+
             offsets = _status_offsets(market)
             halted = part2[offsets[0] : offsets[0] + 1].strip()
             liquidation = part2[offsets[1] : offsets[1] + 1].strip()
@@ -163,11 +173,11 @@ def _status_offsets(market: MasterMarket) -> tuple[int, int, int, int, int, int]
     """part2 안에서 (거래정지, 정리매매, 관리종목, 시장경고, 경고예고, 불성실)
     각 컬럼의 시작 offset.
 
-    KOSPI/KOSDAQ field_specs를 누적 계산한 결과 두 시장 모두 동일 위치(60)에서
-    시작 — 마스터 spec이 같은 후반부 구조를 공유한다.
+    실측: KIS 마스터 파일의 실제 구조에서 part2 시작에 공백 1자 패딩이 들어가
+    KIS field_specs 누적값(60)보다 1자 뒤로 이동(61). 005930(삼성전자) 라인의
+    part2[61]='N' 거래정지, part2[64:66]='00' 시장경고로 검증함.
     """
-    # 둘 다 거래정지가 인덱스 34 또는 등가 위치. 누적 너비 60.
-    base = 60
+    base = 61
     return (
         base,        # 거래정지(1)
         base + 1,    # 정리매매(1)
