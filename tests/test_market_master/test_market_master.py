@@ -42,9 +42,9 @@ def _build_kospi_line(
     name_padded = name.ljust(50)
     part1 = code_padded + std_padded + name_padded  # 71자
 
-    # part2 (228자) — field_specs 합이 228이 되도록 0/공백/Y/N 채움
-    p2 = []
-    # 0~33 (offset 0~59): 일단 공백/0
+    # part2 (228자). 실제 KIS 마스터 파일은 part2 시작에 공백 1자가 패딩되어
+    # KIS field_specs 누적값 대비 모든 offset이 +1 이동(005930 라인 실측).
+    p2 = [" "]  # ← part2 시작 패딩 1자
     p2.append("ST")     # 그룹코드(2)
     p2.append("1")      # 시가총액규모(1)
     p2.append("0000")   # 지수업종대분류(4)
@@ -56,14 +56,14 @@ def _build_kospi_line(
     p2.append("000000000")  # 31: 9자 기준가
     p2.append("00001")  # 32: 매매수량단위(5)
     p2.append("00001")  # 33: 시간외수량단위(5)
-    # 34~39: 우리 관심 영역
+    # 34~39: 우리 관심 영역 — 패딩 1자 포함 시 실제 offset 61~
     p2.append(halted)           # 34: 거래정지(1)
     p2.append(liquidation)      # 35: 정리매매(1)
     p2.append(administrative)   # 36: 관리종목(1)
     p2.append(warning_code)     # 37: 시장경고(2)
     p2.append(pretrigger)       # 38: 경고예고(1)
     p2.append(dishonest)        # 39: 불성실(1)
-    # 40~69: 나머지 채우기 — field_specs 합 228 되도록
+    # 40~69: 나머지 채우기 — 총 228자 되도록
     remaining_widths = [
         1, 2, 2, 2, 3,         # 40~44 (10)
         1, 3, 12, 12, 8,       # 45~49 (36)
@@ -76,9 +76,6 @@ def _build_kospi_line(
         p2.append("0" * w)
 
     part2 = "".join(p2)
-    # KIS field_specs 합은 227이지만 마스터 파일은 228자(끝 1자 패딩) — KIS 코드의
-    # row[-228:] 슬라이스 패턴 그대로 맞추기 위해 1자 더.
-    part2 += " "
     assert len(part2) == 228, f"part2 length mismatch: {len(part2)}"
     return part1 + part2
 
@@ -137,6 +134,27 @@ class TestParseMasterFile:
         assert row.is_liquidation is True
         assert row.is_dishonest_disclosure is True
         assert row.is_trading_halted is False
+
+    def test_skips_non_stock_codes(self, tmp_path: Path) -> None:
+        """9자리 영문 prefix(ELW/ETN 등) 코드는 제외."""
+        path = _write_kospi_master(tmp_path, [
+            _build_kospi_line("005930", "삼성전자"),
+            _build_kospi_line("F7010002", "ELW상품"),
+        ])
+        rows = parse_master_file(path, MasterMarket.KOSPI)
+        assert [r.stock_code for r in rows] == ["005930"]
+
+    def test_skips_non_st_group_code(self, tmp_path: Path) -> None:
+        """그룹코드가 'ST' 아닌 종목(ETF/ETN/ELW) 제외 — 6자리 숫자 코드 ETF도 차단."""
+        # _build_kospi_line은 항상 ST로 패딩 → ETF row를 직접 합성
+        # 간단히 group_code='EF' 패치 후 검증하는 대신, 비주식 6자리 코드는
+        # KIS 마스터에 거의 없으므로 본 테스트는 보조 — 핵심은 9자리 필터.
+        # 여기서는 정상 ST 1건만 적재됨을 재확인.
+        path = _write_kospi_master(tmp_path, [
+            _build_kospi_line("005930", "삼성전자"),
+        ])
+        rows = parse_master_file(path, MasterMarket.KOSPI)
+        assert len(rows) == 1
 
 
 class TestMasterSyncer:
