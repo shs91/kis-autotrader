@@ -73,18 +73,21 @@ def resolve_target_tickers(
 
 
 def _nearest_krx_business_day(reference: date, lookback_days: int = 2) -> date:
-    """pykrx의 영업일 helper로 reference에서 lookback_days 만큼 과거 영업일 반환.
+    """reference에서 lookback_days만큼 과거의 가장 가까운 KRX 영업일.
 
-    KRX는 토/일/한국 공휴일 휴장. pykrx가 자체 영업일 캘린더를 보유하므로 활용.
+    KRX는 토/일/한국 공휴일 휴장. 우리 시스템의 `src/scheduler/holidays.py`
+    (holidays.json 기반)를 활용해 공휴일도 보정한다.
+
+    pykrx 내장 helper는 KRX 사이트를 호출하므로 일요일/공휴일에 fail —
+    의존 안 함.
     """
-    stock_mod = _get_pykrx_stock()
-    # pykrx의 get_nearest_business_day_in_a_week는 가장 가까운 (과거) 영업일.
-    # lookback_days만큼 calendar로 거슬러간 뒤 영업일 보정.
+    from src.scheduler.holidays import is_market_closed
+
     candidate = reference - timedelta(days=lookback_days)
-    bd_str: str = stock_mod.get_nearest_business_day_in_a_week(
-        candidate.strftime("%Y%m%d"),
-    )
-    return datetime.strptime(bd_str, "%Y%m%d").date()  # noqa: DTZ007
+    # 토/일/공휴일이면 평일로 거슬러 이동
+    while is_market_closed(candidate):
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def build_short_chunk_text(

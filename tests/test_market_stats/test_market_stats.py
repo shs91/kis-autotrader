@@ -105,6 +105,22 @@ class TestResolveTargetTickers:
         assert tickers == ["005930"]
 
 
+class TestNearestBusinessDay:
+    def test_weekday_returns_same(self) -> None:
+        from src.market_stats import _nearest_krx_business_day
+        # 2026-05-19 = 화요일
+        result = _nearest_krx_business_day(date(2026, 5, 21), lookback_days=2)
+        # 5/21(목) - 2 = 5/19(화) → 평일이라 그대로
+        assert result == date(2026, 5, 19)
+
+    def test_sunday_rolls_back_to_friday(self) -> None:
+        from src.market_stats import _nearest_krx_business_day
+        # 2026-05-19(화) - 2 = 5/17(일) → 5/15(금)으로 보정
+        result = _nearest_krx_business_day(date(2026, 5, 19), lookback_days=2)
+        assert result == date(2026, 5, 15)
+        assert result.weekday() == 4  # 금요일
+
+
 @pytest.mark.parametrize("kind", ["short", "investor"])
 class TestCollectorIntegration:
     def test_collect_inserts_chunks(self, kind: str) -> None:
