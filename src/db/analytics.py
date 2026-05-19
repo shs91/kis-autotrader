@@ -1158,3 +1158,68 @@ def get_recurrence_risk(
         "risk_files": risk_files,
         "risk_components": risk_components,
     }
+
+
+def get_news_quality_stats(
+    session: Session, target_date: date,
+) -> dict[str, Any]:
+    """일별 source_type/provider별 수집 건수, 평균 importance, 임베딩 latency p95.
+
+    Returns:
+        {
+          "date": "2026-05-19",
+          "by_source": [{source_type, provider, category, chunks, avg_importance}, ...],
+          "embedding": {"avg_ms": ..., "p95_ms": ..., "cycles": ...},
+        }
+    """
+    from sqlalchemy import text as _text
+
+    day_start, day_end = _day_range(target_date)
+
+    by_source_rows = session.execute(_text(
+        "SELECT source_type::text AS source_type, "
+        "       COALESCE(chunk_metadata->>'provider','-') AS provider, "
+        "       COALESCE(chunk_metadata->>'category','-') AS category, "
+        "       COUNT(*) AS chunks, "
+        "       AVG(importance) AS avg_importance "
+        "FROM news_chunks "
+        "WHERE fetched_at >= :start AND fetched_at < :end "
+        "GROUP BY source_type, provider, category "
+        "ORDER BY chunks DESC"
+    ), {"start": day_start, "end": day_end}).mappings().all()
+
+    embed_row = session.execute(_text(
+        "SELECT AVG((detail->>'elapsed_ms')::numeric) AS avg_ms, "
+        "       percentile_cont(0.95) WITHIN GROUP ("
+        "         ORDER BY (detail->>'elapsed_ms')::numeric"
+        "       ) AS p95_ms, "
+        "       COUNT(*) AS cycles "
+        "FROM system_metrics "
+        "WHERE metric_type='NEWS_COLLECTED' "
+        "  AND recorded_at >= :start AND recorded_at < :end "
+        "  AND detail->>'elapsed_ms' ~ '^[0-9]+$'"
+    ), {"start": day_start, "end": day_end}).mappings().first()
+
+    return {
+        "date": target_date.isoformat(),
+        "by_source": [dict(r) for r in by_source_rows],
+        "embedding": dict(embed_row) if embed_row else {},
+    }
+
+
+def get_news_coverage_by_ticker(
+    session: Session, days: int = 7,
+) -> list[dict[str, Any]]:
+    """종목별 최근 N일 뉴스 chunk 수 (정렬: 많은 순)."""
+    from sqlalchemy import text as _text
+
+    rows = session.execute(_text(
+        "SELECT ticker, COUNT(*) AS chunks, "
+        "       MAX(event_time)::text AS last_event_time "
+        "FROM news_chunks "
+        "WHERE fetched_at > NOW() - make_interval(days := :days) "
+        "GROUP BY ticker "
+        "ORDER BY chunks DESC "
+        "LIMIT 100"
+    ), {"days": days}).mappings().all()
+    return [dict(r) for r in rows]

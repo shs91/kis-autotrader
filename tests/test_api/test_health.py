@@ -38,6 +38,20 @@ class TestBuildHealthResponse:
         assert response["components"]["scheduler"]["status"] == "stopped"
         assert response["components"]["scheduler"]["running"] is False
 
+    def test_includes_news_collector_section(self) -> None:
+        """news_collector 상태가 components에 포함된다."""
+        response = _build_health_response(
+            start_time=0.0,
+            scheduler_running=True,
+            cycle_count=1,
+            daily_api_count=0,
+        )
+        news = response["components"].get("news_collector")
+        assert news is not None
+        # DB 미연결 환경이면 keys만 검증
+        for key in ("last_fetched_at", "chunks_last_24h", "embedding_p95_ms"):
+            assert key in news
+
 
 class TestHealthServer:
     """HealthServer 통합 테스트."""

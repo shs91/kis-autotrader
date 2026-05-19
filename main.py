@@ -499,6 +499,61 @@ def _register_bot_commands(
         except ValueError:
             return "사용법: /setlimit 숫자 (예: /setlimit 50)"
 
+    async def cmd_news_stats(_args: str) -> str:
+        """오늘 뉴스/공시 수집 현황 한 줄 요약."""
+        from datetime import UTC  # noqa: PLC0415
+        from datetime import datetime as _dt
+
+        from src.db.analytics import get_news_quality_stats  # noqa: PLC0415
+        from src.db.session import get_session as _get_session  # noqa: PLC0415
+
+        today = _dt.now(UTC).date()
+        try:
+            with _get_session() as session:
+                stats = get_news_quality_stats(session, today)
+        except Exception as e:  # noqa: BLE001
+            return f"news_stats 조회 실패: {str(e)[:120]}"
+        by_source = stats.get("by_source") or []
+        total = sum(int(r.get("chunks") or 0) for r in by_source)
+        embed = stats.get("embedding") or {}
+        p95 = embed.get("p95_ms")
+        cycles = embed.get("cycles")
+        lines = [
+            f"<b>[뉴스 수집]</b> {today.isoformat()}",
+            f"총 chunks: {total}",
+            f"사이클: {cycles or 0} / 임베딩 p95: {int(p95) if p95 else '-'}ms",
+        ]
+        # provider/category top 5
+        for r in by_source[:5]:
+            lines.append(
+                f"- {r.get('source_type')}/{r.get('provider')}/"
+                f"{r.get('category')}: {r.get('chunks')}",
+            )
+        return "\n".join(lines)
+
+    async def cmd_news_coverage(args: str) -> str:
+        """종목별 최근 N일 chunk 수 (기본 7일, top 10)."""
+        from src.db.analytics import get_news_coverage_by_ticker  # noqa: PLC0415
+        from src.db.session import get_session as _get_session  # noqa: PLC0415
+
+        days = 7
+        if args.strip():
+            try:
+                days = int(args.strip().split()[0])
+            except ValueError:
+                pass
+        try:
+            with _get_session() as session:
+                rows = get_news_coverage_by_ticker(session, days=days)
+        except Exception as e:  # noqa: BLE001
+            return f"news_coverage 조회 실패: {str(e)[:120]}"
+        if not rows:
+            return f"최근 {days}일 뉴스 chunk 없음"
+        lines = [f"<b>[뉴스 커버리지]</b> 최근 {days}일 top 10"]
+        for r in rows[:10]:
+            lines.append(f"- {r['ticker']}: {r['chunks']}건")
+        return "\n".join(lines)
+
     async def cmd_help(_args: str) -> str:
         """사용 가능한 명령을 반환한다."""
         halted = "중단" if engine._risk.is_portfolio_halted else "운영"
@@ -522,6 +577,8 @@ def _register_bot_commands(
             "/run_implement [--dry|--force] — 자동 구현 사이클 즉시 발동 (--dry: 가드만 확인)\n"
             "/status_implement — 자동 구현 사이클 + 가드 상태 조회\n"
             "/pause_implement [resume] — 자동 구현 일시 중단/재개\n"
+            "/news_stats — 오늘 뉴스/공시 수집 현황\n"
+            "/news_coverage [일수] — 종목별 뉴스 chunk top 10 (기본 7일)\n"
             "/help — 명령어 목록"
         )
 
@@ -543,6 +600,8 @@ def _register_bot_commands(
     bot.register("run_implement", cmd_run_implement)
     bot.register("status_implement", cmd_status_implement)
     bot.register("pause_implement", cmd_pause_implement)
+    bot.register("news_stats", cmd_news_stats)
+    bot.register("news_coverage", cmd_news_coverage)
     bot.register("help", cmd_help)
 
 
