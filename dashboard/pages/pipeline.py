@@ -2,23 +2,33 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+import sys
+from pathlib import Path
 
-import pandas as pd
-import streamlit as st
-from sqlalchemy import func, select
+# Streamlit이 pages/*.py를 별도 컨텍스트로 실행 — sys.path[0]은 이 파일의
+# 디렉토리. src.* import를 위해 프로젝트 루트를 path에 추가.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.db.analytics import (
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+import pandas as pd  # noqa: E402
+import streamlit as st  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
+
+from src.db.analytics import (  # noqa: E402
     get_prediction_calibration,
     get_recurrence_risk,
 )
-from src.db.models import (
+from src.db.models import (  # noqa: E402
     ImplementationLog,
     Proposal,
     ProposalState,
     TrajectoryEntry,
+    TrajectoryStep,
 )
-from src.db.session import get_session
+from src.db.session import get_session  # noqa: E402
 
 st.set_page_config(page_title="Pipeline KPI", layout="wide")
 st.title("🛠 하네스 사이클 KPI")
@@ -55,7 +65,7 @@ with get_session() as session:
     st.subheader("MTTR (mean time to revert)")
     rollback_rows = list(session.execute(
         select(TrajectoryEntry).where(
-            TrajectoryEntry.step.in_(["rollback"]),
+            TrajectoryEntry.step.in_([TrajectoryStep.ROLLBACK]),
             TrajectoryEntry.started_at >= since_30d,
         )
     ).scalars().all())
