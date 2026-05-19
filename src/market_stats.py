@@ -212,16 +212,20 @@ class MarketStatsCollector:
         if self._metric_repo is None:
             return
         try:
-            self._metric_repo.record_metric(
-                "NEWS_COLLECTED",
-                {
-                    "source": "pykrx",
-                    "documents": len(self._tickers),
-                    "chunks_inserted": inserted,
-                    "elapsed_ms": elapsed_ms,
-                    "target_date": self._target_date.isoformat(),
-                },
-            )
+            # 별도 session으로 commit 보장
+            from src.db.repository import SystemMetricRepository
+            from src.db.session import get_session
+            with get_session() as session:
+                SystemMetricRepository(session).record_metric(
+                    "NEWS_COLLECTED",
+                    {
+                        "source": "pykrx",
+                        "documents": len(self._tickers),
+                        "chunks_inserted": inserted,
+                        "elapsed_ms": elapsed_ms,
+                        "target_date": self._target_date.isoformat(),
+                    },
+                )
         except Exception:  # noqa: BLE001
             logger.exception("NEWS_COLLECTED 메트릭 기록 실패 (pykrx)")
 

@@ -14,11 +14,13 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from src.db.models import NewsChunk
+from src.db.repository import SystemMetricRepository
+from src.db.session import get_session
 from src.rag.chunker import Chunk, RawDocument, get_chunker
 from src.utils.logger import setup_logger
 
 if TYPE_CHECKING:
-    from src.db.repository import NewsChunkRepository, SystemMetricRepository
+    from src.db.repository import NewsChunkRepository
     from src.rag.embedder import Embedder
 
 logger = setup_logger(__name__)
@@ -128,9 +130,12 @@ class BaseCollector(ABC):
     def _record_metric(
         self, docs: int, inserted: int, elapsed_ms: int, error: str | None = None,
     ) -> None:
-        """사이클 종료 시 NEWS_COLLECTED 메트릭 1건 기록 (metric_repo 주입 시).
+        """사이클 종료 시 NEWS_COLLECTED 메트릭 1건 기록.
 
-        실패는 사이클 결과에 영향 주지 않도록 swallow.
+        worker가 들고 있는 장기 session 대신 별도 get_session() 컨텍스트로 매
+        사이클마다 commit 보장. (worker의 session은 무한 루프라 컨텍스트 종료
+        시점이 없어 metric flush가 commit되지 않는다.) metric_repo는 enable
+        flag 역할만 한다.
         """
         if self._metric_repo is None:
             return
@@ -143,7 +148,8 @@ class BaseCollector(ABC):
         if error is not None:
             detail["error"] = error
         try:
-            self._metric_repo.record_metric("NEWS_COLLECTED", detail)
+            with get_session() as session:
+                SystemMetricRepository(session).record_metric("NEWS_COLLECTED", detail)
         except Exception:  # noqa: BLE001 — 메트릭 기록 실패가 사이클 결과 막지 않음
             logger.exception("NEWS_COLLECTED 메트릭 기록 실패 (%s)", self.source_name)
 
