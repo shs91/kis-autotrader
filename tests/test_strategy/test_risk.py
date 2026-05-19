@@ -227,8 +227,9 @@ class TestCheckBuyGates:
     """RiskManager.check_buy_gates 테스트 (proposal 2026-05-18)."""
 
     def setup_method(self) -> None:
-        """테스트 설정."""
+        """테스트 설정 — 시간 의존성 격리(MARKET_CLOSE_GUARD 기본 False)."""
         self.rm = RiskManager()
+        self.rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
 
     def test_all_gates_pass_returns_none(self) -> None:
         """모든 게이트 통과 시 None을 반환한다."""
@@ -277,9 +278,8 @@ class TestCheckBuyGates:
         )
         assert self.rm.check_buy_gates(signal, balance=50_000.0) == "INSUFFICIENT_CASH"
 
-    def test_risk_halted_returns_risk_gate(self) -> None:
-        """포트폴리오 halt 상태에서 'RISK_GATE'를 반환한다."""
-        # 연패 누적으로 halt 트립
+    def test_consecutive_losses_halt_returns_specific_code(self) -> None:
+        """연패 누적으로 halt된 경우 'MAX_CONSECUTIVE_LOSSES'를 반환한다."""
         rm = RiskManager()
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
@@ -289,17 +289,87 @@ class TestCheckBuyGates:
             confidence=0.8,
             target_price=50_000.0,
         )
-        assert rm.check_buy_gates(signal, balance=1_000_000.0) == "RISK_GATE"
+        assert (
+            rm.check_buy_gates(signal, balance=1_000_000.0)
+            == "MAX_CONSECUTIVE_LOSSES"
+        )
 
-    def test_risk_gate_takes_priority_over_other_gates(self) -> None:
+    def test_daily_drawdown_halt_returns_specific_code(self) -> None:
+        """일일 MDD로 halt된 경우 'MAX_DAILY_DRAWDOWN'을 반환한다."""
+        rm = RiskManager()
+        # 피크 만들기 → MDD 임계치 이상 하락
+        rm.record_trade_result(+100_000)  # peak +100k
+        rm.record_trade_result(-50_000)   # 누적 +50k, drawdown 50% (5% 한도 초과)
+        assert rm.is_portfolio_halted is True
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            target_price=50_000.0,
+        )
+        assert (
+            rm.check_buy_gates(signal, balance=1_000_000.0)
+            == "MAX_DAILY_DRAWDOWN"
+        )
+
+    def test_halt_takes_priority_over_other_gates(self) -> None:
         """포트폴리오 halt가 최우선 게이트로 반환된다."""
         rm = RiskManager()
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
-        # 낮은 신뢰도 + 0 잔고이지만 RISK_GATE가 먼저 트립
+        # 낮은 신뢰도 + 0 잔고이지만 halt가 먼저 트립
         signal = Signal(
             signal_type=SignalType.BUY,
             confidence=0.001,
             target_price=10_000.0,
         )
-        assert rm.check_buy_gates(signal, balance=0.0) == "RISK_GATE"
+        assert (
+            rm.check_buy_gates(signal, balance=0.0)
+            == "MAX_CONSECUTIVE_LOSSES"
+        )
+
+    def test_market_close_returns_market_close_guard(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """장 마감 임박 시 'MARKET_CLOSE_GUARD'를 반환한다."""
+        rm = RiskManager()
+        # is_near_market_close를 True로 모킹
+        monkeypatch.setattr(rm, "is_near_market_close", lambda *a, **kw: True)
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            target_price=50_000.0,
+        )
+        assert (
+            rm.check_buy_gates(signal, balance=1_000_000.0)
+            == "MARKET_CLOSE_GUARD"
+        )
+
+    def test_market_close_priority_after_halt_before_cash(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """우선순위: halt > MARKET_CLOSE_GUARD > INSUFFICIENT_CASH > LOW_CONFIDENCE."""
+        rm = RiskManager()
+        monkeypatch.setattr(rm, "is_near_market_close", lambda *a, **kw: True)
+        # 마감 임박 + 잔고 0 — MARKET_CLOSE_GUARD가 우선
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.001,
+            target_price=10_000.0,
+        )
+        assert (
+            rm.check_buy_gates(signal, balance=0.0)
+            == "MARKET_CLOSE_GUARD"
+        )
+
+    def test_reset_daily_risk_clears_halt_reason(self) -> None:
+        """reset_daily_risk가 halt_reason도 초기화한다."""
+        for _ in range(self.rm._max_consecutive_losses):
+            self.rm.record_trade_result(-10_000)
+        assert self.rm.is_portfolio_halted is True
+        self.rm.reset_daily_risk()
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            confidence=0.8,
+            target_price=50_000.0,
+        )
+        assert self.rm.check_buy_gates(signal, balance=1_000_000.0) is None

@@ -66,6 +66,8 @@ class RiskManager:
         self._daily_cumulative_pnl: int = 0
         self._consecutive_losses: int = 0
         self._portfolio_halted: bool = False
+        # halt 발동 사유 — BUY_REJECT 메트릭의 reason 코드 분류용
+        self._halt_reason: str | None = None
 
     def record_trade_result(self, profit_loss_amount: int) -> None:
         """매도 결과를 기록하여 포트폴리오 리스크를 업데이트한다.
@@ -90,6 +92,8 @@ class RiskManager:
             drawdown_pct = drawdown / self._daily_peak_pnl
             if drawdown_pct >= self._max_daily_drawdown:
                 self._portfolio_halted = True
+                if self._halt_reason is None:
+                    self._halt_reason = "MAX_DAILY_DRAWDOWN"
                 logger.warning(
                     "포트폴리오 MDD 한도 도달: %.1f%% >= %.1f%% (피크 %d → 현재 %d)",
                     drawdown_pct * 100,
@@ -101,6 +105,8 @@ class RiskManager:
         # 연패 체크
         if self._consecutive_losses >= self._max_consecutive_losses:
             self._portfolio_halted = True
+            if self._halt_reason is None:
+                self._halt_reason = "MAX_CONSECUTIVE_LOSSES"
             logger.warning(
                 "연속 손실 한도 도달: %d연패 >= %d",
                 self._consecutive_losses,
@@ -128,6 +134,7 @@ class RiskManager:
         self._daily_cumulative_pnl = 0
         self._consecutive_losses = 0
         self._portfolio_halted = False
+        self._halt_reason = None
 
     def is_near_market_close(self, now: datetime | None = None) -> bool:
         """장 마감 임박 여부를 판단한다.
@@ -293,26 +300,27 @@ class RiskManager:
 
         return should_profit
 
-    # ── 매수 게이트 진단 (proposal 2026-05-18) ────────────────
+    # ── 매수 게이트 진단 (proposal 2026-05-18 + 사유 코드 정밀화) ──
     #
-    # ``check_buy_gates``는 ``validate_order``의 검사 로직과 동일한 의사결정을
-    # 수행하되, 거절 시 거절 사유 코드(``LOW_CONFIDENCE``/``INSUFFICIENT_CASH``
-    # /``RISK_GATE`` 등)를 반환하여 호출자가 ``BUY_REJECT`` 메트릭의 reason
-    # 필드로 매핑할 수 있도록 한다. ``validate_order``는 하위 호환을 위해
-    # 그대로 유지한다(시그니처·반환 타입 비파괴).
+    # ``check_buy_gates``는 매수 시그널에 대한 모든 게이트를 평가해 첫번째로
+    # 트립된 사유 코드를 반환한다. 호출자는 이 코드를 ``BUY_REJECT`` 메트릭
+    # ``reason`` 필드에 그대로 적재한다. ``validate_order``의 책임을 흡수했고,
+    # validate_order는 deprecate (하위 호환 시그니처만 유지).
     #
     # 반환 규약:
     # - ``None``   : 모든 게이트 통과 (매수 진행 가능)
     # - 문자열     : 첫번째로 트립된 게이트 사유 코드
     #
-    # 게이트 평가 순서:
-    #   1) ``RISK_GATE``       (포트폴리오 halted: MDD/연패)
-    #   2) ``LOW_CONFIDENCE``  (signal.confidence < min_confidence)
-    #   3) ``INSUFFICIENT_CASH`` (balance <= 0 or target_price > balance)
+    # 게이트 평가 순서 (절대성 강한 것부터):
+    #   1) ``MAX_CONSECUTIVE_LOSSES`` (포트폴리오 halt: 연패 한도)
+    #      ``MAX_DAILY_DRAWDOWN``     (포트폴리오 halt: MDD 한도)
+    #   2) ``MARKET_CLOSE_GUARD``     (장 마감 임박 — 시간 절대 차단)
+    #   3) ``INSUFFICIENT_CASH``      (balance <= 0 또는 target_price > balance)
+    #   4) ``LOW_CONFIDENCE``         (signal.confidence < min_confidence)
     #
-    # 본 메서드는 BUY 시그널에 한해서만 사유를 반환하고, HOLD/SELL 시그널이나
-    # 장 마감 임박 차단 같이 BUY 게이트 진단 범위 밖의 사유는 ``None``을 반환한다.
-    # 호출자(engine)는 BUY 시그널 경로에 진입한 직후 본 메서드를 호출해야 한다.
+    # BUY 시그널에 한해서만 사유를 반환하고, HOLD/SELL 시그널은 None.
+    # 호출자(engine)는 BUY 시그널 경로에서 본 메서드를 호출하고 None일 때만
+    # 매수를 진행한다.
 
     def check_buy_gates(
         self,
@@ -320,9 +328,6 @@ class RiskManager:
         balance: float,
     ) -> str | None:
         """매수 시그널에 대해 게이트 검증을 수행하고 거절 사유 코드를 반환한다.
-
-        ``validate_order``를 대체하지 않으며, 추가 진단용 메서드로
-        동작한다 (하위 호환 보장).
 
         Args:
             signal: 매매 시그널 (signal_type=BUY 가정).
@@ -332,25 +337,30 @@ class RiskManager:
             거절 사유 코드 문자열 또는 None(모든 게이트 통과).
             반환 가능한 코드:
 
-            - ``"RISK_GATE"``         : 포트폴리오 리스크 차단(연패/MDD)
-            - ``"LOW_CONFIDENCE"``    : ``signal.confidence < min_confidence``
-            - ``"INSUFFICIENT_CASH"`` : 잔고 부족
+            - ``"MAX_CONSECUTIVE_LOSSES"`` : 연패 한도 도달로 halt
+            - ``"MAX_DAILY_DRAWDOWN"``     : MDD 한도 도달로 halt
+            - ``"MARKET_CLOSE_GUARD"``     : 장 마감 임박 (신규 매수 차단)
+            - ``"INSUFFICIENT_CASH"``      : 잔고 부족
+            - ``"LOW_CONFIDENCE"``         : 시그널 신뢰도 미달
         """
-        # BUY 시그널이 아니면 본 메서드의 진단 대상이 아님
         if signal.signal_type != SignalType.BUY:
             return None
 
-        # 1) 포트폴리오 리스크 게이트 (MDD/연패)
+        # 1) 포트폴리오 리스크 halt — 구체 사유 코드로 매핑
         if self._portfolio_halted:
-            return "RISK_GATE"
+            return self._halt_reason or "MAX_CONSECUTIVE_LOSSES"
 
-        # 2) 잔고 부족 — RiskLimitError 대신 사유 코드로 매핑
+        # 2) 장 마감 임박 (시간 절대 차단)
+        if self.is_near_market_close():
+            return "MARKET_CLOSE_GUARD"
+
+        # 3) 잔고 부족
         if balance <= 0:
             return "INSUFFICIENT_CASH"
         if signal.target_price is not None and signal.target_price > balance:
             return "INSUFFICIENT_CASH"
 
-        # 3) 저신뢰도
+        # 4) 저신뢰도
         if signal.confidence < self._min_confidence:
             return "LOW_CONFIDENCE"
 
