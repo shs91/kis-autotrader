@@ -42,7 +42,7 @@ def _get_pykrx_stock() -> Any:
     """pykrx.stock 모듈을 lazy-load. 테스트는 이 함수를 patch한다."""
     global _PYKRX_STOCK  # noqa: PLW0603
     if _PYKRX_STOCK is None:
-        from pykrx import stock as _stock  # type: ignore[import-not-found]
+        from pykrx import stock as _stock  # type: ignore[import-untyped]
         _PYKRX_STOCK = _stock
     return _PYKRX_STOCK
 
@@ -59,10 +59,32 @@ def resolve_target_tickers(
     trade_repo: TradeRepository,
     days: int = 30,
 ) -> list[str]:
-    """watchlist ∪ 최근 N일 거래 종목 (정렬된 unique 리스트)."""
+    """watchlist ∪ 최근 N일 거래 종목 (정렬된 unique 리스트).
+
+    pykrx는 일반 주식(6자리 숫자) 코드만 처리할 수 있으므로 ETF/ETN/ELW/파생
+    코드는 제외한다. 과거 KIS sync에서 비정상 코드가 stocks에 적재됐을 수
+    있어 방어적 필터.
+    """
+    import re
     watchlist = [s.code for s in stock_repo.list_watchlist()]
     recent = trade_repo.distinct_codes_since(days)
-    return sorted(set(watchlist) | set(recent))
+    all_codes = set(watchlist) | set(recent)
+    return sorted(c for c in all_codes if re.fullmatch(r"\d{6}", c))
+
+
+def _nearest_krx_business_day(reference: date, lookback_days: int = 2) -> date:
+    """pykrx의 영업일 helper로 reference에서 lookback_days 만큼 과거 영업일 반환.
+
+    KRX는 토/일/한국 공휴일 휴장. pykrx가 자체 영업일 캘린더를 보유하므로 활용.
+    """
+    stock_mod = _get_pykrx_stock()
+    # pykrx의 get_nearest_business_day_in_a_week는 가장 가까운 (과거) 영업일.
+    # lookback_days만큼 calendar로 거슬러간 뒤 영업일 보정.
+    candidate = reference - timedelta(days=lookback_days)
+    bd_str: str = stock_mod.get_nearest_business_day_in_a_week(
+        candidate.strftime("%Y%m%d"),
+    )
+    return datetime.strptime(bd_str, "%Y%m%d").date()  # noqa: DTZ007
 
 
 def build_short_chunk_text(
