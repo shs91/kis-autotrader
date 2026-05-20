@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-05-20] 뉴스 청크 적재 SAVEPOINT 누적 → PG 락 테이블 고갈 수정 + 시각 의존 테스트 결함 정리 (v0.2.11) — 🔴 핫픽스
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/db/repository.py: `NewsChunkRepository.insert_chunks`를 "배치 내 (ticker,content_hash) 중복 제거 → 단일 SELECT로 기존분 필터 → 1회 add_all/flush"로 재작성. 정상 경로의 행별 `begin_nested()`(SAVEPOINT)를 제거하고 동시 적재 레이스 시에만 행별 폴백.
+  - tests/test_db/test_news_chunk_repo.py: 배치 내 중복 dedup / 대량(50건) 중복 재적재 0건 테스트 3건 추가.
+  - tests/test_strategy/test_risk.py: `TestShouldTakeProfit`·`TestValidateOrder` setup_method에 `is_near_market_close=False` 시각 격리 추가(파일 내 기존 컨벤션 일치). 프로덕션 로직 무변경.
+  - tests/test_analytics.py → tests/test_analytics_queries.py: `tests/test_analytics/` 디렉토리와의 import 이름 충돌(전체 수집 차단) 해소 위해 리네임. `test_get_optimal_risk_params` lookback을 오늘 기준 산출로 바꿔 고정 과거 seed의 시각 의존 제거.
+- 배경: 2026-05-20 15:33 KST 장 마감 직후 뉴스 수집기가 news_chunks에 대량 중복 공시를 INSERT하며 행별 SAVEPOINT 서브트랜잭션 락이 누적 → kis-postgres 락 테이블(6400 = max_locks_per_transaction 64 × max_connections 100) 고갈, `out of shared memory`(31,628회). 같은 DB를 공유하는 자동매매의 15:40 장 마감 결산이 worker 큐 등록(calendar_event/telegram_notify/daily_summary/sync_portfolio/daily_performance) 전부 실패 → 캘린더 매매결과·텔레그램 일일결산 누락. 복구는 `docker restart kis-postgres` + `engine.post_market()` 재실행 보정으로 처리. 충돌 해제 과정에서 시각 의존 테스트 결함(risk 4건, analytics 1건)이 함께 드러남.
+- 영향: 대량 중복 공시에도 정상 경로 SAVEPOINT 0건 → 락 테이블 고갈 및 자동매매 결산 동반 차단 재발 차단. 전체 테스트 수집 복구(이전 collection interrupted) + 시각 의존 결함 제거로 야간/장 마감 후 실행에도 안정 통과.
+- 검증 결과: pytest 전체 815 passed (이전 collection 단계 interrupted) | ruff ✅ All checks passed | mypy src/db/repository.py 새 에러 0 (사전 dict type-arg 부채 14건 무관).
+- 비고: 운영자 액션 — 수정 코드 반영을 위해 `com.kis.news-collector` 재시작 필요(완료). 단일 kis-postgres를 전 서비스가 공유하는 구조라 한 서비스의 락 고갈이 결산까지 전파됨.
+
+---
+
 ## [2026-05-19] CircuitBreaker `is_open` lazy reset — engine 자가 복구 결함 수정 (v0.2.10) — 🔴 핫픽스
 - 카테고리: bug_fix
 - 변경 파일:
@@ -50,18 +64,6 @@
 - 배경: 텔레그램에서 `/help` 입력 시 하네스 관련 명령 3개가 표시되지 않음. register는 정상이라 명령 자체는 동작했으나 사용자가 존재 자체를 알기 어려움.
 - 영향: 사용자가 `/help`만 보고도 하네스 자동 구현 명령(`/run_implement`, `/status_implement`, `/pause_implement`)을 발견·사용 가능.
 - 검증 결과: ruff ✅ All checks passed | mypy ✅ (변경 라인 신규 에러 0, 기존 3건은 무관) | 재시작 후 헬스 ok 확인.
-
----
-
-## [2026-05-16] 일봉 조회 엔드포인트 교체 — `inquire-daily-itemchartprice`로 60건 데이터 실제 확보 + MACD 정상 가동 (v0.2.6) — 🔴 핫픽스
-- 제안서: docs/proposals/2026-05-16_daily-quote-endpoint-switch-itemchartprice.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/api/quote.py: `DAILY_PRICE_PATH` → `/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice`, `TR_ID_DAILY_PRICE` → `FHKST03010100`. `get_daily_price()` 본문 재작성 — 페이지네이션 루프 제거, 1차 호출(`lookback_days * 2`/최소 60일 윈도우) + 부족 시 fallback 1회 한정. 응답 파싱은 `output2 → output` fallback으로 신·구 엔드포인트 모두 호환.
-  - tests/test_api/test_quote.py: 기존 4개 케이스를 `output2` 응답으로 재작성, 신규 4건 추가(`test_get_daily_price_uses_itemchartprice_endpoint`, `test_get_daily_price_single_call_returns_60_items`, `test_get_daily_price_handles_100_items`, `test_get_daily_price_fallback_second_call`). 미사용 import 정리.
-- 배경: W19~W20 기간 동안 `series_len`이 30으로 고정되어 MACD가 영구 비활성화됨. 페이지네이션 코드는 이미 적용됐으나 `inquire-daily-price` 엔드포인트가 일자 파라미터를 무시하여 항상 동일 30건만 반환. 진짜 차단 지점은 엔드포인트 선택이었다.
-- 영향: 1회 호출로 최대 100건 일봉 확보. `series_len`이 `ma_long_period + 2` 이상으로 회복되어 MACD/볼린저 등 장기 지표 정상 가동. KIS API 호출량도 페이지네이션 4~5회 → 1회로 감소(rate-limit 안전 마진 확보).
-- 검증 결과: pytest `tests/test_api/test_quote.py` ✅ 11/11 (신규 4건 포함) | 전체 회귀 ✅ 신규 회귀 0건 (6 pre-existing fail baseline 동일) | mypy 변경 라인 에러 없음 | ruff 위반 2건 개선(F401), 신규 위반 0.
 
 ---
 
