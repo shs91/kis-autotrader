@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1358,8 +1358,10 @@ class NewsChunkRepository:
     """뉴스/공시 청크 + 수집 상태 접근 클래스.
 
     중복 적재는 (ticker, content_hash) unique 제약 위반으로 차단된다.
-    `insert_chunks`는 dialect-portable한 per-chunk try/except 패턴을 사용한다 —
-    PG의 ON CONFLICT DO NOTHING과 의미 동등하며 SQLite 테스트에서도 동작.
+    `insert_chunks`는 배치 내 중복 제거 → 단일 SELECT로 기존분 필터 →
+    한 번의 add_all/flush 순으로 동작한다. 정상 경로에서 행별 SAVEPOINT를
+    만들지 않으므로 장 마감 시 대량 중복 공시가 들어와도 PG 락 테이블
+    (서브트랜잭션 락)을 고갈시키지 않는다. dialect-portable(PG/SQLite).
     """
 
     def __init__(self, session: Session) -> None:
@@ -1372,17 +1374,46 @@ class NewsChunkRepository:
         """
         if not chunks:
             return 0
-        inserted = 0
+
+        # 1) 배치 내 (ticker, content_hash) 중복 제거 — 첫 항목 유지
+        unique: dict[tuple[str, str], NewsChunk] = {}
         for chunk in chunks:
-            try:
-                with self._session.begin_nested():
-                    self._session.add(chunk)
-                    self._session.flush()
-                inserted += 1
-            except IntegrityError:
-                # SAVEPOINT rollback이 chunk를 session에서 자동 제거한다.
-                pass
-        return inserted
+            unique.setdefault((chunk.ticker, chunk.content_hash), chunk)
+
+        # 2) 이미 DB에 존재하는 (ticker, content_hash)를 단일 쿼리로 제외
+        keys = list(unique.keys())
+        existing: set[tuple[str, str]] = set(
+            self._session.execute(
+                select(NewsChunk.ticker, NewsChunk.content_hash).where(
+                    tuple_(NewsChunk.ticker, NewsChunk.content_hash).in_(keys)
+                )
+            )
+            .tuples()
+            .all()
+        )
+        to_insert = [chunk for key, chunk in unique.items() if key not in existing]
+        if not to_insert:
+            return 0
+
+        # 3) 단일 add_all + flush. SAVEPOINT는 동시 적재 레이스 대비 1개만 사용.
+        try:
+            with self._session.begin_nested():
+                self._session.add_all(to_insert)
+                self._session.flush()
+            return len(to_insert)
+        except IntegrityError:
+            # 드문 동시 적재 충돌 — 행별 재시도(누적 아님). 남은 SAVEPOINT는
+            # 충돌 행만큼만 생성된다.
+            inserted = 0
+            for chunk in to_insert:
+                try:
+                    with self._session.begin_nested():
+                        self._session.add(chunk)
+                        self._session.flush()
+                    inserted += 1
+                except IntegrityError:
+                    pass
+            return inserted
 
     def exists_by_hash(self, ticker: str, content_hash: str) -> bool:
         """동일 (ticker, content_hash) 청크가 이미 적재되었는지 조회."""

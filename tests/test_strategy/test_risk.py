@@ -138,8 +138,9 @@ class TestShouldTakeProfit:
     """RiskManager.should_take_profit 테스트."""
 
     def setup_method(self) -> None:
-        """테스트 설정."""
+        """테스트 설정 — 시간 의존성 격리(마감임박 조정 기본 False)."""
         self.rm = RiskManager(take_profit_ratio=0.05)
+        self.rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
 
     def test_should_take_profit(self) -> None:
         """수익률이 목표 이상이면 True를 반환한다."""
@@ -171,8 +172,9 @@ class TestValidateOrder:
     """RiskManager.validate_order 테스트."""
 
     def setup_method(self) -> None:
-        """테스트 설정."""
+        """테스트 설정 — 시간 의존성 격리(MARKET_CLOSE_GUARD 기본 False)."""
         self.rm = RiskManager()
+        self.rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
 
     def test_hold_signal_returns_false(self) -> None:
         """HOLD 시그널은 False를 반환한다."""

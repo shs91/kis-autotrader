@@ -111,6 +111,26 @@ class TestInsertChunks:
         ]
         assert repo.insert_chunks(chunks) == 2
 
+    def test_intra_batch_duplicates_deduped(self, session: Session) -> None:
+        """같은 호출 안의 (ticker, content_hash) 중복은 1건만 적재된다."""
+        repo = NewsChunkRepository(session)
+        chunks = [
+            _make_chunk(content_hash="dup"),
+            _make_chunk(content_hash="dup"),
+            _make_chunk(content_hash="dup"),
+        ]
+        assert repo.insert_chunks(chunks) == 1
+        assert len(session.scalars(select(NewsChunk)).all()) == 1
+
+    def test_large_all_duplicate_rebatch_returns_zero(self, session: Session) -> None:
+        """대량 중복 재적재(장 마감 시나리오)는 삽입 없이 0을 반환한다."""
+        repo = NewsChunkRepository(session)
+        first = [_make_chunk(content_hash=f"h{i}") for i in range(50)]
+        assert repo.insert_chunks(first) == 50
+        # 동일 배치 재적재 — 전부 중복
+        assert repo.insert_chunks(list(first)) == 0
+        assert len(session.scalars(select(NewsChunk)).all()) == 50
+
 
 class TestExistsByHash:
     def test_returns_false_when_absent(self, session: Session) -> None:

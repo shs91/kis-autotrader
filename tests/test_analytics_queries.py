@@ -341,7 +341,10 @@ class TestLongTermAnalytics:
 
     def test_get_optimal_risk_params(self, seeded_session: Session) -> None:
         """리스크 파라미터 분석을 반환한다."""
-        result = get_optimal_risk_params(seeded_session, lookback_days=30)
+        # seed는 고정 과거 날짜(DAY1~)라 실행 시점과 무관하게 포함되도록
+        # lookback을 오늘 기준으로 산출한다(시각 의존성 제거).
+        lookback = (date.today() - DAY1_DATE).days + 1
+        result = get_optimal_risk_params(seeded_session, lookback_days=lookback)
         assert result["total_sells"] == 3
         assert result["stop_loss"]["count"] == 1
         assert result["take_profit"]["count"] == 1
