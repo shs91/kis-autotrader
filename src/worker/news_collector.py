@@ -18,6 +18,8 @@ from src.utils.logger import setup_logger
 from src.worker.collectors.base import CollectionResult
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from src.worker.collectors.base import BaseCollector
 
 logger = setup_logger(__name__)
@@ -30,14 +32,20 @@ class NewsCollectorWorker:
         self,
         collectors: list[BaseCollector],
         interval_sec: float = 300.0,
+        session: Session | None = None,
     ) -> None:
         """
         Args:
             collectors: 실행할 collector 인스턴스 리스트.
             interval_sec: 사이클 사이 대기. 기본 5분.
+            session: collector들이 공유하는 DB 세션. 주입 시 사이클(collector)마다
+                성공하면 commit, 실패하면 rollback 하여 변경을 durable 하게
+                만들고 PendingRollbackError로 세션이 오염되는 것을 막는다.
+                None이면 commit/rollback을 하지 않는다 (단위 테스트용).
         """
         self._collectors = collectors
         self._interval_sec = interval_sec
+        self._session = session
 
     async def run(self) -> None:
         """무한 루프. cancel/keyboard interrupt로 종료."""
@@ -65,6 +73,10 @@ class NewsCollectorWorker:
                 logger.exception(
                     "collector %s 사이클 실패", collector.source_name,
                 )
+                # 실패 사이클은 rollback으로 세션을 정상화 — 오염된 트랜잭션이
+                # 다음 collector/사이클로 전파되는 것을 막는다.
+                if self._session is not None:
+                    self._session.rollback()
                 result = CollectionResult(
                     source_name=collector.source_name,
                     documents_fetched=0,
@@ -72,5 +84,9 @@ class NewsCollectorWorker:
                     elapsed_ms=elapsed_ms,
                     error=str(e),
                 )
+            else:
+                # 성공 사이클은 즉시 commit — state/청크 변경을 durable 하게.
+                if self._session is not None:
+                    self._session.commit()
             results.append(result)
         return results

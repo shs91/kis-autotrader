@@ -101,7 +101,7 @@ class BaseCollector(ABC):
                 error=str(e),
             )
 
-        chunks = self._build_chunks(docs)
+        chunks = self._build_new_chunks(docs)
         inserted = self._repo.insert_chunks(chunks) if chunks else 0
 
         # 수집 결과가 있을 때만 state 갱신 — 비면 다음 사이클에서 같은 since로 재시도.
@@ -153,30 +153,51 @@ class BaseCollector(ABC):
         except Exception:  # noqa: BLE001 — 메트릭 기록 실패가 사이클 결과 막지 않음
             logger.exception("NEWS_COLLECTED 메트릭 기록 실패 (%s)", self.source_name)
 
-    def _build_chunks(self, docs: list[RawDocument]) -> list[NewsChunk]:
-        """모든 doc을 chunker → embedder → NewsChunk 변환."""
+    def _build_new_chunks(self, docs: list[RawDocument]) -> list[NewsChunk]:
+        """doc을 chunk로 분할 → 중복 제거 → **신규 청크만 임베딩** → NewsChunk 변환.
+
+        `content_hash`는 text만으로 계산 가능하므로 임베딩 전에 (배치 내 +
+        DB 적재분) 중복을 거른 뒤, 살아남은 청크에 대해서만 `embedder.encode`를
+        호출한다. 과거에는 모든 청크를 임베딩한 뒤 `insert_chunks`에서 버려
+        컴퓨트가 낭비됐다.
+        """
         if not docs:
             return []
 
-        # 1) 모든 doc을 chunk로 분할 + (doc, chunk) 페어 유지
-        pairs: list[tuple[RawDocument, Chunk]] = []
+        # 1) 모든 doc을 chunk로 분할 + content_hash 계산 (임베딩 없음)
+        triples: list[tuple[RawDocument, Chunk, str]] = []
         for doc in docs:
             chunker = get_chunker(doc.source_type)
             for chunk in chunker.chunk(doc):
-                pairs.append((doc, chunk))
-        if not pairs:
+                content_hash = _content_hash(
+                    doc.ticker, doc.source_id, chunk.chunk_index, chunk.text,
+                )
+                triples.append((doc, chunk, content_hash))
+        if not triples:
             return []
 
-        # 2) 일괄 임베딩 (배치 사이즈는 Embedder가 관리)
-        texts = [c.text for _, c in pairs]
-        vectors = self._embedder.encode(texts)
+        # 2) 배치 내 (ticker, content_hash) 중복 제거 — 첫 항목 유지
+        seen: set[tuple[str, str]] = set()
+        deduped: list[tuple[RawDocument, Chunk, str]] = []
+        for doc, chunk, content_hash in triples:
+            key = (doc.ticker, content_hash)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append((doc, chunk, content_hash))
 
-        # 3) NewsChunk 생성
+        # 3) 이미 DB에 적재된 키 제외 (단일 쿼리)
+        existing = self._repo.existing_keys([(d.ticker, h) for d, _, h in deduped])
+        survivors = [t for t in deduped if (t[0].ticker, t[2]) not in existing]
+        if not survivors:
+            return []
+
+        # 4) 신규 청크만 일괄 임베딩 (배치 사이즈는 Embedder가 관리)
+        vectors = self._embedder.encode([c.text for _, c, _ in survivors])
+
+        # 5) NewsChunk 생성
         out: list[NewsChunk] = []
-        for (doc, chunk), vec in zip(pairs, vectors, strict=True):
-            content_hash = _content_hash(
-                doc.ticker, doc.source_id, chunk.chunk_index, chunk.text,
-            )
+        for (doc, chunk, content_hash), vec in zip(survivors, vectors, strict=True):
             out.append(NewsChunk(
                 ticker=doc.ticker,
                 source_type=doc.source_type,

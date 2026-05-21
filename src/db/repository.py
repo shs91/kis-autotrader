@@ -1381,16 +1381,7 @@ class NewsChunkRepository:
             unique.setdefault((chunk.ticker, chunk.content_hash), chunk)
 
         # 2) 이미 DB에 존재하는 (ticker, content_hash)를 단일 쿼리로 제외
-        keys = list(unique.keys())
-        existing: set[tuple[str, str]] = set(
-            self._session.execute(
-                select(NewsChunk.ticker, NewsChunk.content_hash).where(
-                    tuple_(NewsChunk.ticker, NewsChunk.content_hash).in_(keys)
-                )
-            )
-            .tuples()
-            .all()
-        )
+        existing = self.existing_keys(list(unique.keys()))
         to_insert = [chunk for key, chunk in unique.items() if key not in existing]
         if not to_insert:
             return 0
@@ -1414,6 +1405,26 @@ class NewsChunkRepository:
                 except IntegrityError:
                     pass
             return inserted
+
+    def existing_keys(
+        self, keys: list[tuple[str, str]]
+    ) -> set[tuple[str, str]]:
+        """주어진 (ticker, content_hash) 키 중 이미 적재된 것들을 단일 쿼리로 반환.
+
+        임베딩 *앞단*에서 신규/중복을 가려 컴퓨트 낭비를 막는 용도로도 쓰인다
+        (`content_hash`는 text만으로 계산 가능하므로 임베딩 전에 dedup 가능).
+        """
+        if not keys:
+            return set()
+        return set(
+            self._session.execute(
+                select(NewsChunk.ticker, NewsChunk.content_hash).where(
+                    tuple_(NewsChunk.ticker, NewsChunk.content_hash).in_(keys)
+                )
+            )
+            .tuples()
+            .all()
+        )
 
     def exists_by_hash(self, ticker: str, content_hash: str) -> bool:
         """동일 (ticker, content_hash) 청크가 이미 적재되었는지 조회."""

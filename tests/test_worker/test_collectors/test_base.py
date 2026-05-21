@@ -61,6 +61,8 @@ def _mock_repo(prev_state: datetime | None = None) -> MagicMock:
     r = MagicMock()
     r.get_collection_state.return_value = prev_state
     r.insert_chunks.side_effect = lambda chunks: len(chunks)
+    # 기본: 기존 키 없음 (모든 청크 신규) — 실제 set 반환해야 `in` 판정 가능
+    r.existing_keys.return_value = set()
     return r
 
 
@@ -136,6 +138,49 @@ class TestRunCycle:
         # 동일 doc 내에서 chunk별로 hash 다름 + 64자
         assert len(hashes) == len(chunks)
         assert all(len(h) == 64 for h in hashes)
+
+
+@pytest.mark.asyncio
+class TestEmbedOnlyNewChunks:
+    """중복 판정을 임베딩 *앞단*에서 수행 — 이미 적재된 청크는 임베딩하지 않는다.
+
+    `_content_hash`는 임베딩 없이 text만으로 계산 가능하므로 dedup을 앞으로
+    옮길 수 있다 (컴퓨트 낭비 제거).
+    """
+
+    async def test_embeds_only_new_chunks(self) -> None:
+        repo = _mock_repo()
+        # repo가 첫 번째 키를 '이미 적재됨'으로 보고 → 나머지만 신규
+        repo.existing_keys.side_effect = lambda keys: {keys[0]} if keys else set()
+        embedder = _mock_embedder()
+        docs = [_doc(source_id="a"), _doc(source_id="b", body="다른 본문")]
+        collector = StubCollector(embedder, repo, docs=docs)
+
+        await collector.run_cycle()
+
+        # 신규 1건만 임베딩
+        repo.existing_keys.assert_called_once()
+        assert embedder.encode.call_count == 1
+        embedded_texts = embedder.encode.call_args.args[0]
+        assert len(embedded_texts) == 1
+        # insert_chunks에는 신규 청크만 전달
+        inserted_chunks = repo.insert_chunks.call_args.args[0]
+        assert len(inserted_chunks) == 1
+
+    async def test_no_embedding_when_all_duplicates(self) -> None:
+        repo = _mock_repo()
+        repo.existing_keys.side_effect = lambda keys: set(keys)
+        embedder = _mock_embedder()
+        docs = [_doc(source_id="a"), _doc(source_id="b", body="다른 본문")]
+        collector = StubCollector(embedder, repo, docs=docs)
+
+        result = await collector.run_cycle()
+
+        embedder.encode.assert_not_called()
+        assert result.chunks_inserted == 0
+        # 신규 청크가 없으면 insert_chunks는 빈 리스트이거나 미호출
+        if repo.insert_chunks.called:
+            assert repo.insert_chunks.call_args.args[0] == []
 
 
 @pytest.mark.asyncio

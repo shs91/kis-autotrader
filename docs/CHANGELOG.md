@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-05-21] 뉴스 수집 stall 수정 — 사이클별 commit/rollback + 임베딩 dedup 선행 (v0.2.12) — 🔴 핫픽스
+- 계획서: docs/plans/2026-05-21_news-collection-stall-fix.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/worker/news_collector.py: `NewsCollectorWorker`에 `session` 주입. `run_once`가 collector 사이클마다 성공 시 `commit()`, 예외 시 `rollback()` 호출. 단일 장기 세션이 무한 루프를 감싸 변경이 graceful 종료 시 1회만 commit되던 구조를 사이클 단위로 durable하게 전환.
+  - src/worker/collectors/base.py: `_build_chunks`→`_build_new_chunks`. `content_hash`(text만으로 산출)로 (배치 내 + DB 적재분) 중복을 임베딩 *앞단*에서 제거하고 살아남은 신규 청크만 `embedder.encode` 호출.
+  - src/db/repository.py: `NewsChunkRepository.existing_keys(keys)` 신설 — (ticker, content_hash) 기존분을 단일 쿼리로 조회. `insert_chunks`도 이를 재사용(DRY).
+  - news_worker_main.py: 워커가 공유하는 `session`을 `NewsCollectorWorker`에 주입.
+  - tests: `TestPerCycleCommit` 3건(commit/rollback/세션 미주입 호환), `TestEmbedOnlyNewChunks` 2건(신규만 임베딩/전부 중복 시 미호출), `TestExistingKeys` 2건.
+- 배경: 2026-05-21 점검에서 뉴스 수집이 5/19부터 stall. 단일 장기 세션이 워커 무한 루프를 감싸 `insert_chunks`/`update_collection_state`가 flush만 되고 commit은 graceful 종료 시 1회뿐. `_record_metric`만 별도 세션으로 commit돼 메트릭은 매일 적재되나 `news_collection_state`는 5/19 고정. `out.log`에서 `PendingRollbackError` 확인 — 한 번 오염된 세션이 종료까지 모든 op 실패. 또한 모든 doc을 임베딩한 뒤 `insert_chunks`에서 중복을 폐기해 컴퓨트 낭비(임베딩 다수 대비 실적재 20건).
+- 영향: 사이클(collector)마다 commit으로 `news_collection_state.updated_at`/`news_chunks`가 durable 전진, 실패 시 rollback으로 세션 오염을 회복(다음 사이클 정상화). 신규 청크만 임베딩하여 중복 재임베딩 컴퓨트 제거. 단일 kis-postgres 공유 구조에서 per-cycle commit이 락 점유 시간도 단축.
+- 검증 결과: pytest 824 passed | ruff ✅ (변경 파일 All checks passed) | mypy 신규 에러 0 (사전 dict type-arg 부채 14건 무관, baseline 14=14).
+- 비고: 운영자 액션 — 수정 반영을 위해 `com.kis.news-collector` 재시작 필요. 재시작 후 `news_collection_state.updated_at` 당일 갱신 + `news_chunks.event_time` 최댓값 진행 + 임베딩 배치 수 ≈ 실적재 수 수렴 확인.
+
+---
+
 ## [2026-05-20] 뉴스 청크 적재 SAVEPOINT 누적 → PG 락 테이블 고갈 수정 + 시각 의존 테스트 결함 정리 (v0.2.11) — 🔴 핫픽스
 - 카테고리: bug_fix
 - 변경 파일:
@@ -54,16 +70,6 @@
 - 배경: 2026-05-17 16:36 텔레그램 `/run_implement` 트리거로 처음 verifier 통합 흐름이 실행됐을 때 종료코드 1. cycle·golden은 통과했으나 verifier 단계 진입 직후 ruff 바이너리를 PATH에서 못 찾아 실패. ruff는 `.venv/bin/ruff`에만 존재했고 launchd PATH(`~/.local/bin:/usr/local/bin:/usr/bin:/bin`)에 venv 경로가 없었음.
 - 영향: 정규 평일 17:15 / 금 19:00 트리거 및 텔레그램 `/run_implement` 모두 verifier 단계가 정상 ruff 호출. exit 1 재발 차단.
 - 검증 결과: `bash -n scripts/run_auto_implement.sh` ✅ | 새 PATH로 `command -v ruff` → `.venv/bin/ruff` 해결 확인.
-
----
-
-## [2026-05-17] 텔레그램 /help 누락 명령 추가 — /run_implement /status_implement /pause_implement (v0.2.7)
-- 카테고리: bug_fix
-- 변경 파일:
-  - main.py: `cmd_help` 문자열에 `/run_implement [--dry|--force]`, `/status_implement`, `/pause_implement [resume]` 3줄 추가. 명령 등록(L540-542)은 정상이었으나 help 하드코딩에서 빠져 사용자가 발견할 수 없던 문제.
-- 배경: 텔레그램에서 `/help` 입력 시 하네스 관련 명령 3개가 표시되지 않음. register는 정상이라 명령 자체는 동작했으나 사용자가 존재 자체를 알기 어려움.
-- 영향: 사용자가 `/help`만 보고도 하네스 자동 구현 명령(`/run_implement`, `/status_implement`, `/pause_implement`)을 발견·사용 가능.
-- 검증 결과: ruff ✅ All checks passed | mypy ✅ (변경 라인 신규 에러 0, 기존 3건은 무관) | 재시작 후 헬스 ok 확인.
 
 ---
 
