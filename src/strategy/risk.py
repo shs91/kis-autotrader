@@ -28,6 +28,9 @@ class RiskManager:
         max_position_ratio: float | None = None,
         daily_trade_limit: int | None = None,
         take_profit_ratio: float | None = None,
+        trailing_activation_ratio: float | None = None,
+        trailing_drawdown_ratio: float | None = None,
+        min_profitable_close: float | None = None,
     ) -> None:
         """리스크 관리자를 초기화한다.
 
@@ -36,6 +39,9 @@ class RiskManager:
             max_position_ratio: 최대 포지션 비율 (None이면 설정값 사용, 기본 20%)
             daily_trade_limit: 일일 매매 횟수 제한 (None이면 설정값 사용, 기본 10건)
             take_profit_ratio: 익절 비율 (기본 5%)
+            trailing_activation_ratio: 트레일링 무장 임계 (기본 5%)
+            trailing_drawdown_ratio: 트레일링 매도폭 (기본 5%)
+            min_profitable_close: 마감 청산 수익률 임계 (기본 1.5%)
         """
         self._max_loss_rate = (
             max_loss_rate
@@ -56,6 +62,21 @@ class RiskManager:
             take_profit_ratio
             if take_profit_ratio is not None
             else settings.strategy.take_profit_ratio
+        )
+        self._trailing_activation_ratio = (
+            trailing_activation_ratio
+            if trailing_activation_ratio is not None
+            else settings.strategy.trailing_activation_ratio
+        )
+        self._trailing_drawdown_ratio = (
+            trailing_drawdown_ratio
+            if trailing_drawdown_ratio is not None
+            else settings.strategy.trailing_drawdown_ratio
+        )
+        self._min_profitable_close = (
+            min_profitable_close
+            if min_profitable_close is not None
+            else settings.strategy.min_profitable_close
         )
         self._min_confidence = settings.strategy.min_confidence
 
@@ -299,6 +320,40 @@ class RiskManager:
             )
 
         return should_profit
+
+    def should_trailing_stop(
+        self, current_price: float, avg_price: float, peak_price: float
+    ) -> bool:
+        """고점 대비 되돌림 청산 여부를 판단한다 (시간 무관).
+
+        무장 조건: 고점이 평균단가 대비 활성화 임계 이상 상승.
+        청산 조건: 무장 상태 AND 현재가가 고점 대비 매도폭 이상 하락.
+        peak_price는 호출자(engine)가 보존·전달한다.
+
+        Args:
+            current_price: 현재가
+            avg_price: 평균 매입가
+            peak_price: 보유 후 도달한 최고가
+
+        Returns:
+            True이면 트레일링 스톱 청산
+        """
+        if avg_price <= 0 or peak_price <= 0:
+            return False
+
+        peak_profit = (peak_price - avg_price) / avg_price
+        if peak_profit < self._trailing_activation_ratio:
+            return False  # 미무장
+
+        drawdown = (peak_price - current_price) / peak_price
+        should = drawdown >= self._trailing_drawdown_ratio
+        if should:
+            logger.info(
+                "트레일링 시그널: 고점 %.0f 대비 %.2f%% 하락 >= %.2f%% (현재 %.0f)",
+                peak_price, drawdown * 100,
+                self._trailing_drawdown_ratio * 100, current_price,
+            )
+        return should
 
     # ── 매수 게이트 진단 (proposal 2026-05-18 + 사유 코드 정밀화) ──
     #

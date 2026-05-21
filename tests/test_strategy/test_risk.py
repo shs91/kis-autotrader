@@ -375,3 +375,28 @@ class TestCheckBuyGates:
             target_price=50_000.0,
         )
         assert self.rm.check_buy_gates(signal, balance=1_000_000.0) is None
+
+
+class TestShouldTrailingStop:
+    """고점 대비 되돌림 청산 판정."""
+
+    def setup_method(self) -> None:
+        self.rm = RiskManager(
+            trailing_activation_ratio=0.05, trailing_drawdown_ratio=0.05
+        )
+
+    def test_not_armed_returns_false(self) -> None:
+        # 고점이 활성화 임계(+5%) 미만 → 미무장
+        assert self.rm.should_trailing_stop(10_300, 10_000, 10_300) is False
+
+    def test_armed_but_drawdown_insufficient(self) -> None:
+        # 무장(고점 +27%), 되돌림 2%만 → 미달
+        assert self.rm.should_trailing_stop(12_446, 10_000, 12_700) is False
+
+    def test_armed_and_drawdown_triggers(self) -> None:
+        # 무장(고점 +27%), 고점 대비 5% 되돌림 경계
+        assert self.rm.should_trailing_stop(12_065, 10_000, 12_700) is True
+
+    def test_zero_guard(self) -> None:
+        assert self.rm.should_trailing_stop(100, 0, 100) is False
+        assert self.rm.should_trailing_stop(100, 10_000, 0) is False
