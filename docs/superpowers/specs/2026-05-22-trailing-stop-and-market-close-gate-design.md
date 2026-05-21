@@ -87,7 +87,9 @@ def should_close_for_market_end(
 | `TRAILING_DRAWDOWN_RATIO` | `0.05` | 고점 대비 매도폭 | config_overrides |
 | `MIN_PROFITABLE_CLOSE` | `0.015` | 마감 청산 최소 수익률 | config_overrides |
 
-- `_env_float`/`_env_bool` 헬퍼 패턴을 따른다. `StrategySettings` dataclass에 필드 추가.
+- `_env_float`/`_env_bool` 헬퍼 패턴을 따른다. 네 키 모두 `StrategySettings` dataclass에
+  `take_profit_ratio` 인접 위치로 추가한다(청산/이익실현 파라미터는 strategy 측에 응집).
+  `RiskManager.__init__`은 이들을 `settings.strategy`에서 로드한다.
 - 기본값 ±50% 범위는 BRIDGE_SPEC 자동 튜닝 허용 범위로 자연스럽게 들어간다.
 
 ## 7. 고점(peak) 보존 — 핫패스 동기 DB 0개
