@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from src.db.models import NewsSourceType
 from src.rag.scorer import ChunkScore, RuleBasedScorer, get_scorer
 
@@ -54,3 +56,34 @@ def test_score_ranges_are_bounded() -> None:
 def test_title_is_included_in_matching() -> None:
     s = get_scorer().score("본문에는 키워드 없음", NewsSourceType.NEWS, "흑자전환 신규수주", {})
     assert s.sentiment > 0
+
+
+def test_potato_text_is_not_negative() -> None:
+    # '감자'(potato) 동음이의어가 자본감소로 오탐되지 않는다.
+    s = get_scorer().score("감자튀김 신메뉴 출시", NewsSourceType.NEWS, None, {})
+    assert s.sentiment == 0.0
+
+
+def test_capital_reduction_is_negative() -> None:
+    s = get_scorer().score("무상감자 결정 공시", NewsSourceType.DISCLOSURE, None, {})
+    assert s.sentiment < 0
+
+
+def test_compound_term_not_double_counted() -> None:
+    # '적자전환'만 계산되고 부분문자열 '적자'가 중복 가산되지 않는다.
+    s = get_scorer().score("적자전환 공시", NewsSourceType.NEWS, None, {})
+    expected = round(math.tanh(-1.0 / 1.5), 4)
+    assert s.sentiment == expected
+
+
+def test_generic_approval_is_neutral() -> None:
+    s = get_scorer().score("주주총회 안건이 승인되었다", NewsSourceType.NEWS, None, {})
+    assert s.sentiment == 0.0
+
+
+def test_importance_clamped_at_one() -> None:
+    s = get_scorer().score(
+        "상장폐지 부도 회생절차 거래정지 영업정지 횡령 배임 분식회계",
+        NewsSourceType.DISCLOSURE, None, {},
+    )
+    assert s.importance == 1.0
