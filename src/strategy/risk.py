@@ -355,6 +355,39 @@ class RiskManager:
             )
         return should
 
+    def should_close_for_market_end(
+        self,
+        current_price: float,
+        avg_price: float,
+        now: datetime | None = None,
+    ) -> bool:
+        """마감 임박 강제 청산 게이트 — 이익 포지션 한정.
+
+        트레일링과 독립된 별도 규칙. 시간 의존은 이 게이트의 발동 조건뿐이며,
+        손실 포지션(수익률 < min_profitable_close)은 대상에서 제외한다.
+
+        Args:
+            current_price: 현재가
+            avg_price: 평균 매입가
+            now: 판정 기준 시각 (None이면 현재 시각)
+
+        Returns:
+            True이면 마감 임박 + 최소 수익률 충족으로 청산
+        """
+        if avg_price <= 0:
+            return False
+        if not self.is_near_market_close(now):
+            return False
+
+        profit = (current_price - avg_price) / avg_price
+        should = profit >= self._min_profitable_close
+        if should:
+            logger.info(
+                "마감 청산 게이트: 수익률 %.2f%% >= %.2f%% (마감 임박)",
+                profit * 100, self._min_profitable_close * 100,
+            )
+        return should
+
     # ── 매수 게이트 진단 (proposal 2026-05-18 + 사유 코드 정밀화) ──
     #
     # ``check_buy_gates``는 매수 시그널에 대한 모든 게이트를 평가해 첫번째로

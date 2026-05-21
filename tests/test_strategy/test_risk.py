@@ -400,3 +400,33 @@ class TestShouldTrailingStop:
     def test_zero_guard(self) -> None:
         assert self.rm.should_trailing_stop(100, 0, 100) is False
         assert self.rm.should_trailing_stop(100, 10_000, 0) is False
+
+
+class TestShouldCloseForMarketEnd:
+    """마감 임박 강제 청산 게이트 (이익 포지션 한정)."""
+
+    def setup_method(self) -> None:
+        self.rm = RiskManager(min_profitable_close=0.015)
+
+    def test_not_near_close_returns_false(self) -> None:
+        self.rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
+        assert self.rm.should_close_for_market_end(10_200, 10_000) is False
+
+    def test_near_close_profit_below_min(self) -> None:
+        self.rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+        # +1.0% < 1.5%
+        assert self.rm.should_close_for_market_end(10_100, 10_000) is False
+
+    def test_near_close_profit_meets_min(self) -> None:
+        self.rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+        # +1.5% 경계
+        assert self.rm.should_close_for_market_end(10_150, 10_000) is True
+
+    def test_near_close_loss_excluded(self) -> None:
+        self.rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+        # 손실 포지션은 게이트 대상 아님
+        assert self.rm.should_close_for_market_end(9_500, 10_000) is False
+
+    def test_zero_guard(self) -> None:
+        self.rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+        assert self.rm.should_close_for_market_end(100, 0) is False
