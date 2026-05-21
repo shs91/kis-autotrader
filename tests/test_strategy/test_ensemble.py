@@ -115,24 +115,24 @@ def test_weighted_buy_wins() -> None:
     )
     result = ensemble.analyze(EMPTY_DF)
     assert result.signal_type == SignalType.BUY
-    # confidence = buy_weight / len(signals) = 1.0 / 3
-    assert result.confidence == pytest.approx(1.0 / 3, abs=0.01)
+    # W=1.0, L=0.8, n_win=2 → base=0.5, opp=1.0/1.8 → conf≈0.278
+    assert result.confidence == pytest.approx(0.278, abs=0.01)
 
 
 def test_weighted_sell_wins() -> None:
-    """SELL 가중합 0.9 vs BUY 가중합 0.6 → SELL."""
+    """SELL 2표(0.5+0.4) vs BUY 1표(0.3) → SELL, n_win=2."""
     ensemble = EnsembleStrategy(
         [
-            FixedStrategy(SignalType.SELL, 0.9),
-            FixedStrategy(SignalType.BUY, 0.3),
+            FixedStrategy(SignalType.SELL, 0.5),
+            FixedStrategy(SignalType.SELL, 0.4),
             FixedStrategy(SignalType.BUY, 0.3),
         ],
         method="weighted",
     )
     result = ensemble.analyze(EMPTY_DF)
     assert result.signal_type == SignalType.SELL
-    # confidence = sell_weight / len(signals) = 0.9 / 3
-    assert result.confidence == pytest.approx(0.9 / 3, abs=0.01)
+    # W=0.9, L=0.3, n_win=2 → base=0.45, opp=0.9/1.2=0.75 → conf≈0.3375
+    assert result.confidence == pytest.approx(0.3375, abs=0.01)
 
 
 # --- init validation tests ---
@@ -237,8 +237,8 @@ def test_weighted_hold_majority_guard() -> None:
     assert "4/4" in result.reason
 
 
-def test_weighted_hold_3_of_4_passes_through() -> None:
-    """3/4 HOLD + 1 BUY → weighted vote로 진행하여 BUY 반환."""
+def test_weighted_single_vote_gated_to_hold() -> None:
+    """단독표(3 HOLD + 1 BUY) → n_win<2 게이트로 HOLD."""
     ensemble = EnsembleStrategy(
         [
             FixedStrategy(SignalType.HOLD, 0.0),
@@ -249,7 +249,9 @@ def test_weighted_hold_3_of_4_passes_through() -> None:
         method="weighted",
     )
     result = ensemble.analyze(EMPTY_DF)
-    assert result.signal_type == SignalType.BUY
+    assert result.signal_type == SignalType.HOLD
+    assert result.confidence == 0.0
+    assert "승자표 부족" in result.reason
 
 
 def test_weighted_hold_not_majority_allows_sell() -> None:
@@ -358,3 +360,101 @@ def test_sub_strategy_meta_merged_into_vote() -> None:
     assert votes[1]["series_len"] == 10
     assert votes[1]["guard_triggered"] is True
     assert votes[1]["guard_reason"] == "insufficient_length"
+
+
+# --- weighted vote: n_win 게이트 + base×opp 산출식 ---
+
+
+def test_weighted_two_buy_no_opposition() -> None:
+    """Case B: 2 BUY@0.3, 2 HOLD → base=0.3, opp=1.0 → conf=0.30."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.3),
+            FixedStrategy(SignalType.BUY, 0.3),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+    assert result.confidence == pytest.approx(0.30, abs=0.01)
+
+
+def test_weighted_two_buy_with_opposition() -> None:
+    """Case C: 2 BUY@0.5, 1 SELL@0.4 → base=0.5, opp=1.0/1.4 → conf≈0.357."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.5),
+            FixedStrategy(SignalType.BUY, 0.5),
+            FixedStrategy(SignalType.SELL, 0.4),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+    assert result.confidence == pytest.approx(0.357, abs=0.01)
+
+
+def test_weighted_single_buy_beats_single_sell_gated() -> None:
+    """Case D: 1 BUY@0.6 vs 1 SELL@0.5 → 승자 n_win=1 → HOLD."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.6),
+            FixedStrategy(SignalType.SELL, 0.5),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    assert "승자표 부족" in result.reason
+
+
+def test_weighted_three_buy_with_opposition() -> None:
+    """Case E: 3 BUY@0.3, 1 SELL@0.5 → base=0.3, opp=0.9/1.4 → conf≈0.193."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.3),
+            FixedStrategy(SignalType.BUY, 0.3),
+            FixedStrategy(SignalType.BUY, 0.3),
+            FixedStrategy(SignalType.SELL, 0.5),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+    assert result.confidence == pytest.approx(0.193, abs=0.01)
+
+
+def test_weighted_tie_weight_holds() -> None:
+    """동수 가중치(2 BUY@0.5 vs 2 SELL@0.5) → HOLD(동수)."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.5),
+            FixedStrategy(SignalType.BUY, 0.5),
+            FixedStrategy(SignalType.SELL, 0.5),
+            FixedStrategy(SignalType.SELL, 0.5),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    assert "동수" in result.reason
+
+
+def test_weighted_confidence_clamped_to_one() -> None:
+    """3 BUY@1.0 (반대 0) → base=1.0, opp=1.0 → conf=1.0 (clamp 상한)."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 1.0),
+            FixedStrategy(SignalType.BUY, 1.0),
+            FixedStrategy(SignalType.BUY, 1.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+    assert result.confidence == 1.0
