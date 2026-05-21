@@ -139,7 +139,16 @@ class EnsembleStrategy(BaseStrategy):
         )
 
     def _weighted_vote(self, signals: list[Signal]) -> Signal:
-        """가중 투표를 수행한다."""
+        """가중 투표를 수행한다.
+
+        HOLD는 기권으로 보아 신뢰도를 희석하지 않는다. 승자 방향에 최소 2개
+        전략이 동의(``n_win >= 2``)해야 매매로 전환한다(단독표 억제). 신뢰도는
+        승자 평균 강도(base)와 승자 우세도(opp)의 곱으로 산출한다.
+
+            base = W / n_win,  opp = W / (W + L),  conf = min(base * opp, 1.0)
+
+        여기서 W=승자 가중치 합, L=패자 가중치 합, n_win=승자 방향 투표 수.
+        """
         hold_count = sum(1 for s in signals if s.signal_type == SignalType.HOLD)
         if hold_count > len(signals) * 3 / 4:
             return Signal(
@@ -148,8 +157,10 @@ class EnsembleStrategy(BaseStrategy):
                 reason=f"앙상블 가중투표: HOLD 대다수 ({hold_count}/{len(signals)})",
             )
 
-        buy_w = sum(s.confidence for s in signals if s.signal_type == SignalType.BUY)
-        sell_w = sum(s.confidence for s in signals if s.signal_type == SignalType.SELL)
+        buy_sigs = [s for s in signals if s.signal_type == SignalType.BUY]
+        sell_sigs = [s for s in signals if s.signal_type == SignalType.SELL]
+        buy_w = sum(s.confidence for s in buy_sigs)
+        sell_w = sum(s.confidence for s in sell_sigs)
 
         if buy_w == 0.0 and sell_w == 0.0:
             return Signal(
@@ -166,17 +177,29 @@ class EnsembleStrategy(BaseStrategy):
         if buy_w > sell_w:
             winner_type = SignalType.BUY
             winner_weight, loser_weight = buy_w, sell_w
+            n_win = len(buy_sigs)
         else:
             winner_type = SignalType.SELL
             winner_weight, loser_weight = sell_w, buy_w
+            n_win = len(sell_sigs)
 
-        confidence = winner_weight / len(signals)
+        # 단독표 억제: 승자 방향 동의가 2개 미만이면 매매 전환하지 않음
+        if n_win < 2:
+            return Signal(
+                signal_type=SignalType.HOLD, confidence=0.0,
+                reason=f"앙상블 가중투표: 승자표 부족 (n_win={n_win}) → HOLD",
+            )
+
+        base = winner_weight / n_win
+        opp = winner_weight / (winner_weight + loser_weight)
+        confidence = min(base * opp, 1.0)
         return Signal(
             signal_type=winner_type,
-            confidence=min(confidence, 1.0),
+            confidence=confidence,
             reason=(
-                f"앙상블 가중투표: {winner_type.value} "
-                f"{winner_weight:.2f} vs {loser_weight:.2f}"
+                f"앙상블 가중투표: {winner_type.value} n_win={n_win} "
+                f"W={winner_weight:.2f} L={loser_weight:.2f} "
+                f"(base={base:.2f}×opp={opp:.2f})"
             ),
         )
 
