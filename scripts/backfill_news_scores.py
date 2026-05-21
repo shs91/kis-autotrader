@@ -9,13 +9,18 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+import sys
+from pathlib import Path
 
-from src.db.models import NewsChunk
-from src.db.session import get_session
-from src.rag.scorer import get_scorer
-from src.utils.logger import setup_logger
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
+
+from src.db.models import NewsChunk  # noqa: E402
+from src.db.session import get_session  # noqa: E402
+from src.rag.scorer import get_scorer  # noqa: E402
+from src.utils.logger import setup_logger  # noqa: E402
 
 logger = setup_logger(__name__)
 
