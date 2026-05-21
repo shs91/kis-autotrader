@@ -219,9 +219,9 @@ class BaseCollector(ABC):
                 sentiment=score.sentiment,
                 importance=score.importance,
                 chunk_metadata={
+                    **doc.metadata,
                     "section": chunk.section,
                     "score_method": score.method,
-                    **doc.metadata,
                 },
             ))
         return out

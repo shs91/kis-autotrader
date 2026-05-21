@@ -27,8 +27,11 @@ class StubCollector(BaseCollector):
         repo: MagicMock,
         docs: list[RawDocument],
         metric_repo: MagicMock | None = None,
+        scorer: object | None = None,
     ) -> None:
-        super().__init__(embedder=embedder, repo=repo, metric_repo=metric_repo)
+        super().__init__(
+            embedder=embedder, repo=repo, metric_repo=metric_repo, scorer=scorer,
+        )
         self._docs = docs
 
     async def collect(self, since: datetime) -> list[RawDocument]:
@@ -156,6 +159,14 @@ class TestRunCycle:
             assert c.chunk_metadata["score_method"] == "rule_v1"
         # 호재 본문이므로 양수 sentiment
         assert chunks[0].sentiment > 0
+
+    async def test_negative_keyword_body_yields_negative_sentiment(self) -> None:
+        repo = _mock_repo()
+        docs = [_doc(body="횡령 혐의 압수수색, 영업손실 적자전환")]
+        collector = StubCollector(_mock_embedder(), repo, docs=docs)
+        await collector.run_cycle()
+        chunks = repo.insert_chunks.call_args.args[0]
+        assert chunks[0].sentiment < 0
 
 
 @pytest.mark.asyncio
