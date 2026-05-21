@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-05-21] 뉴스 청크 sentiment/importance 룰베이스 스코어링 + 백필 (v0.3.0)
+- 계획서: docs/superpowers/plans/2026-05-21-news-sentiment-importance-scoring.md (설계: docs/superpowers/specs/2026-05-21-news-sentiment-importance-scoring-design.md)
+- 카테고리: feature
+- 변경 파일:
+  - src/rag/scorer.py: 신설. `Scorer` Protocol + `ChunkScore`(sentiment[-1,1]/importance[0,1]/method) 데이터클래스 + `RuleBasedScorer`(호재/악재 lexicon·source_type 가중·고영향 boost) + `get_scorer()` 팩토리. longest-match-wins로 부분문자열 이중계산 방지, 어떤 입력에도 예외 없이 중립 폴백.
+  - src/worker/collectors/base.py: `_build_new_chunks`에서 NewsChunk 생성 시 `get_scorer().score()`로 sentiment/importance 인라인 계산, `chunk_metadata.score_method`로 provenance 기록(고정 키 우선순위 보정).
+  - src/db/analytics.py: `get_news_quality_stats` by_source 쿼리에 `AVG(sentiment)` 추가.
+  - scripts/backfill_news_scores.py: 신설. sentiment NULL 청크를 배치별 commit으로 백필(idempotent, 단일 postgres 락 점유 최소화).
+  - tests: test_rag/test_scorer.py 14건, test_base.py 스코어링 2건, test_db/test_backfill_news_scores.py 2건.
+- 배경: news_chunks가 임베딩(Vector 1024)까지 적재되나 sentiment/importance가 전부 NULL이고 스코어링 로직이 부재. 소비처는 리포트/대시보드 우선(매매 전략 미연결), 적재 데이터는 향후 로컬 모델 의사결정의 피처로 확장 예정 → `Scorer` 추상화·`ChunkScore`·provenance로 교체 seam 마련.
+- 영향: 신규 적재 청크가 자동 스코어링되고 기존 청크는 백필로 채워짐. `get_news_quality_stats`가 비-NULL 평균(importance+sentiment)을 리포트/대시보드에 노출. 룰베이스는 추후 모델 스코어러로 호출부·스키마 무변경 전환 가능.
+- 검증 결과: pytest 222 passed (rag+worker+db) | ruff 변경파일 All checks passed (analytics 사전 E501 2건 무관) | mypy 신규 에러 0.
+- 비고: 운영자 액션 — 신규 적재분 스코어링 반영을 위해 `com.kis.news-collector` 재시작 + 기존분 백필 `scripts/backfill_news_scores.py` 1회 실행 필요.
+
+---
+
 ## [2026-05-21] 뉴스 수집 stall 수정 — 사이클별 commit/rollback + 임베딩 dedup 선행 (v0.2.12) — 🔴 핫픽스
 - 계획서: docs/plans/2026-05-21_news-collection-stall-fix.md
 - 카테고리: bug_fix
@@ -60,16 +76,6 @@
 - 영향: BUY_REJECT 메트릭이 `LOW_CONFIDENCE`/`INSUFFICIENT_CASH`/`RISK_GATE`/`DAILY_TRADE_LIMIT`/`OTHER` 분류로 적재. 다음 daily 분석부터 거절 사유 분포 진단 가능. 자동 파이프라인 D5(시그널→매수 전환 0%) 룰의 변별력 확보.
 - 검증 결과: pytest 14 passed (TestCheckBuyGates 7 + BUY_REJECT 통합 7) | ruff ✅ All checks passed | mypy --strict 신규 모듈 ✅ (사전 존재 12건은 본 변경 무관).
 - 비고: 21:35 KST `/run_implement` cycle은 implementer agent의 git commit 누락 + Verifier `set -e` 스크립트 중단으로 정상 종료 안 됨 → 수동 완료(옵션 A). D1~D5 결함(set -e/Verifier scope/agent commit/progress.json/markdown 갱신)은 후속 hotfix 대상.
-
----
-
-## [2026-05-18] auto-implement PATH 보강 — verifier ruff FileNotFoundError 수정 (v0.2.8) — 🔴 핫픽스
-- 카테고리: bug_fix
-- 변경 파일:
-  - scripts/run_auto_implement.sh: PATH 선두에 `$HOME/IdeaProjects/kis-autotrader/.venv/bin` prepend. 누락 시 `verifier/runner.py:70`의 `subprocess.run(["ruff", ...])`가 `FileNotFoundError: 'ruff'`로 죽음.
-- 배경: 2026-05-17 16:36 텔레그램 `/run_implement` 트리거로 처음 verifier 통합 흐름이 실행됐을 때 종료코드 1. cycle·golden은 통과했으나 verifier 단계 진입 직후 ruff 바이너리를 PATH에서 못 찾아 실패. ruff는 `.venv/bin/ruff`에만 존재했고 launchd PATH(`~/.local/bin:/usr/local/bin:/usr/bin:/bin`)에 venv 경로가 없었음.
-- 영향: 정규 평일 17:15 / 금 19:00 트리거 및 텔레그램 `/run_implement` 모두 verifier 단계가 정상 ruff 호출. exit 1 재발 차단.
-- 검증 결과: `bash -n scripts/run_auto_implement.sh` ✅ | 새 PATH로 `command -v ruff` → `.venv/bin/ruff` 해결 확인.
 
 ---
 

@@ -27,8 +27,11 @@ class StubCollector(BaseCollector):
         repo: MagicMock,
         docs: list[RawDocument],
         metric_repo: MagicMock | None = None,
+        scorer: object | None = None,
     ) -> None:
-        super().__init__(embedder=embedder, repo=repo, metric_repo=metric_repo)
+        super().__init__(
+            embedder=embedder, repo=repo, metric_repo=metric_repo, scorer=scorer,
+        )
         self._docs = docs
 
     async def collect(self, since: datetime) -> list[RawDocument]:
@@ -138,6 +141,32 @@ class TestRunCycle:
         # 동일 doc 내에서 chunk별로 hash 다름 + 64자
         assert len(hashes) == len(chunks)
         assert all(len(h) == 64 for h in hashes)
+
+    async def test_chunks_get_sentiment_importance_and_method(self) -> None:
+        repo = _mock_repo()
+        # 호재 키워드 포함 본문 → sentiment > 0
+        docs = [_doc(body="삼성전자 흑자전환 신규수주 사상최대 실적")]
+        collector = StubCollector(_mock_embedder(), repo, docs=docs)
+        await collector.run_cycle()
+
+        chunks = repo.insert_chunks.call_args.args[0]
+        assert len(chunks) > 0
+        for c in chunks:
+            assert c.sentiment is not None
+            assert -1.0 <= c.sentiment <= 1.0
+            assert c.importance is not None
+            assert 0.0 <= c.importance <= 1.0
+            assert c.chunk_metadata["score_method"] == "rule_v1"
+        # 호재 본문이므로 양수 sentiment
+        assert chunks[0].sentiment > 0
+
+    async def test_negative_keyword_body_yields_negative_sentiment(self) -> None:
+        repo = _mock_repo()
+        docs = [_doc(body="횡령 혐의 압수수색, 영업손실 적자전환")]
+        collector = StubCollector(_mock_embedder(), repo, docs=docs)
+        await collector.run_cycle()
+        chunks = repo.insert_chunks.call_args.args[0]
+        assert chunks[0].sentiment < 0
 
 
 @pytest.mark.asyncio
