@@ -109,6 +109,8 @@ class TradingEngine:
         self._daily_cache: dict[str, tuple[str, pd.DataFrame]] = {}
         # 잔고 캐시: (조회시각, Balance)
         self._balance_cache: tuple[float, Balance] | None = None
+        # 고점 캐시: {종목코드: 고점가격} — 트레일링 스톱 계산용
+        self._peak_prices: dict[str, float] = {}
 
         logger.info(
             "매매 엔진 초기화: 기본전략=%s, 관심종목모드=%s",
@@ -1422,6 +1424,7 @@ class TradingEngine:
                 "quantity": h.quantity,
                 "avg_price": float(h.avg_price),
                 "current_price": float(h.current_price),
+                "peak_price": self._peak_prices.get(h.stock_code),
             })
         self._task_queue.enqueue(
             task_type="sync_portfolio",
