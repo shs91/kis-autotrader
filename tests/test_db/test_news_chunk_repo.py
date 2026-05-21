@@ -143,7 +143,19 @@ class TestExistsByHash:
         assert repo.exists_by_hash("005930", _pad_hash("present")) is True
 
 
-class TestCollectionState:
+class TestExistingKeys:
+    def test_empty_keys_returns_empty_set(self, session: Session) -> None:
+        repo = NewsChunkRepository(session)
+        assert repo.existing_keys([]) == set()
+
+    def test_returns_only_present_keys(self, session: Session) -> None:
+        repo = NewsChunkRepository(session)
+        repo.insert_chunks([_make_chunk(content_hash="a"), _make_chunk(content_hash="b")])
+
+        present = (_make_chunk(content_hash="a").ticker, _pad_hash("a"))
+        absent = ("005930", _pad_hash("z"))
+        result = repo.existing_keys([present, absent])
+        assert result == {present}
     def test_get_returns_none_when_absent(self, session: Session) -> None:
         repo = NewsChunkRepository(session)
         assert repo.get_collection_state("dart") is None

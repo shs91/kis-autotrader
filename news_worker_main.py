@@ -146,7 +146,7 @@ async def _main() -> int:
 
         interval = float(os.getenv("NEWS_COLLECT_INTERVAL_MIN", "5")) * 60
         worker = NewsCollectorWorker(
-            collectors=collectors, interval_sec=interval,
+            collectors=collectors, interval_sec=interval, session=session,
         )
 
         loop = asyncio.get_running_loop()
