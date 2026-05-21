@@ -17,11 +17,13 @@ from src.db.models import NewsChunk
 from src.db.repository import SystemMetricRepository
 from src.db.session import get_session
 from src.rag.chunker import Chunk, RawDocument, get_chunker
+from src.rag.scorer import get_scorer
 from src.utils.logger import setup_logger
 
 if TYPE_CHECKING:
     from src.db.repository import NewsChunkRepository
     from src.rag.embedder import Embedder
+    from src.rag.scorer import Scorer
 
 logger = setup_logger(__name__)
 
@@ -68,10 +70,12 @@ class BaseCollector(ABC):
         embedder: Embedder,
         repo: NewsChunkRepository,
         metric_repo: SystemMetricRepository | None = None,
+        scorer: Scorer | None = None,
     ) -> None:
         self._embedder = embedder
         self._repo = repo
         self._metric_repo = metric_repo
+        self._scorer = scorer or get_scorer()
 
     @abstractmethod
     async def collect(self, since: datetime) -> list[RawDocument]:
@@ -195,9 +199,12 @@ class BaseCollector(ABC):
         # 4) 신규 청크만 일괄 임베딩 (배치 사이즈는 Embedder가 관리)
         vectors = self._embedder.encode([c.text for _, c, _ in survivors])
 
-        # 5) NewsChunk 생성
+        # 5) 스코어링 + NewsChunk 생성
         out: list[NewsChunk] = []
         for (doc, chunk, content_hash), vec in zip(survivors, vectors, strict=True):
+            score = self._scorer.score(
+                chunk.text, doc.source_type, doc.title, doc.metadata,
+            )
             out.append(NewsChunk(
                 ticker=doc.ticker,
                 source_type=doc.source_type,
@@ -209,6 +216,12 @@ class BaseCollector(ABC):
                 content_hash=content_hash,
                 embedding=vec.tolist(),
                 event_time=doc.event_time,
-                chunk_metadata={"section": chunk.section, **doc.metadata},
+                sentiment=score.sentiment,
+                importance=score.importance,
+                chunk_metadata={
+                    "section": chunk.section,
+                    "score_method": score.method,
+                    **doc.metadata,
+                },
             ))
         return out
