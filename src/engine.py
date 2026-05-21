@@ -11,7 +11,7 @@ import pandas as pd
 from src.api.account import AccountAPI, Balance
 from src.api.client import KISClient
 from src.api.order import OrderAPI
-from src.api.quote import QuoteAPI
+from src.api.quote import CurrentPrice, QuoteAPI
 from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
 from src.config import settings
@@ -629,27 +629,25 @@ class TradingEngine:
         # 1. 일봉 데이터 (캐시 활용)
         df = await self._get_daily_df(stock_code)
         if df is None:
-            self._record_metric("EVAL_SKIP", {
-                "stock_code": stock_code,
-                "skip_reason": "daily_data_insufficient",
-                "cycle": self._cycle_count,
-            })
+            # 일봉이 없어도 보유 종목은 현재가 기준 손절/익절은 평가한다.
+            # (전략 매도는 일봉에 의존하므로 불가 — 리스크 청산만 수행)
+            # ETN 등 일봉 조회가 불가한 종목의 리스크 청산이 통째로
+            # 누락되던 문제를 보완한다.
+            if is_held and holding_info is not None:
+                await self._evaluate_held_without_daily(stock_code, holding_info)
+            else:
+                self._record_metric("EVAL_SKIP", {
+                    "stock_code": stock_code,
+                    "skip_reason": "daily_data_insufficient",
+                    "cycle": self._cycle_count,
+                })
             return
 
         # 2. 현재가 조회 (실시간)
         current = await self._quote.get_current_price(stock_code)
 
         # 2-1. 종목명 해결: API 응답 → DB 조회 → 코드 fallback
-        if current.stock_name and current.stock_name != stock_code:
-            self._update_stock_name_if_needed(stock_code, current.stock_name)
-        else:
-            resolved = self._resolve_stock_name(stock_code)
-            if resolved:
-                current.stock_name = resolved
-            else:
-                # 최후 수단: 코드를 이름으로 사용하되 로그 남김
-                current.stock_name = stock_code
-                logger.debug("종목명 미해결: %s (API·DB 모두 빈 값)", stock_code)
+        self._resolve_current_stock_name(current, stock_code)
 
         # 3. 전략 분석 (보유/미보유 모두 실행)
         strategy = self._selector.get_strategy(stock_code)
@@ -779,6 +777,66 @@ class TradingEngine:
         await self._execute_buy(
             stock_code, current.stock_name, quantity, current.current_price,
             signal=signal, strategy_name=strategy.name,
+        )
+
+    def _resolve_current_stock_name(self, current: CurrentPrice, stock_code: str) -> str:
+        """현재가 응답의 종목명을 해결한다: API 응답 → DB 조회 → 코드 fallback.
+
+        해결한 이름을 ``current.stock_name``에 반영하고 동일 값을 반환한다.
+
+        Args:
+            current: 현재가 정보 (stock_name이 보정됨)
+            stock_code: 종목코드
+
+        Returns:
+            해결된 종목명
+        """
+        if current.stock_name and current.stock_name != stock_code:
+            self._update_stock_name_if_needed(stock_code, current.stock_name)
+        else:
+            resolved = self._resolve_stock_name(stock_code)
+            if resolved:
+                current.stock_name = resolved
+            else:
+                # 최후 수단: 코드를 이름으로 사용하되 로그 남김
+                current.stock_name = stock_code
+                logger.debug("종목명 미해결: %s (API·DB 모두 빈 값)", stock_code)
+        return current.stock_name
+
+    async def _evaluate_held_without_daily(
+        self,
+        stock_code: str,
+        holding: dict[str, float],
+    ) -> None:
+        """일봉 데이터가 없을 때 보유 종목의 손절/익절만 현재가 기준으로 평가한다.
+
+        전략 매도(데드크로스 등)는 일봉이 필요하므로 생략하고, 평균단가 대비
+        손절/익절 조건만 검사한다. HOLD 시그널을 넘겨 ``_process_held_stock``의
+        전략 매도 분기를 타지 않도록 한다.
+
+        Args:
+            stock_code: 종목코드
+            holding: 보유 정보 (avg_price, quantity)
+        """
+        current = await self._quote.get_current_price(stock_code)
+        stock_name = self._resolve_current_stock_name(current, stock_code)
+
+        self._record_metric("RISK_ONLY_EVAL", {
+            "stock_code": stock_code,
+            "current_price": int(current.current_price),
+            "avg_price": holding["avg_price"],
+            "cycle": self._cycle_count,
+        })
+        logger.info(
+            "[%s %s] 일봉 없음 — 현재가 기준 손절/익절만 평가 (현재가=%s, 매입가=%.0f)",
+            stock_code, stock_name, f"{current.current_price:,}", holding["avg_price"],
+        )
+
+        # HOLD 시그널을 넘겨 전략 매도 분기는 건너뛰고 손절/익절만 평가
+        hold_signal = Signal(signal_type=SignalType.HOLD, confidence=0.0)
+        await self._process_held_stock(
+            stock_code, current.current_price, holding, hold_signal,
+            stock_name=stock_name,
         )
 
     async def _process_held_stock(

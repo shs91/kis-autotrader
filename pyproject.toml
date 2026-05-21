@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kis-autotrader"
-version = "0.3.0"
+version = "0.3.1"
 description = "KIS OpenAPI 기반 주식 자동매매 시스템"
 requires-python = ">=3.12"
 dependencies = [
