@@ -1163,12 +1163,13 @@ def get_recurrence_risk(
 def get_news_quality_stats(
     session: Session, target_date: date,
 ) -> dict[str, Any]:
-    """일별 source_type/provider별 수집 건수, 평균 importance, 임베딩 latency p95.
+    """일별 source_type/provider별 수집 건수, 평균 importance/sentiment, 임베딩 latency p95.
 
     Returns:
         {
           "date": "2026-05-19",
-          "by_source": [{source_type, provider, category, chunks, avg_importance}, ...],
+          "by_source": [{source_type, provider, category, chunks, avg_importance,
+                         avg_sentiment}, ...],
           "embedding": {"avg_ms": ..., "p95_ms": ..., "cycles": ...},
         }
     """
@@ -1181,7 +1182,8 @@ def get_news_quality_stats(
         "       COALESCE(chunk_metadata->>'provider','-') AS provider, "
         "       COALESCE(chunk_metadata->>'category','-') AS category, "
         "       COUNT(*) AS chunks, "
-        "       AVG(importance) AS avg_importance "
+        "       AVG(importance) AS avg_importance, "
+        "       AVG(sentiment) AS avg_sentiment "
         "FROM news_chunks "
         "WHERE fetched_at >= :start AND fetched_at < :end "
         "GROUP BY source_type, provider, category "
