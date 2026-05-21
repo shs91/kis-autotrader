@@ -58,6 +58,8 @@ class SellReason(enum.Enum):
     TAKE_PROFIT = "TAKE_PROFIT"
     STRATEGY = "STRATEGY"
     MANUAL = "MANUAL"
+    TRAILING_STOP = "TRAILING_STOP"
+    MARKET_CLOSE = "MARKET_CLOSE"
 
 
 class OrderType(enum.Enum):
@@ -173,6 +175,7 @@ class Portfolio(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     avg_price: Mapped[float] = mapped_column(Float, nullable=False)
     current_price: Mapped[float] = mapped_column(Float, nullable=False)
+    peak_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
