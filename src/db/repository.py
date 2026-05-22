@@ -304,6 +304,7 @@ class PortfolioRepository:
         quantity: int,
         avg_price: float,
         current_price: float,
+        peak_price: float | None = None,
     ) -> Portfolio:
         """보유 포지션을 생성하거나 갱신한다.
 
@@ -312,6 +313,7 @@ class PortfolioRepository:
             quantity: 보유수량
             avg_price: 평균매수단가
             current_price: 현재가
+            peak_price: 보유 중 최고가 (None이면 기존 값 보존)
 
         Returns:
             생성 또는 갱신된 포지션 객체
@@ -323,6 +325,7 @@ class PortfolioRepository:
                 quantity=quantity,
                 avg_price=avg_price,
                 current_price=current_price,
+                peak_price=peak_price,
             )
             self._session.add(portfolio)
         else:
@@ -330,6 +333,8 @@ class PortfolioRepository:
             portfolio.avg_price = avg_price
             portfolio.current_price = current_price
             portfolio.updated_at = datetime.now(UTC).replace(tzinfo=None)
+            if peak_price is not None:
+                portfolio.peak_price = peak_price
         self._session.flush()
         logger.info(
             "포지션 갱신: stock_id=%d, qty=%d, avg=%.0f",
@@ -350,6 +355,17 @@ class PortfolioRepository:
         """
         stmt = select(Portfolio).where(Portfolio.stock_id == stock_id)
         return self._session.execute(stmt).scalar_one_or_none()
+
+    def get_peak_prices(self) -> dict[str, float]:
+        """보유 포지션의 (종목코드 → peak_price) 맵을 반환한다 (NULL 제외).
+
+        engine.pre_market에서 인메모리 peak dict 시드용.
+        """
+        result: dict[str, float] = {}
+        for p in self.get_all_positions():
+            if p.peak_price is not None and p.stock is not None:
+                result[p.stock.code] = float(p.peak_price)
+        return result
 
     def get_all_positions(self) -> list[Portfolio]:
         """전체 보유 포지션을 조회한다.

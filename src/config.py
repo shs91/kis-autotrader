@@ -288,6 +288,23 @@ class StrategyConfig:
         default_factory=lambda: _env_float("STRATEGY_MIN_CONFIDENCE", 0.1)
     )
 
+    # 트레일링 스톱: 활성화 여부 (off면 기존 take_profit_ratio 고정 익절 폴백)
+    trailing_stop_enabled: bool = field(
+        default_factory=lambda: _env("TRAILING_STOP_ENABLED", "true").lower() == "true"
+    )
+    # 트레일링 무장 임계 (평균단가 대비 +x% 도달 시 추격 시작)
+    trailing_activation_ratio: float = field(
+        default_factory=lambda: _env_float("TRAILING_ACTIVATION_RATIO", 0.05)
+    )
+    # 트레일링 매도폭 (고점 대비 -x% 되돌림 시 청산)
+    trailing_drawdown_ratio: float = field(
+        default_factory=lambda: _env_float("TRAILING_DRAWDOWN_RATIO", 0.05)
+    )
+    # 마감 청산 게이트: 이 수익률 이상이면 마감 임박 시 강제 실현
+    min_profitable_close: float = field(
+        default_factory=lambda: _env_float("MIN_PROFITABLE_CLOSE", 0.015)
+    )
+
     def parse_mappings(self) -> dict[str, str]:
         """STRATEGY_MAPPINGS 환경변수를 파싱한다.
 

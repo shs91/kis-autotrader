@@ -109,6 +109,8 @@ class TradingEngine:
         self._daily_cache: dict[str, tuple[str, pd.DataFrame]] = {}
         # 잔고 캐시: (조회시각, Balance)
         self._balance_cache: tuple[float, Balance] | None = None
+        # 고점 캐시: {종목코드: 고점가격} — 트레일링 스톱 계산용
+        self._peak_prices: dict[str, float] = {}
 
         logger.info(
             "매매 엔진 초기화: 기본전략=%s, 관심종목모드=%s",
@@ -204,6 +206,17 @@ class TradingEngine:
         self._daily_cache[stock_code] = (today_str, df)
         return df
 
+    def _load_peak_prices(self) -> dict[str, float]:
+        """portfolios.peak_price를 읽어 인메모리 peak dict를 시드한다."""
+        from src.db.repository import PortfolioRepository
+
+        try:
+            with get_session() as session:
+                return PortfolioRepository(session).get_peak_prices()
+        except Exception:
+            logger.exception("peak_price 시드 로드 실패 — 빈 dict로 시작")
+            return {}
+
     # ── 잔고 캐시 ─────────────────────────────────────────
 
     async def _get_balance(self, force: bool = False) -> Balance:
@@ -253,6 +266,7 @@ class TradingEngine:
         self._screened_codes.clear()
         self._daily_cache.clear()
         self._balance_cache = None
+        self._peak_prices = self._load_peak_prices()
 
         try:
             await self._client._auth.get_access_token()
@@ -849,7 +863,8 @@ class TradingEngine:
     ) -> None:
         """보유 종목의 매도 판단을 수행한다.
 
-        우선순위: 손절 > 익절 > 전략 매도(데드크로스)
+        우선순위: 손절 > 마감 청산 게이트 > 트레일링(또는 고정 익절) > 전략 매도(데드크로스)
+        (TRAILING_STOP_ENABLED=false이면 트레일링 대신 기존 고정 익절을 평가)
 
         Args:
             stock_code: 종목코드
@@ -860,6 +875,12 @@ class TradingEngine:
         """
         avg_price = holding["avg_price"]
         quantity = int(holding["quantity"])
+
+        # 고점(peak) 갱신 — 핫패스 인메모리 단일 소스
+        prev = self._peak_prices.get(stock_code)
+        seed = prev if prev is not None else max(avg_price, float(current_price))
+        peak = max(seed, float(current_price))
+        self._peak_prices[stock_code] = peak
 
         if self._risk.should_stop_loss(float(current_price), avg_price):
             logger.warning(
@@ -872,16 +893,41 @@ class TradingEngine:
             )
             return
 
-        if self._risk.should_take_profit(float(current_price), avg_price):
+        # 2순위: 마감 임박 강제 청산 게이트 (이익 포지션 한정, 트레일링과 독립)
+        if self._risk.should_close_for_market_end(float(current_price), avg_price):
             logger.info(
-                "[%s] 익절 매도 실행 (현재가: %d, 매입가: %.0f)",
+                "[%s] 마감 청산 게이트 매도 (현재가: %d, 매입가: %.0f)",
                 stock_code, current_price, avg_price,
             )
             await self._execute_sell(
                 stock_code, quantity, current_price,
-                reason="익절", avg_price=avg_price, stock_name=stock_name,
+                reason="마감청산", avg_price=avg_price, stock_name=stock_name,
             )
             return
+
+        # 3순위: 트레일링 스톱 (활성화 시 익절 대체) / 비활성 시 고정 익절 폴백
+        if settings.strategy.trailing_stop_enabled:
+            if self._risk.should_trailing_stop(float(current_price), avg_price, peak):
+                logger.info(
+                    "[%s] 트레일링 매도 (현재가: %d, 고점: %.0f, 매입가: %.0f)",
+                    stock_code, current_price, peak, avg_price,
+                )
+                await self._execute_sell(
+                    stock_code, quantity, current_price,
+                    reason="트레일링", avg_price=avg_price, stock_name=stock_name,
+                )
+                return
+        else:
+            if self._risk.should_take_profit(float(current_price), avg_price):
+                logger.info(
+                    "[%s] 익절 매도 실행 (현재가: %d, 매입가: %.0f)",
+                    stock_code, current_price, avg_price,
+                )
+                await self._execute_sell(
+                    stock_code, quantity, current_price,
+                    reason="익절", avg_price=avg_price, stock_name=stock_name,
+                )
+                return
 
         if signal.signal_type == SignalType.SELL and signal.confidence >= 0.1:
             logger.info(
@@ -917,6 +963,8 @@ class TradingEngine:
             result = await self._order.buy(stock_code=stock_code, quantity=quantity)
             self._today_trade_count += 1
             self._invalidate_balance_cache()
+            # 신규/추가 매수 — 다음 사이클에 max(avg, current)로 재시드
+            self._peak_prices.pop(stock_code, None)
 
             logger.info(
                 "[매수 체결] %s(%s) %d주, 주문번호=%s",
@@ -982,6 +1030,8 @@ class TradingEngine:
                 stock_code, stock_name, TradeType.SELL, quantity, price,
                 reason=reason, signal_type=signal_type, avg_price=avg_price,
             )
+            # 청산 — 고점 추적 종료
+            self._peak_prices.pop(stock_code, None)
 
             self._task_queue.enqueue(
                 task_type="telegram_notify",
@@ -1008,6 +1058,8 @@ class TradingEngine:
         "손절": SellReason.STOP_LOSS,
         "익절": SellReason.TAKE_PROFIT,
         "전략매도": SellReason.STRATEGY,
+        "트레일링": SellReason.TRAILING_STOP,
+        "마감청산": SellReason.MARKET_CLOSE,
     }
 
     _BUY_REASON_MAP: dict[str, BuyReason] = {
@@ -1422,6 +1474,7 @@ class TradingEngine:
                 "quantity": h.quantity,
                 "avg_price": float(h.avg_price),
                 "current_price": float(h.current_price),
+                "peak_price": self._peak_prices.get(h.stock_code),
             })
         self._task_queue.enqueue(
             task_type="sync_portfolio",

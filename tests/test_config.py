@@ -233,3 +233,14 @@ def test_override_state_has_expected_shape() -> None:
     assert isinstance(state.meta, dict)
     assert state.source_path.name == "config_overrides.json"
     assert isinstance(state.loaded, bool)
+
+
+def test_trailing_stop_settings_defaults() -> None:
+    """트레일링/마감게이트 설정 기본값을 검증한다."""
+    from src.config import StrategyConfig
+
+    s = StrategyConfig()
+    assert s.trailing_stop_enabled is True
+    assert s.trailing_activation_ratio == 0.05
+    assert s.trailing_drawdown_ratio == 0.05
+    assert s.min_profitable_close == 0.015

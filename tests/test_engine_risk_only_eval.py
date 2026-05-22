@@ -1,12 +1,12 @@
-"""일봉 데이터 부재 시 보유 종목의 현재가 기준 손절/익절 평가 테스트.
+"""일봉 데이터 부재 시 보유 종목의 현재가 기준 손절/트레일링 평가 테스트.
 
 ETN(예: 760027)처럼 일봉 조회가 0건이라 ``_get_daily_df``가 None을 반환하는
-경우에도 보유 종목은 현재가 vs 평균단가 기준으로 손절/익절을 평가해야 한다.
+경우에도 보유 종목은 현재가 vs 평균단가 기준으로 손절/트레일링을 평가해야 한다.
 
 검증 포인트:
-1. 보유 종목 + df None + 손절 조건 → 매도 실행
-2. 보유 종목 + df None + 익절 조건 → 매도 실행
-3. 보유 종목 + df None + 데드존(손절·익절 모두 미달) → 매도 없음
+1. 보유 종목 + df None + 손절 조건 → 매도 실행 (reason="손절")
+2. 보유 종목 + df None + 트레일링 조건(고점 설정) → 매도 실행 (reason="트레일링")
+3. 보유 종목 + df None + 데드존(손절·트레일링 모두 미달) → 매도 없음
 4. 미보유 종목 + df None → EVAL_SKIP, 매도 없음
 """
 
@@ -67,12 +67,16 @@ async def test_held_no_daily_triggers_stop_loss() -> None:
 
 
 @pytest.mark.asyncio
-async def test_held_no_daily_triggers_take_profit() -> None:
-    """일봉 None + 익절 조건이면 매도가 실행된다."""
+async def test_held_no_daily_triggers_trailing() -> None:
+    """일봉 없는 보유 종목도 현재가 기준 트레일링 스톱이 발동한다.
+
+    고점 13,500 (매입가 10,000 대비 +35%, 무장 임계 5% 초과) 에서
+    현재가 12,700으로 고점 대비 -5.9% 하락 → 트레일링 조건 충족.
+    """
     engine = _make_engine()
     engine._get_daily_df = AsyncMock(return_value=None)  # type: ignore[method-assign]
-    # 평균단가 10,000 대비 +27% (익절 한도 5% 초과)
-    _stub_current_price(engine, price=12_700)
+    engine._peak_prices = {"760027": 13_500.0}  # 고점 +35%
+    _stub_current_price(engine, price=12_700)    # 고점 대비 -5.9% → 트레일
     engine._execute_sell = AsyncMock()  # type: ignore[method-assign]
 
     with patch.object(engine._task_queue, "enqueue"), \
@@ -86,7 +90,7 @@ async def test_held_no_daily_triggers_take_profit() -> None:
         )
 
     engine._execute_sell.assert_awaited_once()
-    assert engine._execute_sell.call_args.kwargs["reason"] == "익절"
+    assert engine._execute_sell.call_args.kwargs["reason"] == "트레일링"
 
 
 @pytest.mark.asyncio
