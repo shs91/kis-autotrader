@@ -32,6 +32,7 @@ from src.harness.telegram_commands import (
     cmd_status_implement,
 )
 from src.notify.bot import TelegramBot
+from src.notify.formatter import eval_profit_rate
 from src.notify.telegram import TelegramNotifier
 from src.scheduler.jobs import TradingScheduler
 from src.utils.logger import setup_logger
@@ -146,10 +147,12 @@ def _register_bot_commands(
         """잔고를 조회한다."""
         try:
             balance = await engine._get_balance()
+            bal_sign = "+" if balance.total_profit_loss >= 0 else ""
+            bal_rate = eval_profit_rate(balance)
             lines = [
                 "<b>[잔고]</b>",
                 f"예수금: {balance.deposit:,}원",
-                f"평가손익: {balance.total_profit_loss:,}원 ({balance.total_profit_rate:.2f}%)",
+                f"평가손익: {bal_sign}{balance.total_profit_loss:,}원 ({bal_sign}{bal_rate:.2f}%)",
             ]
             for h in balance.holdings[:10]:
                 lines.append(
