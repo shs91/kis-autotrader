@@ -6,7 +6,7 @@
 ## 주요 기능
 
 - **자동 매매** — 이동평균 교차, RSI, MACD, 볼린저밴드, 앙상블 전략 기반 자동 매수/매도
-- **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 손절/익절 자동 판단, 당일 MDD/연패 감시
+- **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 손절/트레일링 스톱(고점 대비 되돌림)/마감 청산 게이트 자동 판단, 당일 MDD/연패 감시
 - **실시간 시세** — 웹소켓 기반 실시간 호가/체결 수신 (상태 머신 + 자동 재연결)
 - **API 안전장치** — Token Bucket Rate Limiter, Redis 분산 Rate Limiter, Circuit Breaker, exponential backoff 재시도
 - **Worker 비동기 처리** — PostgreSQL Outbox 패턴으로 외부 I/O(Calendar, Telegram, DB 기록)를 별도 Worker에서 처리. 네트워크 장애 시 자동 재시도
@@ -443,9 +443,15 @@ WS_MAX_RECONNECT_ATTEMPTS=5       # 웹소켓 최대 재연결 시도
 WS_RECONNECT_BASE_DELAY=5         # 웹소켓 재연결 기본 대기(초)
 
 # Trading
-MAX_LOSS_RATE=0.03                 # 최대 손실률 (3%)
+MAX_LOSS_RATE=0.03                 # 최대 손실률 (3%, 손절선)
 MAX_POSITION_RATIO=0.2             # 최대 포지션 비율 (20%)
 DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한
+
+# 이익 청산 (트레일링 스톱 + 마감 게이트)
+TRAILING_STOP_ENABLED=true         # 트레일링 스톱 사용 (false면 +5% 고정 익절로 폴백)
+TRAILING_ACTIVATION_RATIO=0.05     # 무장 임계 (평균단가 대비 +5% 도달 시 추격 시작)
+TRAILING_DRAWDOWN_RATIO=0.05       # 매도폭 (고점 대비 -5% 되돌림 시 청산)
+MIN_PROFITABLE_CLOSE=0.015         # 마감 임박 시 이 수익률(+1.5%) 이상이면 강제 실현
 
 # Telegram (선택)
 TELEGRAM_BOT_TOKEN=봇_토큰          # BotFather에서 발급

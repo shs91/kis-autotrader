@@ -6,6 +6,23 @@
 
 ---
 
+## [2026-05-22] 트레일링 스톱 + 마감 청산 게이트 — 고점 대비 되돌림 청산 (v0.4.0)
+- 계획서: docs/superpowers/plans/2026-05-22-trailing-stop-and-market-close-gate.md (설계: docs/superpowers/specs/2026-05-22-trailing-stop-and-market-close-gate-design.md)
+- 카테고리: feature
+- 변경 파일:
+  - src/strategy/risk.py: `should_trailing_stop(current, avg, peak)`(시간 무관 — 무장 임계 도달 후 고점 대비 되돌림 청산), `should_close_for_market_end(current, avg, now)`(마감 임박 + 최소 수익률 이상 이익 포지션만 강제 실현; 트레일링과 독립) 신설. `should_stop_loss`/`should_take_profit` 미변경(후자는 폴백 경로에서만 사용).
+  - src/engine.py: `_process_held_stock` 청산 우선순위 재구성 — 손절 > 마감 청산 게이트 > 트레일링(또는 TRAILING_STOP_ENABLED=false 시 고정 익절) > 전략매도. 인메모리 `_peak_prices` 고점 추적(평가 시작 시 `max(seed, 현재가)` 갱신, 매수/매도 성공 시 pop), `pre_market`에서 `_load_peak_prices()`로 portfolios.peak_price 시드. 일봉 없는 ETN 경로(`_evaluate_held_without_daily`)에도 동일 적용.
+  - src/config.py: `TRAILING_STOP_ENABLED`(true)·`TRAILING_ACTIVATION_RATIO`(0.05)·`TRAILING_DRAWDOWN_RATIO`(0.05)·`MIN_PROFITABLE_CLOSE`(0.015) 4종.
+  - src/db/models.py·repository.py: `Portfolio.peak_price`(Float nullable), `SellReason.TRAILING_STOP`/`MARKET_CLOSE`, `PortfolioRepository.upsert(peak_price)`(미지정 시 기존 고점 보존) + `get_peak_prices()` 시드 조회. src/worker/handlers.py·engine `_enqueue_sync_portfolio`: peak_price를 비동기 sync_portfolio 경로로 영속화(핫패스 동기 DB 0개).
+  - alembic: peak_price 컬럼 + sell_reason enum 값 마이그레이션(autocommit_block, 적용 보류).
+  - tests: risk 단위(트레일링 4 + 마감게이트 5), 엔진 통합(test_engine_trailing_stop 9), repo(test_portfolio_peak 4), 모델(2), ETN 경로 테스트 트레일링 의미로 갱신.
+- 배경: 기존 청산은 +5% 고정 익절뿐이라 고점 대비 되돌림을 못 잡음. 760027(키움 인버스 2X 전력 TOP5 ETN)이 평균단가 3,565원 대비 +27%까지 상승 후 되돌림에도 무한 보유. 트레일링이 익절을 대체(수익 나면 추격)하고, 마감 게이트로 이익 포지션을 장 마감 전 실현하되 손실 포지션은 손절에만 맡김(시간 의존 파라미터 0개 — 게이트 발동 조건만 시간 기반).
+- 영향: 무장(고점 ≥ avg×1.05) 후 고점 대비 5% 되돌림 시 "트레일링" 청산. 마감 임박 + 수익률 ≥ 1.5%면 "마감청산". 일봉 미조회 ETN도 동일 평가. peak는 재시작/장 간 portfolios.peak_price로 복원.
+- 검증 결과: pytest 869 passed | ruff 변경 파일 All checks passed(사전 models.py E501 1건 무관) | mypy 신규 에러 0.
+- 비고: 운영자 액션 — 머지 후 `alembic upgrade head`(공유 kis-postgres에 peak_price 컬럼 + enum 값) + `com.kis.autotrader` 재시작 + `scripts/record_implementation.py`로 DB 구현 이력 기록 필요(worktree에 .env 부재로 보류).
+
+---
+
 ## [2026-05-21] 일봉 부재 시 보유 종목 현재가 기준 손절/익절 평가 — ETN 리스크 청산 누락 수정 (v0.3.1) — 🔴 핫픽스
 - 카테고리: bug_fix
 - 변경 파일:
@@ -64,15 +81,4 @@
 
 ---
 
-## [2026-05-19] CircuitBreaker `is_open` lazy reset — engine 자가 복구 결함 수정 (v0.2.10) — 🔴 핫픽스
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/api/client.py: `CircuitBreaker.is_open` property가 timer 만료를 검사해 자동 반개방하도록 변경. 신규 `_try_half_open()` 헬퍼로 `is_open` property와 `is_available()` 메서드의 reset 로직 일관화. 미사용 import `RateLimitExceededError` 정리.
-  - tests/test_api/test_client.py: 회귀 테스트 2건 추가 — `test_is_open_resets_after_timeout` / `test_is_open_consistent_with_is_available`. 미사용 import 정리.
-- 배경: 2026-05-19 09:34~09:40 약 8분간 장중 매매가 차단됨. `is_available()`은 timer 만료 시 `_failure_count = 0` 리셋하지만 `_is_open` 필드는 그대로 True 유지. `engine.py:317/382`가 `circuit_breaker.is_open` property를 검사 → 영원히 True → `record_success` 호출 기회 자체가 없어 자가 복구 불가.
-- 영향: 서킷 브레이커가 timer 만료 후 자동으로 반개방되어 `engine.py`의 다음 사이클이 정상 진입. 첫 실제 요청 성공 시 `record_success()`가 호출되어 완전 close. 추후 같은 패턴의 영구 차단 재발 차단.
-- 검증 결과: pytest 11 passed (CircuitBreaker 6 = 기존 4 + 신규 2, KISClient 5) | ruff All checks passed | mypy --strict src/api/client.py ✅.
-- 비고: 운영자 액션 — autotrader 재시작 시점에 효과 발생. 장중 위험 회피 위해 15:30 장 마감 후 재시작 권장.
-
----
 
