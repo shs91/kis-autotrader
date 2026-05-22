@@ -6,6 +6,21 @@
 
 ---
 
+## [2026-05-22] Stop 훅 검증 게이트를 in-session verifier와 실제 연결 — 충족불가 게이트의 헛돌이 루프 제거 (v0.4.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - scripts/harness/run_verifier.py: `HARNESS_CYCLE_ARTIFACTS_PATH`가 설정되면 Stop 훅이 읽는 표준 산출물 파일(`cycle_artifacts.json`, top-level pytest/mypy/ruff 키)을 함께 기록. in-session verifier agent가 step 5에서 실행하면 게이트 자동 충족. env 미설정(수동 실행)이면 미기록.
+  - src/harness/cycle/orchestrator.py: 위 env를 `claude` 서브프로세스에 주입 + 사이클 시작 시 이전 사이클 산출물 제거(거짓 통과 방지).
+  - scripts/claude-hooks/run_hook.py: 페이로드→파일 폴백 + 재진입 가드(`stop_hook_active`). 첫 종료 시도엔 차단(검증 유도), 재진입에도 부재면 통과+경고로 무한루프 차단. 최종 강제력은 후처리 verifier 재시작 게이트가 유지.
+  - scripts/auto_implement_prompt_v2.txt: step 5 verifier 실행이 게이트를 자동 충족함을 명시(코디네이터의 수동 파일 작성 방지).
+  - tests: test_hook_wrapper(재진입 가드/첫 시도 차단/격리 보강), test_verifier_cli(canonical 쓰기·스킵), test_cycle_orchestrator(env 주입·stale 제거) 신규 7종.
+- 배경: orchestrator가 `HARNESS_CYCLE_VERIFICATION_REQUIRED=1`로 `claude -p`를 띄우면 Stop 훅이 `verification_artifacts`를 요구하나 Claude Code Stop 이벤트는 이를 절대 싣지 않음. 산출물을 만드는 후처리 verifier는 claude 종료 *후* 실행돼 시점상 게이트 충족 불가 → 매 종료 차단 → headless claude가 강제 재개되어 Claude Code 내부 상한까지 무의미한 턴/토큰/시간 소모(검증 강제는 못 함). 격리 재현 테스트로 headless가 Stop exit 2를 정직히 따라 재진입(loop)함을 실증했고, 호스트 `~/.kis-autotrader/cycle_artifacts.json`에 코디네이터가 수동으로 써넣은 흔적(5/22 17:16)으로 실제 차단 발생을 확증.
+- 영향: verifier(쓰기)와 Stop 훅(읽기)이 단일 산출물 경로를 공유해 게이트가 의도대로 작동. step 5 verifier 실행만으로 종료 게이트 충족, 재진입 가드로 헛돌이 루프 제거(이전 11분대 사이클 정상화 기대).
+- 검증 결과: pytest test_harness 169 passed (신규 7 포함) | ruff 변경 파일 ✅ | mypy 변경 파일 ✅ | E2E 배선 4시나리오 실증(쓰기→읽기 통과 / 첫 시도 차단(2) / 재진입 루프 차단(0+경고)).
+- 비고: PR #36 머지. 함께 묶였던 2026-05-21 파이프라인 문서 3건은 `docs/pipeline-artifacts-2026-05-21` 브랜치로 분리(critical drawdown 제안서 (a)/(b) 결정 대기). 하네스 내부 도구 변경이라 서비스 재시작 불요 — 다음 자동구현 cron(월 17:15)부터 적용.
+
+---
+
 ## [2026-05-22] 트레일링 스톱 + 마감 청산 게이트 — 고점 대비 되돌림 청산 (v0.4.0)
 - 계획서: docs/superpowers/plans/2026-05-22-trailing-stop-and-market-close-gate.md (설계: docs/superpowers/specs/2026-05-22-trailing-stop-and-market-close-gate-design.md)
 - 카테고리: feature
@@ -64,20 +79,6 @@
 - 영향: 사이클(collector)마다 commit으로 `news_collection_state.updated_at`/`news_chunks`가 durable 전진, 실패 시 rollback으로 세션 오염을 회복(다음 사이클 정상화). 신규 청크만 임베딩하여 중복 재임베딩 컴퓨트 제거. 단일 kis-postgres 공유 구조에서 per-cycle commit이 락 점유 시간도 단축.
 - 검증 결과: pytest 824 passed | ruff ✅ (변경 파일 All checks passed) | mypy 신규 에러 0 (사전 dict type-arg 부채 14건 무관, baseline 14=14).
 - 비고: 운영자 액션 — 수정 반영을 위해 `com.kis.news-collector` 재시작 필요. 재시작 후 `news_collection_state.updated_at` 당일 갱신 + `news_chunks.event_time` 최댓값 진행 + 임베딩 배치 수 ≈ 실적재 수 수렴 확인.
-
----
-
-## [2026-05-20] 뉴스 청크 적재 SAVEPOINT 누적 → PG 락 테이블 고갈 수정 + 시각 의존 테스트 결함 정리 (v0.2.11) — 🔴 핫픽스
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/db/repository.py: `NewsChunkRepository.insert_chunks`를 "배치 내 (ticker,content_hash) 중복 제거 → 단일 SELECT로 기존분 필터 → 1회 add_all/flush"로 재작성. 정상 경로의 행별 `begin_nested()`(SAVEPOINT)를 제거하고 동시 적재 레이스 시에만 행별 폴백.
-  - tests/test_db/test_news_chunk_repo.py: 배치 내 중복 dedup / 대량(50건) 중복 재적재 0건 테스트 3건 추가.
-  - tests/test_strategy/test_risk.py: `TestShouldTakeProfit`·`TestValidateOrder` setup_method에 `is_near_market_close=False` 시각 격리 추가(파일 내 기존 컨벤션 일치). 프로덕션 로직 무변경.
-  - tests/test_analytics.py → tests/test_analytics_queries.py: `tests/test_analytics/` 디렉토리와의 import 이름 충돌(전체 수집 차단) 해소 위해 리네임. `test_get_optimal_risk_params` lookback을 오늘 기준 산출로 바꿔 고정 과거 seed의 시각 의존 제거.
-- 배경: 2026-05-20 15:33 KST 장 마감 직후 뉴스 수집기가 news_chunks에 대량 중복 공시를 INSERT하며 행별 SAVEPOINT 서브트랜잭션 락이 누적 → kis-postgres 락 테이블(6400 = max_locks_per_transaction 64 × max_connections 100) 고갈, `out of shared memory`(31,628회). 같은 DB를 공유하는 자동매매의 15:40 장 마감 결산이 worker 큐 등록(calendar_event/telegram_notify/daily_summary/sync_portfolio/daily_performance) 전부 실패 → 캘린더 매매결과·텔레그램 일일결산 누락. 복구는 `docker restart kis-postgres` + `engine.post_market()` 재실행 보정으로 처리. 충돌 해제 과정에서 시각 의존 테스트 결함(risk 4건, analytics 1건)이 함께 드러남.
-- 영향: 대량 중복 공시에도 정상 경로 SAVEPOINT 0건 → 락 테이블 고갈 및 자동매매 결산 동반 차단 재발 차단. 전체 테스트 수집 복구(이전 collection interrupted) + 시각 의존 결함 제거로 야간/장 마감 후 실행에도 안정 통과.
-- 검증 결과: pytest 전체 815 passed (이전 collection 단계 interrupted) | ruff ✅ All checks passed | mypy src/db/repository.py 새 에러 0 (사전 dict type-arg 부채 14건 무관).
-- 비고: 운영자 액션 — 수정 코드 반영을 위해 `com.kis.news-collector` 재시작 필요(완료). 단일 kis-postgres를 전 서비스가 공유하는 구조라 한 서비스의 락 고갈이 결산까지 전파됨.
 
 ---
 
