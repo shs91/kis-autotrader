@@ -10,10 +10,10 @@ from typing import Any
 
 import pandas as pd
 
-from src.api.account import AccountAPI, Balance
+from src.api.account import AccountAPI, Balance, Execution
 from src.api.client import KISClient
 from src.api.order import OrderAPI
-from src.api.quote import CurrentPrice, QuoteAPI
+from src.api.quote import CurrentPrice, QuoteAPI, VolumeRankItem
 from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
 from src.config import settings
@@ -1400,7 +1400,7 @@ class TradingEngine:
 
     def _record_screening_to_db(
         self,
-        ranked: list[object],
+        ranked: list[VolumeRankItem],
         new_candidates: list[str],
     ) -> None:
         """스크리닝 결과를 screening_results 테이블에 배치 기록한다."""
@@ -1510,7 +1510,7 @@ class TradingEngine:
         except Exception:
             logger.exception("시그널 큐 적재 실패: %s", stock_code)
 
-    def _record_metric(self, metric_type: str, detail: dict | None = None) -> None:
+    def _record_metric(self, metric_type: str, detail: dict[str, Any] | None = None) -> None:
         """시스템 메트릭을 Worker Queue에 적재한다."""
         try:
             self._task_queue.enqueue(
@@ -1798,7 +1798,7 @@ class TradingEngine:
 
     # ── DB 연동 (기존) ─────────────────────────────────────
 
-    def _create_calendar_event(self, balance: object, executions: list[object]) -> None:
+    def _create_calendar_event(self, balance: Balance, executions: list[Execution]) -> None:
         """일일 매매 결과를 Google Calendar에 등록한다.
 
         체결 건수·종목 상세는 DB Trade 테이블을 기준으로 집계한다.
@@ -2063,7 +2063,7 @@ class TradingEngine:
         except Exception:
             logger.exception("관심종목 시드 실패")
 
-    def _save_daily_performance(self, balance: object, executions: list[object]) -> None:
+    def _save_daily_performance(self, balance: Balance, executions: list[Execution]) -> None:
         """일일 성과를 DB에 저장한다."""
         try:
             with get_session() as session:
@@ -2102,7 +2102,7 @@ class TradingEngine:
         except Exception:
             logger.exception("일일 성과 저장 실패")
 
-    def _sync_portfolio(self, balance: object) -> None:
+    def _sync_portfolio(self, balance: Balance) -> None:
         """KIS 잔고를 기반으로 DB 포트폴리오를 동기화한다."""
         try:
             with get_session() as session:

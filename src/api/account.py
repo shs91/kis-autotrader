@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from src.api.client import KISClient
 from src.config import settings
@@ -29,7 +29,7 @@ TR_ID_EXECUTIONS_MAP: dict[str, str] = {
 
 def _get(data: dict[str, Any], key: str, default: str = "") -> str:
     """대소문자를 구분하지 않고 딕셔너리에서 값을 가져온다."""
-    return data.get(key) or data.get(key.lower(), default)
+    return cast(str, data.get(key) or data.get(key.lower(), default))
 
 
 @dataclass

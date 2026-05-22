@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import cast
 
 import pandas as pd
 
@@ -33,8 +34,8 @@ class BollingerBandStrategy(BaseStrategy):
             num_std: 표준편차 배수 (기본 2.0)
         """
         scfg = settings.strategy
-        self._period = period or getattr(scfg, "bb_period", 20)
-        self._num_std = num_std or getattr(scfg, "bb_num_std", 2.0)
+        self._period: int = cast(int, period or getattr(scfg, "bb_period", 20))
+        self._num_std: float = cast(float, num_std or getattr(scfg, "bb_num_std", 2.0))
 
     @property
     def name(self) -> str:

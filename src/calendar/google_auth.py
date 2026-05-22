@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -109,8 +110,12 @@ class GoogleCalendarAuth:
             return None
 
         try:
-            creds = Credentials.from_authorized_user_file(
-                str(self._token_path), SCOPES
+            # google-auth 일부 메서드는 타입 미제공 → cast으로 반환 타입 명시
+            creds = cast(
+                Credentials,
+                Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
+                    str(self._token_path), SCOPES
+                ),
             )
             logger.info("토큰 파일 로드 성공: %s", self._token_path)
             return creds
@@ -157,7 +162,7 @@ class GoogleCalendarAuth:
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(self._credentials_path), SCOPES
             )
-            creds = flow.run_local_server(port=0)
+            creds = cast(Credentials, flow.run_local_server(port=0))
             self._save_token(creds)
             logger.info("새 OAuth2 인증 완료")
             return creds
@@ -172,7 +177,10 @@ class GoogleCalendarAuth:
         """
         try:
             self._token_path.parent.mkdir(parents=True, exist_ok=True)
-            self._token_path.write_text(creds.to_json())
+            # google-auth to_json은 타입 미제공 → cast으로 str 명시
+            self._token_path.write_text(
+                cast(str, creds.to_json())  # type: ignore[no-untyped-call]
+            )
             logger.info("토큰 저장 완료: %s", self._token_path)
         except Exception as e:
             logger.warning("토큰 파일 저장 실패: %s", e)

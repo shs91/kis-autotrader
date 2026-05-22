@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import cast
 
 import pandas as pd
 
@@ -35,9 +36,9 @@ class MACDStrategy(BaseStrategy):
             signal_period: 시그널 EMA 기간 (기본 9)
         """
         scfg = settings.strategy
-        self._fast = fast_period or getattr(scfg, "macd_fast_period", 12)
-        self._slow = slow_period or getattr(scfg, "macd_slow_period", 26)
-        self._signal = signal_period or getattr(scfg, "macd_signal_period", 9)
+        self._fast: int = cast(int, fast_period or getattr(scfg, "macd_fast_period", 12))
+        self._slow: int = cast(int, slow_period or getattr(scfg, "macd_slow_period", 26))
+        self._signal: int = cast(int, signal_period or getattr(scfg, "macd_signal_period", 9))
 
     @property
     def name(self) -> str:

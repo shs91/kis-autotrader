@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd
 
 from src.db.models import NewsChunk, NewsSourceType
 from src.utils.logger import setup_logger

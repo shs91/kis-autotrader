@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -935,8 +935,8 @@ def get_profit_factor(
     losses = [t for t in sells if (t.profit_loss_amount or 0) < 0]
     breakeven = [t for t in sells if (t.profit_loss_amount or 0) == 0]
 
-    total_profit = sum(t.profit_loss_amount for t in wins) if wins else 0
-    total_loss = abs(sum(t.profit_loss_amount for t in losses)) if losses else 0
+    total_profit = sum((t.profit_loss_amount or 0) for t in wins) if wins else 0
+    total_loss = abs(sum((t.profit_loss_amount or 0) for t in losses)) if losses else 0
     profit_factor = (total_profit / total_loss) if total_loss > 0 else float("inf") if total_profit > 0 else 0.0
 
     avg_win = (total_profit / len(wins)) if wins else 0
@@ -1142,7 +1142,7 @@ def get_recurrence_risk(
             for p, c in file_counts.items()
             if c >= min_edits
         ),
-        key=lambda x: -x["edit_count"],
+        key=lambda x: -cast(int, x["edit_count"]),
     )
     risk_components = sorted(
         (
@@ -1150,7 +1150,7 @@ def get_recurrence_risk(
             for comp, c in comp_counts.items()
             if c >= min_edits
         ),
-        key=lambda x: -x["edit_count"],
+        key=lambda x: -cast(int, x["edit_count"]),
     )
     return {
         "window_days": window_days,

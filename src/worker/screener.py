@@ -26,14 +26,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, date, datetime, time
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from src.api.auth import KISAuth
 from src.api.client import KISClient
-from src.api.quote import QuoteAPI
-from src.api.rate_limiter import HybridRateLimiter
+from src.api.quote import QuoteAPI, VolumeRankItem
+from src.api.rate_limiter import HybridRateLimiter, RateLimiter
 from src.config import settings
 from src.db.repository import ScreeningResultRepository, SystemMetricRepository
 from src.db.session import get_session
@@ -72,7 +73,11 @@ class ScreeningWorker:
         """
         self._auth = KISAuth()
         self._limiter = HybridRateLimiter(role="screener")
-        self._client = KISClient(auth=self._auth, limiter=self._limiter)
+        # HybridRateLimiter는 RateLimiter와 구조적으로 호환(async acquire 동일).
+        # KISClient는 limiter.acquire()만 사용하므로 런타임상 안전.
+        self._client = KISClient(
+            auth=self._auth, limiter=cast("RateLimiter", self._limiter)
+        )
         self._quote = QuoteAPI(client=self._client)
         self._screener = StockScreener()
 
@@ -200,7 +205,7 @@ class ScreeningWorker:
 
     def _record_to_db(
         self,
-        ranked: list[object],
+        ranked: list[VolumeRankItem],
         new_candidates: list[str],
     ) -> None:
         """스크리닝 결과를 screening_results 테이블에 배치 기록한다."""

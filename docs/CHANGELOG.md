@@ -6,6 +6,23 @@
 
 ---
 
+## [2026-05-22] mypy strict baseline 정리 — 85건 → 0건 (전역 타입 클린업) (v0.4.5)
+- 카테고리: refactor
+- 변경 파일:
+  - pyproject.toml: 타입 스텁 없는 서드파티(pandas/apscheduler/google_auth_oauthlib/googleapiclient)에 `ignore_missing_imports` override 추가 → `import-untyped` 16건 제거.
+  - src/db/: JSONB·payload 컬럼/파라미터 `dict`→`dict[str, Any]`(type-arg 14건), analytics 제너레이터 item type(`int|None`→`or 0`)·unary minus 대상 `cast(int, ...)`.
+  - src/worker/: screener·engine의 `ranked: list[object]`→`list[VolumeRankItem]`, runner `task: object`→`TaskQueue`, queue의 SQLAlchemy `delete(TaskQueue)` 구문·`CursorResult.rowcount` cast.
+  - src/engine.py: `object`/`list[object]`→실타입 `Balance`/`Execution`/`VolumeRankItem` 주입.
+  - src/strategy/: rsi 불용 `type: ignore` 제거, macd/bollinger 초기화값 `cast(int/float, ...)`.
+  - src/api/: auth/quote/account `.json()` Any 반환 `cast(str, ...)`, rate_limiter 동기 redis 반환 cast(stub의 sync/async 모호성).
+  - src/calendar/google_auth.py: google-auth 부분 미타입 메서드 `cast`+`# type: ignore[no-untyped-call]`. src/notify/bot.py: params `dict[str, str|int]`·json 반환 cast. src/scheduler/jobs.py: `asyncio.run` 인자 Coroutine 타입. src/market_stats.py: 불용 type:ignore 제거.
+- 배경: strict mypy가 전역 85건 에러를 안고 있어 타입 신호가 무력화돼 있었음. v0.4.4에서 verifier 게이트는 '변경 파일 스코프'로 우회했으나 baseline 자체는 미정리 상태였다. 노이즈 16건(스텁 미설치 `import-untyped`) + 실에러 69건(`object` 파라미터·bare `dict`·`Any` 반환 등).
+- 영향: `mypy src/` Success(0건, 이전 85건). 이제 verifier/CI에서 mypy 0-tolerance 강제 가능. 런타임 동작 무변경 — 전부 타입/주석/cast/import만 손댔고 pytest 911 passed로 확인. 5개 모듈 병렬 에이전트로 작업 후 중앙 검증(full mypy + 전체 테스트).
+- 검증 결과: `mypy src/` Success: no issues found in 93 source files | pytest **911 passed** | ruff 신규 위반 0(기존 E501/F401 12건은 pre-existing, 무관).
+- 비고: pandas는 `pandas-stubs` 대신 `ignore_missing_imports` 채택(엄격 스텁은 신규 에러 대량 유발). 변경 파일의 기존 ruff 위반 12건 정리는 별도 과제로 잔존.
+
+---
+
 ## [2026-05-22] Verifier mypy 게이트를 변경 파일로 스코프 — baseline 에러발 구조적 FAIL 제거 (v0.4.4)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -55,23 +72,6 @@
 - 영향: verifier(쓰기)와 Stop 훅(읽기)이 단일 산출물 경로를 공유해 게이트가 의도대로 작동. step 5 verifier 실행만으로 종료 게이트 충족, 재진입 가드로 헛돌이 루프 제거(이전 11분대 사이클 정상화 기대).
 - 검증 결과: pytest test_harness 169 passed (신규 7 포함) | ruff 변경 파일 ✅ | mypy 변경 파일 ✅ | E2E 배선 4시나리오 실증(쓰기→읽기 통과 / 첫 시도 차단(2) / 재진입 루프 차단(0+경고)).
 - 비고: PR #36 머지. 함께 묶였던 2026-05-21 파이프라인 문서 3건은 `docs/pipeline-artifacts-2026-05-21` 브랜치로 분리(critical drawdown 제안서 (a)/(b) 결정 대기). 하네스 내부 도구 변경이라 서비스 재시작 불요 — 다음 자동구현 cron(월 17:15)부터 적용.
-
----
-
-## [2026-05-22] 트레일링 스톱 + 마감 청산 게이트 — 고점 대비 되돌림 청산 (v0.4.0)
-- 계획서: docs/superpowers/plans/2026-05-22-trailing-stop-and-market-close-gate.md (설계: docs/superpowers/specs/2026-05-22-trailing-stop-and-market-close-gate-design.md)
-- 카테고리: feature
-- 변경 파일:
-  - src/strategy/risk.py: `should_trailing_stop(current, avg, peak)`(시간 무관 — 무장 임계 도달 후 고점 대비 되돌림 청산), `should_close_for_market_end(current, avg, now)`(마감 임박 + 최소 수익률 이상 이익 포지션만 강제 실현; 트레일링과 독립) 신설. `should_stop_loss`/`should_take_profit` 미변경(후자는 폴백 경로에서만 사용).
-  - src/engine.py: `_process_held_stock` 청산 우선순위 재구성 — 손절 > 마감 청산 게이트 > 트레일링(또는 TRAILING_STOP_ENABLED=false 시 고정 익절) > 전략매도. 인메모리 `_peak_prices` 고점 추적(평가 시작 시 `max(seed, 현재가)` 갱신, 매수/매도 성공 시 pop), `pre_market`에서 `_load_peak_prices()`로 portfolios.peak_price 시드. 일봉 없는 ETN 경로(`_evaluate_held_without_daily`)에도 동일 적용.
-  - src/config.py: `TRAILING_STOP_ENABLED`(true)·`TRAILING_ACTIVATION_RATIO`(0.05)·`TRAILING_DRAWDOWN_RATIO`(0.05)·`MIN_PROFITABLE_CLOSE`(0.015) 4종.
-  - src/db/models.py·repository.py: `Portfolio.peak_price`(Float nullable), `SellReason.TRAILING_STOP`/`MARKET_CLOSE`, `PortfolioRepository.upsert(peak_price)`(미지정 시 기존 고점 보존) + `get_peak_prices()` 시드 조회. src/worker/handlers.py·engine `_enqueue_sync_portfolio`: peak_price를 비동기 sync_portfolio 경로로 영속화(핫패스 동기 DB 0개).
-  - alembic: peak_price 컬럼 + sell_reason enum 값 마이그레이션(autocommit_block, 적용 보류).
-  - tests: risk 단위(트레일링 4 + 마감게이트 5), 엔진 통합(test_engine_trailing_stop 9), repo(test_portfolio_peak 4), 모델(2), ETN 경로 테스트 트레일링 의미로 갱신.
-- 배경: 기존 청산은 +5% 고정 익절뿐이라 고점 대비 되돌림을 못 잡음. 760027(키움 인버스 2X 전력 TOP5 ETN)이 평균단가 3,565원 대비 +27%까지 상승 후 되돌림에도 무한 보유. 트레일링이 익절을 대체(수익 나면 추격)하고, 마감 게이트로 이익 포지션을 장 마감 전 실현하되 손실 포지션은 손절에만 맡김(시간 의존 파라미터 0개 — 게이트 발동 조건만 시간 기반).
-- 영향: 무장(고점 ≥ avg×1.05) 후 고점 대비 5% 되돌림 시 "트레일링" 청산. 마감 임박 + 수익률 ≥ 1.5%면 "마감청산". 일봉 미조회 ETN도 동일 평가. peak는 재시작/장 간 portfolios.peak_price로 복원.
-- 검증 결과: pytest 869 passed | ruff 변경 파일 All checks passed(사전 models.py E501 1건 무관) | mypy 신규 에러 0.
-- 비고: 운영자 액션 — 머지 후 `alembic upgrade head`(공유 kis-postgres에 peak_price 컬럼 + enum 값) + `com.kis.autotrader` 재시작 + `scripts/record_implementation.py`로 DB 구현 이력 기록 필요(worktree에 .env 부재로 보류).
 
 ---
 

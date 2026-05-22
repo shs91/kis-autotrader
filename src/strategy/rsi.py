@@ -176,7 +176,7 @@ class RSIStrategy(BaseStrategy):
             meta=meta,
         )
 
-    def _calculate_rsi(self, close_prices: pd.Series) -> pd.Series:  # type: ignore[type-arg]
+    def _calculate_rsi(self, close_prices: pd.Series) -> pd.Series:
         """RSI를 계산한다.
 
         Wilder의 평활화 방식(exponential moving average)을 사용한다.

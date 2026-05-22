@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from datetime import UTC, date, datetime
+from typing import Any
 
 from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import (
@@ -281,7 +282,7 @@ class Signal(Base):
     stock_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(String(100), nullable=False)
     signal_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    signal_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    signal_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     action_taken: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
@@ -336,7 +337,7 @@ class SystemMetric(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     metric_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -362,7 +363,7 @@ class TaskQueue(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     status: Mapped[TaskStatus] = mapped_column(
         SAEnum(TaskStatus, name="task_status_enum"),
         default=TaskStatus.PENDING,
@@ -441,8 +442,8 @@ class ImplementationLog(Base):
         SAEnum(ImplementationCategory, name="impl_category_enum"), nullable=False
     )
     proposal_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    changed_files: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    changed_files: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    verification: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     background: Mapped[str | None] = mapped_column(Text, nullable=True)
     expected_effect: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -491,7 +492,7 @@ class Proposal(Base):
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     skip_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cycle_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    prediction: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    prediction: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -554,7 +555,7 @@ class TrajectoryEntry(Base):
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
     )
-    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
     )
@@ -588,7 +589,7 @@ class DailySummary(Base):
     )
     error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cycle_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    summary_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, nullable=False
     )

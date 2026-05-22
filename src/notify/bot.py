@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -99,7 +99,7 @@ class TelegramBot:
     async def _get_updates(self) -> list[dict[str, Any]]:
         """Telegram getUpdates를 호출한다."""
         url = GET_UPDATES_URL.format(token=self._token)
-        params = {
+        params: dict[str, str | int] = {
             "offset": self._offset,
             "timeout": POLL_TIMEOUT,
             "allowed_updates": json.dumps(["message"]),
@@ -109,7 +109,7 @@ class TelegramBot:
             if response.status_code != 200:
                 return []
             data = response.json()
-            return data.get("result", [])
+            return cast("list[dict[str, Any]]", data.get("result", []))
 
     async def _handle_update(self, update: dict[str, Any]) -> None:
         """개별 업데이트를 처리한다."""

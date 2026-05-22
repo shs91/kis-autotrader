@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, select, tuple_
 from sqlalchemy import select as sa_select
@@ -740,7 +741,7 @@ class SignalRepository:
         stock_name: str,
         signal_type: str,
         detected_at: datetime,
-        signal_value: dict | None = None,
+        signal_value: dict[str, Any] | None = None,
         confidence: float = 0.0,
         action_taken: bool = False,
     ) -> Signal:
@@ -910,7 +911,7 @@ class SystemMetricRepository:
     def record_metric(
         self,
         metric_type: str,
-        detail: dict | None = None,
+        detail: dict[str, Any] | None = None,
         recorded_at: datetime | None = None,
     ) -> SystemMetric:
         """시스템 메트릭을 기록한다.
@@ -1087,8 +1088,8 @@ class ImplementationLogRepository:
         category: ImplementationCategory,
         implemented_at: datetime,
         proposal_path: str | None = None,
-        changed_files: dict | None = None,
-        verification: dict | None = None,
+        changed_files: dict[str, Any] | None = None,
+        verification: dict[str, Any] | None = None,
         background: str | None = None,
         expected_effect: str | None = None,
         version: str | None = None,
@@ -1279,7 +1280,7 @@ class ProposalRepository:
         p.updated_at = now
         logger.info("제안서 SKIPPED: %s — %s", p.path, reason)
 
-    def set_prediction(self, proposal_id: int, prediction: dict) -> None:
+    def set_prediction(self, proposal_id: int, prediction: dict[str, Any]) -> None:
         """제안서의 prediction JSONB를 갱신."""
         p = self._require(proposal_id)
         now = datetime.now(UTC)
@@ -1320,7 +1321,7 @@ class TrajectoryRepository:
         duration_seconds: float | None = None,
         token_usage_input: int | None = None,
         token_usage_output: int | None = None,
-        meta: dict | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> TrajectoryEntry:
         """trajectory entry 한 건 추가."""
         if duration_seconds is None:

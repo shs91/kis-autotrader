@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kis-autotrader"
-version = "0.4.4"
+version = "0.4.5"
 description = "KIS OpenAPI 기반 주식 자동매매 시스템"
 requires-python = ">=3.12"
 dependencies = [
@@ -73,6 +73,22 @@ python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+# 타입 스텁이 없는 서드파티 라이브러리는 Any로 처리 (import-untyped 노이즈 제거).
+# 공식 스텁이 없거나(apscheduler, google API client) 엄격 스텁이 대량의 신규
+# 에러를 유발(pandas-stubs)하므로 ignore_missing_imports로 일괄 처리한다.
+[[tool.mypy.overrides]]
+module = [
+    "pandas",
+    "pandas.*",
+    "apscheduler",
+    "apscheduler.*",
+    "google_auth_oauthlib",
+    "google_auth_oauthlib.*",
+    "googleapiclient",
+    "googleapiclient.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

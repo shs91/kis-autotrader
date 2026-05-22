@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from src.config import settings
 from src.utils.exceptions import DailyLimitExceededError, RateLimitExceededError
@@ -267,7 +267,9 @@ class RedisRateLimiter:
 
         r = sync_redis.from_url(settings.redis.url, decode_responses=True)
         self._check_daily_key()
-        val = r.get(self._daily_count_key)
+        # 동기 redis 클라이언트이므로 get()은 즉시 값을 반환한다.
+        # redis 스텁이 get()을 Awaitable[Any] | Any로 선언해 cast로 좁힌다.
+        val = cast("str | None", r.get(self._daily_count_key))
         r.close()
         return int(val) if val else 0
 

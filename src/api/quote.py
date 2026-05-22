@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from src.api.client import KISClient
 from src.config import settings
@@ -45,7 +45,7 @@ def _get(data: dict[str, Any], key: str, default: str = "") -> str:
     Returns:
         찾은 값 또는 기본값
     """
-    return data.get(key) or data.get(key.lower(), default)
+    return cast(str, data.get(key) or data.get(key.lower(), default))
 
 
 @dataclass

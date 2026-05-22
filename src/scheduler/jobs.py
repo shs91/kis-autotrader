@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import math
+from collections.abc import Coroutine
 from datetime import date, datetime, time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from apscheduler.events import EVENT_JOB_MAX_INSTANCES, JobSubmissionEvent
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -64,7 +65,7 @@ def _calculate_trading_interval(stock_count: int) -> float:
     return max(interval, 10.0)  # 최소 10초 간격
 
 
-def _run_async(coro: object) -> None:
+def _run_async(coro: Coroutine[Any, Any, Any]) -> None:
     """비동기 코루틴을 동기 컨텍스트에서 실행한다.
 
     예외가 발생해도 스케줄러 작업 자체는 죽지 않도록 보호한다.
