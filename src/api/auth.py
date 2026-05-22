@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 from dataclasses import dataclass
+from typing import cast
 
 import httpx
 
@@ -146,7 +147,7 @@ class KISAuth:
                 )
 
             data = response.json()
-            hashkey = data.get("HASH", "")
+            hashkey = cast(str, data.get("HASH", ""))
             if not hashkey:
                 raise AuthenticationError("응답에 HASH 값이 없습니다.")
 

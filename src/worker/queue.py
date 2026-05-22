@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, delete, select, update
 
 from src.config import settings
 from src.db.models import TaskQueue, TaskStatus
@@ -24,7 +25,7 @@ class TaskQueueService:
     def enqueue(
         self,
         task_type: str,
-        payload: dict,
+        payload: dict[str, Any],
         priority: int = 0,
         idempotency_key: str | None = None,
         max_retries: int | None = None,
@@ -200,13 +201,16 @@ class TaskQueueService:
         """
         cutoff = datetime.now(UTC) - timedelta(days=days)
         with get_session() as session:
-            result = session.execute(
-                TaskQueue.__table__.delete().where(
-                    TaskQueue.status.in_([TaskStatus.COMPLETED, TaskStatus.DEAD]),
-                    TaskQueue.created_at < cutoff,
-                )
+            result = cast(
+                "CursorResult[Any]",
+                session.execute(
+                    delete(TaskQueue).where(
+                        TaskQueue.status.in_([TaskStatus.COMPLETED, TaskStatus.DEAD]),
+                        TaskQueue.created_at < cutoff,
+                    )
+                ),
             )
-            count = result.rowcount
+            count: int = result.rowcount
             if count > 0:
                 logger.info("오래된 태스크 %d건 삭제 (기준: %d일)", count, days)
             return count

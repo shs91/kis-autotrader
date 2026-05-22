@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from src.config import settings
+from src.db.models import TaskQueue
 from src.utils.logger import setup_logger
 from src.worker.handlers import TaskHandler
 from src.worker.queue import TaskQueueService
@@ -87,7 +88,7 @@ class WorkerRunner:
         self._running = False
         logger.info("Worker 종료")
 
-    async def _process_task(self, task: object) -> None:
+    async def _process_task(self, task: TaskQueue) -> None:
         """단일 태스크를 처리한다.
 
         Args:
