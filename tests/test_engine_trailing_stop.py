@@ -148,3 +148,22 @@ async def test_take_profit_fallback_when_trailing_disabled() -> None:
         object.__setattr__(_settings.strategy, "trailing_stop_enabled", original)
     sell.assert_awaited_once()
     assert sell.call_args.kwargs["reason"] == "익절"
+
+
+@pytest.mark.asyncio
+async def test_zero_price_skips_sell() -> None:
+    """현재가 0(개장 직후 미체결 등)이면 손절이 오발동하지 않고 매도 평가를 스킵한다."""
+    engine = _make_engine()
+    engine._peak_prices = {"760027": 4_535.0}
+    _stub(engine, 0)  # 비정상 시세 0 — 손실률 -100%로 손절 오발동하면 안 됨
+    sell = await _run_held(engine, "760027", 3_565.0, qty=942)
+    sell.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_negative_price_skips_sell() -> None:
+    """음수 시세도 매도 평가를 스킵한다."""
+    engine = _make_engine()
+    _stub(engine, -1)
+    sell = await _run_held(engine, "760027", 3_565.0, qty=942)
+    sell.assert_not_awaited()

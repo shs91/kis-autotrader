@@ -873,6 +873,21 @@ class TradingEngine:
             signal: 전략 분석 시그널
             stock_name: 종목명
         """
+        # 비정상 시세 가드: 현재가가 0 이하이면(개장 직후 미체결·거래정지·조회 실패 등)
+        # 손실률이 -100%로 잘못 계산돼 손절/트레일링이 오발동한다. 매도 평가를
+        # 통째로 스킵하고 다음 사이클에서 정상 시세로 재평가한다.
+        if current_price <= 0:
+            logger.warning(
+                "[%s] 비정상 시세(현재가 %s) — 매도 평가 스킵 (매입가 %.0f)",
+                stock_code, current_price, holding["avg_price"],
+            )
+            self._record_metric("INVALID_PRICE_SKIP", {
+                "stock_code": stock_code,
+                "current_price": int(current_price),
+                "cycle": self._cycle_count,
+            })
+            return
+
         avg_price = holding["avg_price"]
         quantity = int(holding["quantity"])
 
