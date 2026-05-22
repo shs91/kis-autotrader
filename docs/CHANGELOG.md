@@ -6,6 +6,17 @@
 
 ---
 
+## [2026-05-22] 일간 분석 리포트 영속화 — 구현 0건인 날 리포트 소실 수정 (v0.4.3)
+- 카테고리: bug_fix
+- 변경 파일:
+  - scripts/run_daily_analysis.sh: 분석(`claude -p`) 직후 `docs/reports/<날짜>_daily.md`를 단독 커밋하는 블록 추가(`git add -- <파일>` → `git commit --no-verify -- <파일>`). 현재 브랜치에 해당 파일만 커밋하므로 작업 중 변경/제안서 등 나머지 워킹트리는 무영향(surgical). 파일 미생성(데이터 부족 등)·무변경 시 스킵.
+- 배경: `claude -p`가 생성하는 일간 리포트는 untracked 상태로 남는데, 제안서를 구현한 날에는 auto-implement 커밋이 우연히 휩쓸어 보존됐지만 구현 0건인 날(룰 게이트 보류 등)에는 커밋 없이 방치되다 이후 수동/자동 git 작업에 소실됐다. 5/19·5/21·5/22 리포트가 디스크 및 전체 브랜치에 부재함을 확인(분석 로그상 "생성"으로 기록됐으나 파일 없음).
+- 영향: 분석 직후 리포트가 즉시 커밋돼 항상 보존된다. auto-implement 사이클이 보던 untracked 리포트 잔존도 일부 해소돼 `git_clean` 경고 완화. 제안서는 본 수정 범위 밖(DB 동기화 안전망 + 향후 별도 보호 검토).
+- 검증 결과: bash -n ✅ | 격리 git 스크래치 4케이스(신규 untracked 커밋 / 무변경 스킵 / 미생성 스킵 / 수정 재커밋) + 더티트리 surgical(리포트만 커밋, 수동 작업 보존) 검증 모두 exit 0 ✅.
+- 비고: 운영자 액션 불요 — launchd가 매일 스크립트 파일을 직접 실행하므로 다음 일간 분석(평일 16:30)부터 자동 적용. 이미 소실된 5/19·5/21·5/22 리포트는 복구 불가(분석 로그 요약만 잔존).
+
+---
+
 ## [2026-05-22] 일일 MDD halt 순손실 가드 — 흑자 구간 조기 halt 제거 (v0.4.2) — 🔴 핫픽스
 - 제안서: docs/proposals/2026-05-21_daily-drawdown-peak-denominator-fix.md
 - 카테고리: bug_fix
@@ -61,22 +72,6 @@
 - 영향: 일봉이 없어도 보유 종목은 현재가 vs 평균단가 기준 손절(-3%)/익절(+5%, 14:30 이후 +2.5%)을 평가한다. 전략매도(데드크로스 등)는 일봉 의존이라 제외. 데이터 없으면 보유분 리스크 관리가 통째로 멈추던 빈틈 차단. 760027은 다음 사이클에 익절 매도 예상.
 - 검증 결과: pytest 85 passed (신규 4 포함) | ruff ✅ All checks passed | mypy 신규 에러 0 (baseline 43→42).
 - 비고: 운영자 액션 — 수정 반영을 위해 `com.kis.autotrader` 재시작 필요. 트레일링 스톱 부재는 별도 과제로 잔존.
-
----
-
-## [2026-05-21] 뉴스 청크 sentiment/importance 룰베이스 스코어링 + 백필 (v0.3.0)
-- 계획서: docs/superpowers/plans/2026-05-21-news-sentiment-importance-scoring.md (설계: docs/superpowers/specs/2026-05-21-news-sentiment-importance-scoring-design.md)
-- 카테고리: feature
-- 변경 파일:
-  - src/rag/scorer.py: 신설. `Scorer` Protocol + `ChunkScore`(sentiment[-1,1]/importance[0,1]/method) 데이터클래스 + `RuleBasedScorer`(호재/악재 lexicon·source_type 가중·고영향 boost) + `get_scorer()` 팩토리. longest-match-wins로 부분문자열 이중계산 방지, 어떤 입력에도 예외 없이 중립 폴백.
-  - src/worker/collectors/base.py: `_build_new_chunks`에서 NewsChunk 생성 시 `get_scorer().score()`로 sentiment/importance 인라인 계산, `chunk_metadata.score_method`로 provenance 기록(고정 키 우선순위 보정).
-  - src/db/analytics.py: `get_news_quality_stats` by_source 쿼리에 `AVG(sentiment)` 추가.
-  - scripts/backfill_news_scores.py: 신설. sentiment NULL 청크를 배치별 commit으로 백필(idempotent, 단일 postgres 락 점유 최소화).
-  - tests: test_rag/test_scorer.py 14건, test_base.py 스코어링 2건, test_db/test_backfill_news_scores.py 2건.
-- 배경: news_chunks가 임베딩(Vector 1024)까지 적재되나 sentiment/importance가 전부 NULL이고 스코어링 로직이 부재. 소비처는 리포트/대시보드 우선(매매 전략 미연결), 적재 데이터는 향후 로컬 모델 의사결정의 피처로 확장 예정 → `Scorer` 추상화·`ChunkScore`·provenance로 교체 seam 마련.
-- 영향: 신규 적재 청크가 자동 스코어링되고 기존 청크는 백필로 채워짐. `get_news_quality_stats`가 비-NULL 평균(importance+sentiment)을 리포트/대시보드에 노출. 룰베이스는 추후 모델 스코어러로 호출부·스키마 무변경 전환 가능.
-- 검증 결과: pytest 222 passed (rag+worker+db) | ruff 변경파일 All checks passed (analytics 사전 E501 2건 무관) | mypy 신규 에러 0.
-- 비고: 운영자 액션 — 신규 적재분 스코어링 반영을 위해 `com.kis.news-collector` 재시작 + 기존분 백필 `scripts/backfill_news_scores.py` 1회 실행 필요.
 
 ---
 
