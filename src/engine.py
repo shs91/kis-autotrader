@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.api.account import AccountAPI, Balance, Execution
+from src.api.account import AccountAPI, Balance
 from src.api.client import KISClient
 from src.api.order import OrderAPI
 from src.api.quote import CurrentPrice, QuoteAPI
@@ -975,6 +975,13 @@ class TradingEngine:
             )
             return
 
+        # 주문 직전 보유 수량 스냅샷 (체결 확인 기준점, 캐시 사용)
+        try:
+            qty_before = await self._holding_quantity(stock_code, force=False)
+        except Exception:
+            logger.exception("매수 전 보유 조회 실패 %s — 0으로 간주", stock_code)
+            qty_before = 0
+
         try:
             result = await self._order.buy(stock_code=stock_code, quantity=quantity)
         except Exception:
@@ -991,9 +998,9 @@ class TradingEngine:
                 result.order_no,
             )
 
-            # 체결 확인 — 접수(order_no 수령) != 체결. 미체결이면 트레이드/알림 보류.
-            fill = await self._confirm_fill(result.order_no)
-            if fill is None:
+            # 체결 확인 — 접수(order_no 수령) != 체결. 잔고 증가로 판정.
+            filled = await self._confirm_fill(stock_code, "BUY", qty_before)
+            if filled <= 0:
                 logger.warning(
                     "[매수 미체결] %s(%s) 주문번호=%s — 트레이드/알림 보류",
                     stock_name, stock_code, result.order_no,
@@ -1004,9 +1011,10 @@ class TradingEngine:
                 })
                 return
 
-            # 체결 확정 — 실제 체결가/수량으로 기록·알림
-            fill_price = int(fill.price)
-            fill_qty = int(fill.quantity)
+            # 체결 확정 — 체결 수량(잔고 증가분) + 현재가(0가드 적용)로 기록·알림.
+            # 모의투자는 체결가 정밀조회가 불가하므로 현재가를 체결가로 근사한다.
+            fill_qty = filled
+            fill_price = int(price)
             self._today_trade_count += 1
             # 신규/추가 매수 — 다음 사이클에 max(avg, current)로 재시드
             self._peak_prices.pop(stock_code, None)
@@ -1053,6 +1061,13 @@ class TradingEngine:
         stock_name: str = "",
     ) -> None:
         """매도 주문을 실행하고, 체결 확인 후에만 DB에 기록한다."""
+        # 주문 직전 보유 수량 스냅샷 (체결 확인 기준점, 캐시 사용)
+        try:
+            qty_before = await self._holding_quantity(stock_code, force=False)
+        except Exception:
+            logger.exception("매도 전 보유 조회 실패 %s — 요청 수량으로 간주", stock_code)
+            qty_before = quantity
+
         try:
             result = await self._order.sell(stock_code=stock_code, quantity=quantity)
         except Exception:
@@ -1069,9 +1084,9 @@ class TradingEngine:
                 result.order_no,
             )
 
-            # 체결 확인 — 접수 != 체결. 미체결이면 트레이드/알림 보류(고점 추적도 유지).
-            fill = await self._confirm_fill(result.order_no)
-            if fill is None:
+            # 체결 확인 — 접수 != 체결. 잔고 감소로 판정(미체결이면 고점 추적 유지).
+            filled = await self._confirm_fill(stock_code, "SELL", qty_before)
+            if filled <= 0:
                 logger.warning(
                     "[매도 미체결] %s(%s) 주문번호=%s — 트레이드/알림 보류",
                     stock_name, stock_code, result.order_no,
@@ -1082,9 +1097,9 @@ class TradingEngine:
                 })
                 return
 
-            # 체결 확정 — 실제 체결가/수량으로 기록·알림
-            fill_price = int(fill.price)
-            fill_qty = int(fill.quantity)
+            # 체결 확정 — 체결 수량(잔고 감소분) + 현재가(0가드 적용)로 기록·알림.
+            fill_qty = filled
+            fill_price = int(price)
             self._today_trade_count += 1
 
             logger.info(
@@ -1120,34 +1135,56 @@ class TradingEngine:
         except Exception:
             logger.exception("[매도 후처리 실패] %s", stock_code)
 
-    async def _confirm_fill(
-        self, order_no: str, retries: int = 3, delay: float = 0.7
-    ) -> Execution | None:
-        """주문 접수 후 실제 체결 여부를 폴링으로 확인한다.
+    async def _holding_quantity(self, stock_code: str, force: bool = True) -> int:
+        """잔고에서 해당 종목 보유 수량을 반환한다.
 
-        시장가 주문도 즉시 체결되지 않을 수 있어 짧게 재시도한다. 끝까지 미체결이면
-        None을 반환하고, 호출자는 트레이드 기록·알림을 보류한다. 조회 자체가 실패해도
-        매매 흐름을 막지 않도록 예외를 삼키고 다음 시도로 넘어간다.
+        모의투자 일별주문체결조회는 당일 체결 자료를 제공하지 않으므로, 체결 확인은
+        실시간 잔고(get_balance)의 보유 수량 변화로 판정한다. ``force=False``이면
+        주문 직전 스냅샷용으로 캐시된 잔고를 사용한다.
+        """
+        balance = await self._get_balance(force=force)
+        for h in balance.holdings:
+            if h.stock_code == stock_code:
+                return int(h.quantity)
+        return 0
+
+    async def _confirm_fill(
+        self,
+        stock_code: str,
+        side: str,
+        qty_before: int,
+        retries: int = 3,
+        delay: float = 0.7,
+    ) -> int:
+        """주문 접수 후 잔고 변동으로 체결 수량을 확인한다 (미체결이면 0).
+
+        체결조회(get_executions)는 모의투자에서 당일 자료를 주지 않아 신뢰 불가하므로,
+        주문 전 보유 수량(qty_before) 대비 주문 후 보유 수량 변화를 폴링한다.
+        시장가 주문도 즉시 반영되지 않을 수 있어 짧게 재시도하고, 조회가 실패해도
+        매매 흐름을 막지 않는다.
 
         Args:
-            order_no: 확인할 주문번호
+            stock_code: 종목코드
+            side: "BUY" 또는 "SELL"
+            qty_before: 주문 직전 보유 수량
             retries: 폴링 시도 횟수
             delay: 시도 간 대기(초)
 
         Returns:
-            체결 내역 또는 None(미체결)
+            체결 수량 (매수=증가분, 매도=감소분). 미체결이면 0.
         """
         for attempt in range(retries):
             try:
-                fill = await self._account.get_fill(order_no)
+                qty_after = await self._holding_quantity(stock_code)
             except Exception:
-                logger.exception("체결 확인 조회 실패 (주문번호=%s)", order_no)
-                fill = None
-            if fill is not None:
-                return fill
+                logger.exception("체결 확인(잔고) 조회 실패 (%s)", stock_code)
+                qty_after = qty_before  # 변화 없음으로 간주
+            filled = (qty_after - qty_before) if side == "BUY" else (qty_before - qty_after)
+            if filled > 0:
+                return filled
             if attempt < retries - 1:
                 await asyncio.sleep(delay)
-        return None
+        return 0
 
     # ── 매매 데이터 DB 적재 ──────────────────────────────────
 

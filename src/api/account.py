@@ -212,24 +212,6 @@ class AccountAPI:
 
         return results
 
-    async def get_fill(self, order_no: str) -> Execution | None:
-        """주문번호에 해당하는 당일 체결 내역을 반환한다 (미체결이면 None).
-
-        ``get_executions``는 체결분(CCLD_DVSN=01, 체결수량>0)만 반환하므로,
-        주문번호가 일치하는 항목이 있으면 실제 체결된 것이다. 주문 접수(order_no
-        수령)와 실제 체결을 구분해 "체결 확인 후 기록"에 사용한다.
-
-        Args:
-            order_no: 확인할 주문번호
-
-        Returns:
-            일치하는 체결 내역 또는 None(미체결)
-        """
-        for execution in await self.get_executions():
-            if execution.order_no == order_no:
-                return execution
-        return None
-
 
 def _today_str_compact() -> str:
     """오늘 날짜를 YYYYMMDD 형식 문자열로 반환한다."""
