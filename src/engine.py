@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, date, datetime
 from typing import Any
 
 import pandas as pd
 
-from src.api.account import AccountAPI, Balance
+from src.api.account import AccountAPI, Balance, Execution
 from src.api.client import KISClient
 from src.api.order import OrderAPI
 from src.api.quote import CurrentPrice, QuoteAPI
@@ -976,22 +977,48 @@ class TradingEngine:
 
         try:
             result = await self._order.buy(stock_code=stock_code, quantity=quantity)
-            self._today_trade_count += 1
+        except Exception:
+            logger.exception("[매수 주문 실패] %s(%s)", stock_name, stock_code)
+            return
+
+        # 주문 접수 이후 처리(체결 확인·기록·알림)는 DB/Queue 장애에도 사이클을
+        # 막지 않도록 통째로 보호한다.
+        try:
             self._invalidate_balance_cache()
+            # 주문 접수 기록 (체결과 무관하게 주문 자체는 남긴다)
+            self._record_order_to_db(
+                stock_code, stock_name, OrderType.BUY, quantity, float(price),
+                result.order_no,
+            )
+
+            # 체결 확인 — 접수(order_no 수령) != 체결. 미체결이면 트레이드/알림 보류.
+            fill = await self._confirm_fill(result.order_no)
+            if fill is None:
+                logger.warning(
+                    "[매수 미체결] %s(%s) 주문번호=%s — 트레이드/알림 보류",
+                    stock_name, stock_code, result.order_no,
+                )
+                self._record_metric("ORDER_UNFILLED", {
+                    "stock_code": stock_code, "side": "BUY",
+                    "order_no": result.order_no, "cycle": self._cycle_count,
+                })
+                return
+
+            # 체결 확정 — 실제 체결가/수량으로 기록·알림
+            fill_price = int(fill.price)
+            fill_qty = int(fill.quantity)
+            self._today_trade_count += 1
             # 신규/추가 매수 — 다음 사이클에 max(avg, current)로 재시드
             self._peak_prices.pop(stock_code, None)
 
             logger.info(
-                "[매수 체결] %s(%s) %d주, 주문번호=%s",
-                stock_name, stock_code, quantity, result.order_no,
+                "[매수 체결] %s(%s) %d주 @ %d, 주문번호=%s",
+                stock_name, stock_code, fill_qty, fill_price, result.order_no,
             )
-            log_trade(f"매수 {stock_name}({stock_code}) {quantity}주 @ {price:,}원")
+            log_trade(f"매수 {stock_name}({stock_code}) {fill_qty}주 @ {fill_price:,}원")
 
-            self._record_order_to_db(
-                stock_code, stock_name, OrderType.BUY, quantity, float(price), result.order_no
-            )
             self._record_trade_to_db(
-                stock_code, stock_name, TradeType.BUY, quantity, price,
+                stock_code, stock_name, TradeType.BUY, fill_qty, fill_price,
                 signal=signal,
             )
             self._record_screening_match_metric(stock_code)
@@ -1003,8 +1030,8 @@ class TradingEngine:
                     "message_data": {
                         "stock_name": stock_name,
                         "stock_code": stock_code,
-                        "quantity": quantity,
-                        "price": price,
+                        "quantity": fill_qty,
+                        "price": fill_price,
                         "strategy": strategy_name,
                         "reason": signal.reason if signal else "",
                         "confidence": signal.confidence if signal else 0.0,
@@ -1012,9 +1039,8 @@ class TradingEngine:
                 },
                 priority=3,
             )
-
         except Exception:
-            logger.exception("[매수 실패] %s(%s)", stock_name, stock_code)
+            logger.exception("[매수 후처리 실패] %s(%s)", stock_name, stock_code)
 
     async def _execute_sell(
         self,
@@ -1026,23 +1052,51 @@ class TradingEngine:
         signal_type: str | None = None,
         stock_name: str = "",
     ) -> None:
-        """매도 주문을 실행하고 DB에 기록한다."""
+        """매도 주문을 실행하고, 체결 확인 후에만 DB에 기록한다."""
         try:
             result = await self._order.sell(stock_code=stock_code, quantity=quantity)
-            self._today_trade_count += 1
+        except Exception:
+            logger.exception("[매도 주문 실패] %s", stock_code)
+            return
+
+        # 주문 접수 이후 처리(체결 확인·기록·알림)는 DB/Queue 장애에도 사이클을
+        # 막지 않도록 통째로 보호한다.
+        try:
             self._invalidate_balance_cache()
+            # 주문 접수 기록 (체결과 무관하게 주문 자체는 남긴다)
+            self._record_order_to_db(
+                stock_code, stock_name, OrderType.SELL, quantity, float(price),
+                result.order_no,
+            )
+
+            # 체결 확인 — 접수 != 체결. 미체결이면 트레이드/알림 보류(고점 추적도 유지).
+            fill = await self._confirm_fill(result.order_no)
+            if fill is None:
+                logger.warning(
+                    "[매도 미체결] %s(%s) 주문번호=%s — 트레이드/알림 보류",
+                    stock_name, stock_code, result.order_no,
+                )
+                self._record_metric("ORDER_UNFILLED", {
+                    "stock_code": stock_code, "side": "SELL",
+                    "order_no": result.order_no, "cycle": self._cycle_count,
+                })
+                return
+
+            # 체결 확정 — 실제 체결가/수량으로 기록·알림
+            fill_price = int(fill.price)
+            fill_qty = int(fill.quantity)
+            self._today_trade_count += 1
 
             logger.info(
-                "[매도 체결] %s(%s) %d주, 사유=%s, 주문번호=%s",
-                stock_name, stock_code, quantity, reason, result.order_no,
+                "[매도 체결] %s(%s) %d주 @ %d, 사유=%s, 주문번호=%s",
+                stock_name, stock_code, fill_qty, fill_price, reason, result.order_no,
             )
-            log_trade(f"매도 {stock_name}({stock_code}) {quantity}주 @ {price:,}원 ({reason})")
+            log_trade(
+                f"매도 {stock_name}({stock_code}) {fill_qty}주 @ {fill_price:,}원 ({reason})"
+            )
 
-            self._record_order_to_db(
-                stock_code, stock_name, OrderType.SELL, quantity, float(price), result.order_no
-            )
             self._record_trade_to_db(
-                stock_code, stock_name, TradeType.SELL, quantity, price,
+                stock_code, stock_name, TradeType.SELL, fill_qty, fill_price,
                 reason=reason, signal_type=signal_type, avg_price=avg_price,
             )
             # 청산 — 고점 추적 종료
@@ -1055,17 +1109,45 @@ class TradingEngine:
                     "message_data": {
                         "stock_name": stock_name,
                         "stock_code": stock_code,
-                        "quantity": quantity,
-                        "price": price,
+                        "quantity": fill_qty,
+                        "price": fill_price,
                         "reason": reason,
                         "avg_price": avg_price or 0.0,
                     },
                 },
                 priority=3,
             )
-
         except Exception:
-            logger.exception("[매도 실패] %s", stock_code)
+            logger.exception("[매도 후처리 실패] %s", stock_code)
+
+    async def _confirm_fill(
+        self, order_no: str, retries: int = 3, delay: float = 0.7
+    ) -> Execution | None:
+        """주문 접수 후 실제 체결 여부를 폴링으로 확인한다.
+
+        시장가 주문도 즉시 체결되지 않을 수 있어 짧게 재시도한다. 끝까지 미체결이면
+        None을 반환하고, 호출자는 트레이드 기록·알림을 보류한다. 조회 자체가 실패해도
+        매매 흐름을 막지 않도록 예외를 삼키고 다음 시도로 넘어간다.
+
+        Args:
+            order_no: 확인할 주문번호
+            retries: 폴링 시도 횟수
+            delay: 시도 간 대기(초)
+
+        Returns:
+            체결 내역 또는 None(미체결)
+        """
+        for attempt in range(retries):
+            try:
+                fill = await self._account.get_fill(order_no)
+            except Exception:
+                logger.exception("체결 확인 조회 실패 (주문번호=%s)", order_no)
+                fill = None
+            if fill is not None:
+                return fill
+            if attempt < retries - 1:
+                await asyncio.sleep(delay)
+        return None
 
     # ── 매매 데이터 DB 적재 ──────────────────────────────────
 
