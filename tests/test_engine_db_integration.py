@@ -283,10 +283,8 @@ class TestTradingCycleWithDbFailure:
         order_result.order_no = "KIS12345"
         engine._order.buy = AsyncMock(return_value=order_result)
         engine._notifier.notify_buy = AsyncMock()
-        _fill = MagicMock()
-        _fill.price = 70000
-        _fill.quantity = 10
-        engine._confirm_fill = AsyncMock(return_value=_fill)  # type: ignore[method-assign]
+        # 체결 확인(잔고 변동)을 체결됨(10주)으로 모킹
+        engine._confirm_fill = AsyncMock(return_value=10)  # type: ignore[method-assign]
 
         # Queue 완전 장애
         with patch.object(
@@ -307,10 +305,8 @@ class TestTradingCycleWithDbFailure:
         order_result.order_no = "KIS12346"
         engine._order.sell = AsyncMock(return_value=order_result)
         engine._notifier.notify_sell = AsyncMock()
-        _fill = MagicMock()
-        _fill.price = 72000
-        _fill.quantity = 10
-        engine._confirm_fill = AsyncMock(return_value=_fill)  # type: ignore[method-assign]
+        # 체결 확인(잔고 변동)을 체결됨(10주)으로 모킹
+        engine._confirm_fill = AsyncMock(return_value=10)  # type: ignore[method-assign]
 
         # Queue 완전 장애
         with patch.object(
@@ -435,10 +431,8 @@ class TestRecordScreeningMatch:
         order_result = MagicMock()
         order_result.order_no = "KIS-AUTO-1"
         engine._order.buy = AsyncMock(return_value=order_result)
-        _fill = MagicMock()
-        _fill.price = 70_000
-        _fill.quantity = 10
-        engine._confirm_fill = AsyncMock(return_value=_fill)  # type: ignore[method-assign]
+        # 체결 확인(잔고 변동)을 체결됨(10주)으로 모킹
+        engine._confirm_fill = AsyncMock(return_value=10)  # type: ignore[method-assign]
 
         with patch.object(
             engine, "_record_screening_match_metric"
