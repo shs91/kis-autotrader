@@ -98,7 +98,15 @@ class VerifierRunner:
             ["mypy", "--no-pretty", *files]
         )
         # mypy summary는 stderr 또는 stdout 끝에. 합쳐서 파싱
-        return parse_mypy_text((cp.stdout or "") + "\n" + (cp.stderr or ""))
+        artifact = parse_mypy_text((cp.stdout or "") + "\n" + (cp.stderr or ""))
+        # Phase 3 hotfix D2 완성: mypy는 변경 파일만 타깃해도 import 그래프를 따라
+        # 미변경 의존 파일(pandas import-untyped 등 baseline 에러)까지 보고한다.
+        # 검증 대상은 '이 diff가 일으킨 회귀'이므로 변경된 파일에서 발생한 에러만
+        # 센다. (전역 baseline 에러가 게이트를 구조적으로 항상 FAIL시키던 결함 해결)
+        if artifact.parse_error is None and artifact.errors:
+            changed = set(files)
+            artifact.errors = [e for e in artifact.errors if e.file in changed]
+        return artifact
 
     def _run_pytest(self, files: list[str]) -> PytestArtifact:
         if not files:

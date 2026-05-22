@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-05-22] Verifier mypy 게이트를 변경 파일로 스코프 — baseline 에러발 구조적 FAIL 제거 (v0.4.4)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/harness/verifier/runner.py: `_run_mypy`가 mypy 파싱 후 변경된 src 파일에서 발생한 에러만 남기도록 필터 추가(`e.file in changed`). mypy는 변경 파일만 타깃해도 import 그래프를 따라 미변경 의존 파일의 에러까지 보고하는데, 그 baseline 에러를 게이트 판정에서 제외(Phase 3 hotfix D2의 '변경 파일 한정' 의도 완성 — 타깃뿐 아니라 보고된 에러도 스코프 제한).
+  - tests/test_harness/test_verifier_runner.py: 미변경 의존 파일 에러 스코프 제거→PASS / 변경 파일 자체 에러 보존→FAIL 2종 신규.
+- 배경: 전역 mypy baseline이 약 85건(대부분 pandas/apscheduler `import-untyped` 미설치 스텁 + 실에러 일부). verifier는 변경 파일만 타깃하지만 mypy가 import 그래프를 따라가 미변경 파일의 사전 존재 에러까지 보고 → `MypyArtifact.passed`가 `error_count==0`을 요구하므로 코드 import만 닿아도 게이트가 구조적으로 항상 FAIL. 5/22 auto-implement(17:15·19:00) 모두 `verifier exit=2 (mypy errors=82)`로 차단됨을 확인. v0.4.1에서 고친 Stop 훅 충족불가 게이트와 동일 계열의 결함.
+- 영향: 변경 파일에서 발생한 mypy 에러만 게이트에 반영. 정상 변경(예: MDD 커밋 risk.py 자체 에러 0건)은 PASS, 변경 파일에 새 타입 에러가 들어오면 FAIL 유지(회귀 검출력 보존). E2E로 MDD 커밋(35047a4) 재검증 시 `overall passed=True, mypy error_count=0`(이전 errors=82) 확인.
+- 검증 결과: pytest test_harness 171 passed(신규 2 포함) | ruff 변경 파일 ✅ | mypy 변경 파일(runner.py) 에러 0 | E2E verifier(35047a4) PASS.
+- 비고: 하네스 내부 검증 도구 변경이라 서비스 재시작 불요 — 다음 자동구현 cron(평일 17:15)부터 적용. 전역 mypy baseline(≈85건) 자체 정리(pandas-stubs/override 등)는 별도 과제로 잔존.
+
+---
+
 ## [2026-05-22] 일간 분석 리포트 영속화 — 구현 0건인 날 리포트 소실 수정 (v0.4.3)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -60,18 +72,6 @@
 - 영향: 무장(고점 ≥ avg×1.05) 후 고점 대비 5% 되돌림 시 "트레일링" 청산. 마감 임박 + 수익률 ≥ 1.5%면 "마감청산". 일봉 미조회 ETN도 동일 평가. peak는 재시작/장 간 portfolios.peak_price로 복원.
 - 검증 결과: pytest 869 passed | ruff 변경 파일 All checks passed(사전 models.py E501 1건 무관) | mypy 신규 에러 0.
 - 비고: 운영자 액션 — 머지 후 `alembic upgrade head`(공유 kis-postgres에 peak_price 컬럼 + enum 값) + `com.kis.autotrader` 재시작 + `scripts/record_implementation.py`로 DB 구현 이력 기록 필요(worktree에 .env 부재로 보류).
-
----
-
-## [2026-05-21] 일봉 부재 시 보유 종목 현재가 기준 손절/익절 평가 — ETN 리스크 청산 누락 수정 (v0.3.1) — 🔴 핫픽스
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: `_process_stock`의 `_get_daily_df() is None` 분기를 분리 — 보유 종목이면 `_evaluate_held_without_daily()`로 현재가만 실시간 조회해 손절/익절을 평가(HOLD 시그널 주입으로 전략매도 분기 제외), 미보유 종목은 기존대로 `EVAL_SKIP`. 종목명 해결 로직을 `_resolve_current_stock_name()` 헬퍼로 추출(두 경로 공유, 중복 제거). `RISK_ONLY_EVAL` 메트릭 신설.
-  - tests/test_engine_risk_only_eval.py: 신설 — 손절 발동/익절 발동/데드존 미발동/미보유 스킵 4케이스.
-- 배경: ETN(760027)처럼 KIS 일봉 조회가 0건이면 `_get_daily_df`가 None을 반환, `_process_stock`이 `EVAL_SKIP` 후 즉시 return → 보유 종목의 손절/익절/전략매도가 통째로 누락. 평균단가 3,565원 대비 현재가 4,535원(+27%)으로 익절선(+5%)을 한참 넘겼는데도 매도 평가 자체가 실행되지 않아 무한 보유. `system_metrics`에 `DAILY_DATA_INSUFFICIENT`(returned_count=0) + `EVAL_SKIP`이 매 사이클 반복 적재된 것으로 확인.
-- 영향: 일봉이 없어도 보유 종목은 현재가 vs 평균단가 기준 손절(-3%)/익절(+5%, 14:30 이후 +2.5%)을 평가한다. 전략매도(데드크로스 등)는 일봉 의존이라 제외. 데이터 없으면 보유분 리스크 관리가 통째로 멈추던 빈틈 차단. 760027은 다음 사이클에 익절 매도 예상.
-- 검증 결과: pytest 85 passed (신규 4 포함) | ruff ✅ All checks passed | mypy 신규 에러 0 (baseline 43→42).
-- 비고: 운영자 액션 — 수정 반영을 위해 `com.kis.autotrader` 재시작 필요. 트레일링 스톱 부재는 별도 과제로 잔존.
 
 ---
 
