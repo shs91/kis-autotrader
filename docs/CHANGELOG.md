@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-05-22] 일일 MDD halt 순손실 가드 — 흑자 구간 조기 halt 제거 (v0.4.2) — 🔴 핫픽스
+- 제안서: docs/proposals/2026-05-21_daily-drawdown-peak-denominator-fix.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/strategy/risk.py: `record_trade_result`의 MDD 발동 조건에 `self._daily_cumulative_pnl < 0` 순손실 가드 추가. 분모가 '당일 실현이익 피크'라 장 초반 작은 피크 직후 정상 손절 1건만으로 비율이 폭증하던 흑자 구간 오발동 제거.
+  - tests/test_strategy/test_risk.py: 신규 `TestDailyDrawdownNetLossGuard` 3종(흑자 무halt 회귀 / 순손실 halt 보존 / 연패 경로 무영향) + 기존 `test_daily_drawdown_halt_returns_specific_code`를 순손실 시나리오로 갱신.
+  - tests/test_engine_buy_gate_metric.py: 구 동작(흑자 halt) 의존 케이스를 순손실 시나리오로 갱신.
+- 배경: 2026-05-21 09:11 익절 +39,440(피크) → 09:21 손절 -24,300 → 누적 +15,140(흑자)인데 피크 대비 회수폭 61.6% ≥ 5%로 `MAX_DAILY_DRAWDOWN` halt 발동, 장 마감까지 5시간 35분 전면 중단(66사이클, 평소 500~700 대비 91% 급감). trip 값 61.6% > 허용 상한 15%라 param 튜닝으로 막을 수 없는 분모 정의(로직) 결함. 사용자가 안 (a) 순손실 가드 채택(고위험 리스크 게이트 완화 → 수동 승인 후 PR #37).
+- 영향: 일일 MDD halt는 당일 누적이 순손실(<0)일 때만 발동(일일 '손실' 한도 취지 일치). 흑자 구간 '첫 익절 → 손절' 오발동 제거로 정상 매매 지속(추정 600~700사이클 정상화). 흑자 구간 give-back 보호는 per-position 트레일링 스톱이 담당.
+- 검증 결과: pytest test_risk 53 + 전체 908 passed (flaky test_health_endpoint 1건 deselect — 실DB 신선도 의존, 무관) | ruff ✅ | mypy ✅.
+- 비고: 운영자 액션 — 전략 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요. 동반 권장(별도): halt 발동 시 system_metrics(HALT) 1회 적재로 모니터링 가시성 확보.
+
+---
+
 ## [2026-05-22] Stop 훅 검증 게이트를 in-session verifier와 실제 연결 — 충족불가 게이트의 헛돌이 루프 제거 (v0.4.1)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -63,22 +77,6 @@
 - 영향: 신규 적재 청크가 자동 스코어링되고 기존 청크는 백필로 채워짐. `get_news_quality_stats`가 비-NULL 평균(importance+sentiment)을 리포트/대시보드에 노출. 룰베이스는 추후 모델 스코어러로 호출부·스키마 무변경 전환 가능.
 - 검증 결과: pytest 222 passed (rag+worker+db) | ruff 변경파일 All checks passed (analytics 사전 E501 2건 무관) | mypy 신규 에러 0.
 - 비고: 운영자 액션 — 신규 적재분 스코어링 반영을 위해 `com.kis.news-collector` 재시작 + 기존분 백필 `scripts/backfill_news_scores.py` 1회 실행 필요.
-
----
-
-## [2026-05-21] 뉴스 수집 stall 수정 — 사이클별 commit/rollback + 임베딩 dedup 선행 (v0.2.12) — 🔴 핫픽스
-- 계획서: docs/plans/2026-05-21_news-collection-stall-fix.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/worker/news_collector.py: `NewsCollectorWorker`에 `session` 주입. `run_once`가 collector 사이클마다 성공 시 `commit()`, 예외 시 `rollback()` 호출. 단일 장기 세션이 무한 루프를 감싸 변경이 graceful 종료 시 1회만 commit되던 구조를 사이클 단위로 durable하게 전환.
-  - src/worker/collectors/base.py: `_build_chunks`→`_build_new_chunks`. `content_hash`(text만으로 산출)로 (배치 내 + DB 적재분) 중복을 임베딩 *앞단*에서 제거하고 살아남은 신규 청크만 `embedder.encode` 호출.
-  - src/db/repository.py: `NewsChunkRepository.existing_keys(keys)` 신설 — (ticker, content_hash) 기존분을 단일 쿼리로 조회. `insert_chunks`도 이를 재사용(DRY).
-  - news_worker_main.py: 워커가 공유하는 `session`을 `NewsCollectorWorker`에 주입.
-  - tests: `TestPerCycleCommit` 3건(commit/rollback/세션 미주입 호환), `TestEmbedOnlyNewChunks` 2건(신규만 임베딩/전부 중복 시 미호출), `TestExistingKeys` 2건.
-- 배경: 2026-05-21 점검에서 뉴스 수집이 5/19부터 stall. 단일 장기 세션이 워커 무한 루프를 감싸 `insert_chunks`/`update_collection_state`가 flush만 되고 commit은 graceful 종료 시 1회뿐. `_record_metric`만 별도 세션으로 commit돼 메트릭은 매일 적재되나 `news_collection_state`는 5/19 고정. `out.log`에서 `PendingRollbackError` 확인 — 한 번 오염된 세션이 종료까지 모든 op 실패. 또한 모든 doc을 임베딩한 뒤 `insert_chunks`에서 중복을 폐기해 컴퓨트 낭비(임베딩 다수 대비 실적재 20건).
-- 영향: 사이클(collector)마다 commit으로 `news_collection_state.updated_at`/`news_chunks`가 durable 전진, 실패 시 rollback으로 세션 오염을 회복(다음 사이클 정상화). 신규 청크만 임베딩하여 중복 재임베딩 컴퓨트 제거. 단일 kis-postgres 공유 구조에서 per-cycle commit이 락 점유 시간도 단축.
-- 검증 결과: pytest 824 passed | ruff ✅ (변경 파일 All checks passed) | mypy 신규 에러 0 (사전 dict type-arg 부채 14건 무관, baseline 14=14).
-- 비고: 운영자 액션 — 수정 반영을 위해 `com.kis.news-collector` 재시작 필요. 재시작 후 `news_collection_state.updated_at` 당일 갱신 + `news_chunks.event_time` 최댓값 진행 + 임베딩 배치 수 ≈ 실적재 수 수렴 확인.
 
 ---
 
