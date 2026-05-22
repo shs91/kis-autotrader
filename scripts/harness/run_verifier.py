@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -37,6 +38,23 @@ def _self_test() -> ContractResult:
         mypy=MypyArtifact(files_checked=1),
         ruff=RuffArtifact(),
         diff=DiffSummary(files=[ChangedFile(path="self-test", additions=0, deletions=0)]),
+    )
+
+
+def _mirror_cycle_artifacts(result: ContractResult) -> None:
+    """HARNESS_CYCLE_ARTIFACTS_PATH가 설정된 경우에만 표준 산출물 파일을 기록.
+
+    Stop 훅(`scripts/claude-hooks/run_hook.py`)이 동일 경로를 읽어 검증 수행
+    여부를 판정한다. 환경변수 미설정(수동 실행)이면 아무것도 쓰지 않는다.
+    """
+    target = os.environ.get("HARNESS_CYCLE_ARTIFACTS_PATH")
+    if not target:
+        return
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(result.to_jsonb()["artifacts"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
 
 
@@ -78,6 +96,14 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(result.to_jsonb(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    # 사이클 컨텍스트(orchestrator가 HARNESS_CYCLE_ARTIFACTS_PATH를 export)에서는
+    # Stop 훅이 읽는 표준 산출물 파일을 함께 기록한다. top-level pytest/mypy/ruff 키가
+    # 모두 존재해야 Stop 훅이 "검증이 실제로 수행됨"을 인정하고 종료를 허용한다.
+    # (pass/fail 자체는 본 CLI의 exit code와 후처리 verifier가 강제하므로,
+    #  여기서는 contract 통과 여부와 무관하게 4종 아티팩트 dict를 그대로 기록한다.)
+    _mirror_cycle_artifacts(result)
+
     if not result.passed:
         for reason in result.reasons:
             print(f"[verifier] FAIL: {reason}", file=sys.stderr)

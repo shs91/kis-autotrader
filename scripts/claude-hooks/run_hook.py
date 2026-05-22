@@ -95,6 +95,18 @@ def main() -> int:
             artifacts = {**_load_artifacts_file(), **artifacts}
         stop_decision = stop.evaluate(verification_artifacts=artifacts)
         if stop_decision.blocked:
+            # 재진입 가드: 첫 종료 시도(stop_hook_active 부재/false)에는 차단해
+            # 코디네이터가 verifier를 돌리도록 유도한다. 그러나 한 번 차단했는데도
+            # (stop_hook_active=true) 산출물이 여전히 부재하면, 무한 재개 루프(토큰/시간
+            # 낭비)를 막기 위해 통과시키되 경고한다. 최종 강제력은 후처리
+            # verifier(run_auto_implement.sh 재시작 게이트)가 가지므로 안전하다.
+            if payload.get("stop_hook_active"):
+                print(
+                    f"[stop] WARN: {stop_decision.reason} — 재진입 후에도 산출물 부재, "
+                    "루프 방지 위해 통과 (후처리 verifier가 최종 강제)",
+                    file=sys.stderr,
+                )
+                return 0
             print(f"[stop] BLOCKED: {stop_decision.reason}", file=sys.stderr)
             return 2
         return 0

@@ -68,14 +68,20 @@ def test_pre_bash_blocks_force_push() -> None:
     assert "dangerous" in err.lower()
 
 
-def test_stop_blocks_when_artifacts_missing_in_cycle_context() -> None:
-    """자동 구현 사이클 컨텍스트에서 verification artifacts 부재 시 차단."""
+def test_stop_blocks_when_artifacts_missing_in_cycle_context(tmp_path: Path) -> None:
+    """자동 구현 사이클 컨텍스트에서 verification artifacts 부재 시 차단.
+
+    산출물 경로를 존재하지 않는 tmp 파일로 고정해, 호스트의 실제 기본 경로
+    (`~/.kis-autotrader/cycle_artifacts.json`)를 읽어 테스트가 오염되는 것을 막는다."""
     code, err = _run(
         {
             "hook_event_name": "Stop",
             "verification_artifacts": {},
         },
-        extra_env={"HARNESS_CYCLE_VERIFICATION_REQUIRED": "1"},
+        extra_env={
+            "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1",
+            "HARNESS_CYCLE_ARTIFACTS_PATH": str(tmp_path / "absent.json"),
+        },
     )
     assert code == 2
     assert "verification" in err.lower()
@@ -122,3 +128,40 @@ def test_stop_blocks_when_artifacts_file_partial(tmp_path: Path) -> None:
     )
     assert code == 2
     assert "mypy" in err.lower()
+
+
+def test_stop_reentry_passes_when_artifacts_still_missing(tmp_path: Path) -> None:
+    """재진입(stop_hook_active=true)인데도 산출물이 여전히 부재하면 무한 재개 루프를
+    막기 위해 통과시키되 경고. 최종 강제력은 후처리 verifier가 가진다."""
+    missing = tmp_path / "cycle_artifacts.json"  # 존재하지 않음
+    code, err = _run(
+        {
+            "hook_event_name": "Stop",
+            "verification_artifacts": {},
+            "stop_hook_active": True,
+        },
+        extra_env={
+            "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1",
+            "HARNESS_CYCLE_ARTIFACTS_PATH": str(missing),
+        },
+    )
+    assert code == 0
+    assert "warn" in err.lower()
+
+
+def test_stop_first_attempt_still_blocks_when_missing(tmp_path: Path) -> None:
+    """첫 종료 시도(stop_hook_active 부재/false)에는 부재 시 정상 차단 — 검증 유도."""
+    missing = tmp_path / "cycle_artifacts.json"
+    code, err = _run(
+        {
+            "hook_event_name": "Stop",
+            "verification_artifacts": {},
+            "stop_hook_active": False,
+        },
+        extra_env={
+            "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1",
+            "HARNESS_CYCLE_ARTIFACTS_PATH": str(missing),
+        },
+    )
+    assert code == 2
+    assert "blocked" in err.lower()
