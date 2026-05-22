@@ -297,11 +297,14 @@ class TestCheckBuyGates:
         )
 
     def test_daily_drawdown_halt_returns_specific_code(self) -> None:
-        """일일 MDD로 halt된 경우 'MAX_DAILY_DRAWDOWN'을 반환한다."""
+        """일일 MDD로 halt된 경우 'MAX_DAILY_DRAWDOWN'을 반환한다.
+
+        순손실 가드(2026-05-21 proposal) 반영: 피크 대비 회수폭이 한도를 넘더라도
+        당일 누적이 순손실(<0)일 때만 halt하므로, 순손실 시나리오로 검증한다."""
         rm = RiskManager()
-        # 피크 만들기 → MDD 임계치 이상 하락
+        # 피크 만들기 → 순손실 전환 + MDD 임계치 이상 하락
         rm.record_trade_result(+100_000)  # peak +100k
-        rm.record_trade_result(-50_000)   # 누적 +50k, drawdown 50% (5% 한도 초과)
+        rm.record_trade_result(-150_000)  # 누적 -50k(순손실), drawdown 150% (5% 초과)
         assert rm.is_portfolio_halted is True
         signal = Signal(
             signal_type=SignalType.BUY,
@@ -430,3 +433,35 @@ class TestShouldCloseForMarketEnd:
     def test_zero_guard(self) -> None:
         self.rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
         assert self.rm.should_close_for_market_end(100, 0) is False
+
+
+class TestDailyDrawdownNetLossGuard:
+    """일일 MDD halt 순손실 가드 (proposal 2026-05-21, 안 a).
+
+    피크 대비 회수폭이 한도를 넘더라도 당일 누적이 순손실(<0)일 때만 halt한다.
+    흑자 구간의 '첫 익절 → 손절' 오발동을 제거하되, 실제 순손실 구간의 손실
+    한도는 보존한다."""
+
+    def test_take_profit_then_stop_loss_no_halt_when_net_positive(self) -> None:
+        """+39,440 익절 후 -24,300 손절 → 순익 +15,140 흑자이므로 halt 안 됨 (회귀 케이스)."""
+        rm = RiskManager()
+        rm.record_trade_result(+39_440)  # peak +39,440
+        rm.record_trade_result(-24_300)  # 누적 +15,140 (흑자), 피크 대비 61.6%
+        assert rm.is_portfolio_halted is False
+        assert rm._halt_reason is None
+
+    def test_drawdown_halt_triggers_when_net_negative(self) -> None:
+        """순손실 상태에서 피크 대비 회수폭이 한도 초과 → MDD halt (기존 의도 보존)."""
+        rm = RiskManager()
+        rm.record_trade_result(+39_440)   # peak +39,440
+        rm.record_trade_result(-60_000)   # 누적 -20,560 (순손실), 피크 대비 >5%
+        assert rm.is_portfolio_halted is True
+        assert rm._halt_reason == "MAX_DAILY_DRAWDOWN"
+
+    def test_consecutive_loss_halt_unaffected(self) -> None:
+        """연패 한도 halt 경로는 순손실 가드의 영향을 받지 않는다."""
+        rm = RiskManager()
+        for _ in range(rm._max_consecutive_losses):
+            rm.record_trade_result(-10_000)
+        assert rm.is_portfolio_halted is True
+        assert rm._halt_reason == "MAX_CONSECUTIVE_LOSSES"

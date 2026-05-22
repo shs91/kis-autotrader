@@ -345,9 +345,10 @@ async def test_process_stock_max_consecutive_losses_records_buy_reject() -> None
 async def test_process_stock_max_daily_drawdown_records_buy_reject() -> None:
     """일일 MDD 한도 도달 시 BUY_REJECT(MAX_DAILY_DRAWDOWN) 기록 (RISK_GATE 분할)."""
     engine = _make_engine()
-    # 피크 만들고 MDD 임계치 이상 하락
+    # 피크 만들고 순손실 전환 + MDD 임계치 이상 하락
+    # (순손실 가드 proposal 2026-05-21: 누적 순손실 상태에서만 halt)
     engine._risk.record_trade_result(+100_000)
-    engine._risk.record_trade_result(-50_000)
+    engine._risk.record_trade_result(-150_000)
     assert engine._risk.is_portfolio_halted is True
     mock_enqueue = await _process_high_conf_buy(engine)
     rejects = _extract_buy_reject_calls(mock_enqueue)
