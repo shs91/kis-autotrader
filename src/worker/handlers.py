@@ -136,6 +136,7 @@ class SyncPortfolioHandler(TaskHandler):
                     quantity=h["quantity"],
                     avg_price=h["avg_price"],
                     current_price=h["current_price"],
+                    peak_price=h.get("peak_price"),
                 )
 
         logger.info("포트폴리오 동기화 완료: %d종목", len(holdings))
