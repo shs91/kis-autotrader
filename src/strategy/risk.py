@@ -108,8 +108,12 @@ class RiskManager:
             self._consecutive_losses = 0
 
         # 포트폴리오 MDD 체크
+        # 순손실 가드(proposal 2026-05-21, 안 a): 피크 대비 회수폭이 한도를 넘더라도
+        # 당일 누적이 순손실(<0)일 때만 halt한다. 분모가 '실현이익 피크'라 장 초반
+        # 작은 피크 직후 정상 손절 1건만으로 비율이 폭증해 흑자 상태에서 매매를
+        # 봉인하던 오발동(첫 익절 → 손절 시퀀스)을 제거한다.
         drawdown = self._daily_peak_pnl - self._daily_cumulative_pnl
-        if self._daily_peak_pnl > 0:
+        if self._daily_peak_pnl > 0 and self._daily_cumulative_pnl < 0:
             drawdown_pct = drawdown / self._daily_peak_pnl
             if drawdown_pct >= self._max_daily_drawdown:
                 self._portfolio_halted = True
