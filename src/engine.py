@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -44,6 +45,25 @@ logger = setup_logger(__name__)
 
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
+
+
+@dataclass
+class PendingOrder:
+    """미체결 주문 추적 항목 (체결 확인 실패 시 등록).
+
+    Attributes:
+        order_no: 주문번호 (취소 시 사용)
+        side: "BUY" 또는 "SELL"
+        quantity: 주문 수량
+        placed_cycle: 주문을 낸 사이클 번호 (타임아웃 판정 기준)
+        stock_name: 종목명 (로깅용)
+    """
+
+    order_no: str
+    side: str
+    quantity: int
+    placed_cycle: int
+    stock_name: str = ""
 
 
 class TradingEngine:
@@ -112,6 +132,8 @@ class TradingEngine:
         self._balance_cache: tuple[float, Balance] | None = None
         # 고점 캐시: {종목코드: 고점가격} — 트레일링 스톱 계산용
         self._peak_prices: dict[str, float] = {}
+        # 미체결 주문 추적: {종목코드: PendingOrder} — 중복 억제·잔류 정리용
+        self._pending_orders: dict[str, PendingOrder] = {}
 
         logger.info(
             "매매 엔진 초기화: 기본전략=%s, 관심종목모드=%s",
@@ -268,6 +290,7 @@ class TradingEngine:
         self._daily_cache.clear()
         self._balance_cache = None
         self._peak_prices = self._load_peak_prices()
+        self._pending_orders.clear()
 
         try:
             await self._client._auth.get_access_token()
@@ -334,6 +357,9 @@ class TradingEngine:
                 logger.warning("서킷 브레이커 열림 — 사이클 #%d 즉시 스킵", self._cycle_count)
                 exit_reason = "circuit_breaker_open"
                 return
+
+            # 타임아웃 넘긴 미체결 주문 정리 (시그널 없는 종목도 포함)
+            await self._cleanup_stale_pending_orders()
 
             if self._risk.check_daily_trade_limit(self._today_trade_count):
                 logger.warning("일일 매매 횟수 한도 도달, 사이클 스킵")
@@ -471,8 +497,11 @@ class TradingEngine:
             )
 
     async def post_market(self) -> None:
-        """장 마감 후 작업: 체결 내역 조회, 일일 성과 저장."""
+        """장 마감 후 작업: 잔여 미체결 주문 취소, 체결 내역 조회, 일일 성과 저장."""
         logger.info("=== 장 마감 후 작업 시작 ===")
+
+        # 잔여 미체결 주문 일괄 취소 (다음날로 안 넘김)
+        await self._cancel_all_pending_orders()
 
         try:
             balance = await self._get_balance(force=True)
@@ -975,6 +1004,10 @@ class TradingEngine:
             )
             return
 
+        # 중복 주문 억제: 동일 종목 미체결 주문이 있으면 스킵(또는 타임아웃 시 취소-재주문)
+        if await self._suppress_or_replace_pending(stock_code, "BUY"):
+            return
+
         # 주문 직전 보유 수량 스냅샷 (체결 확인 기준점, 캐시 사용)
         try:
             qty_before = await self._holding_quantity(stock_code, force=False)
@@ -1009,6 +1042,11 @@ class TradingEngine:
                     "stock_code": stock_code, "side": "BUY",
                     "order_no": result.order_no, "cycle": self._cycle_count,
                 })
+                # 미체결 주문 추적 등록 — 중복 억제·잔류 정리 대상
+                self._pending_orders[stock_code] = PendingOrder(
+                    order_no=result.order_no, side="BUY", quantity=quantity,
+                    placed_cycle=self._cycle_count, stock_name=stock_name,
+                )
                 return
 
             # 체결 확정 — 체결 수량(잔고 증가분) + 현재가(0가드 적용)로 기록·알림.
@@ -1016,6 +1054,8 @@ class TradingEngine:
             fill_qty = filled
             fill_price = int(price)
             self._today_trade_count += 1
+            # 체결 완료 — 미체결 추적 해제
+            self._pending_orders.pop(stock_code, None)
             # 신규/추가 매수 — 다음 사이클에 max(avg, current)로 재시드
             self._peak_prices.pop(stock_code, None)
 
@@ -1061,6 +1101,10 @@ class TradingEngine:
         stock_name: str = "",
     ) -> None:
         """매도 주문을 실행하고, 체결 확인 후에만 DB에 기록한다."""
+        # 중복 주문 억제: 동일 종목 미체결 매도 주문이 있으면 스킵(또는 타임아웃 시 취소-재주문)
+        if await self._suppress_or_replace_pending(stock_code, "SELL"):
+            return
+
         # 주문 직전 보유 수량 스냅샷 (체결 확인 기준점, 캐시 사용)
         try:
             qty_before = await self._holding_quantity(stock_code, force=False)
@@ -1095,12 +1139,19 @@ class TradingEngine:
                     "stock_code": stock_code, "side": "SELL",
                     "order_no": result.order_no, "cycle": self._cycle_count,
                 })
+                # 미체결 주문 추적 등록 — 중복 억제·잔류 정리 대상
+                self._pending_orders[stock_code] = PendingOrder(
+                    order_no=result.order_no, side="SELL", quantity=quantity,
+                    placed_cycle=self._cycle_count, stock_name=stock_name,
+                )
                 return
 
             # 체결 확정 — 체결 수량(잔고 감소분) + 현재가(0가드 적용)로 기록·알림.
             fill_qty = filled
             fill_price = int(price)
             self._today_trade_count += 1
+            # 체결 완료 — 미체결 추적 해제
+            self._pending_orders.pop(stock_code, None)
 
             logger.info(
                 "[매도 체결] %s(%s) %d주 @ %d, 사유=%s, 주문번호=%s",
@@ -1185,6 +1236,82 @@ class TradingEngine:
             if attempt < retries - 1:
                 await asyncio.sleep(delay)
         return 0
+
+    # ── 미체결 주문 추적·중복 억제·잔류 정리 ──────────────────
+
+    async def _suppress_or_replace_pending(self, stock_code: str, side: str) -> bool:
+        """동일 종목 미체결 주문 존재 시 신규 주문을 억제하거나 취소-재주문한다.
+
+        - 타임아웃 이내 미체결 주문이 있으면 신규 주문을 억제(스킵)한다.
+        - 타임아웃을 넘긴 미체결 주문이면 취소하고 신규 주문을 허용한다.
+
+        Args:
+            stock_code: 종목코드
+            side: 신규 주문 방향 ("BUY"/"SELL")
+
+        Returns:
+            True이면 신규 주문을 억제(호출자는 주문하지 말 것).
+        """
+        pending = self._pending_orders.get(stock_code)
+        if pending is None:
+            return False
+
+        age = self._cycle_count - pending.placed_cycle
+        timeout = settings.strategy.order_pending_timeout_cycles
+        if age < timeout:
+            logger.info(
+                "[중복 주문 억제] %s %s — 미체결 주문 존재(주문번호=%s, %d사이클 경과)",
+                stock_code, side, pending.order_no, age,
+            )
+            self._record_metric("DUPLICATE_ORDER_SUPPRESSED", {
+                "stock_code": stock_code, "side": side,
+                "order_no": pending.order_no, "age_cycles": age,
+                "cycle": self._cycle_count,
+            })
+            return True
+
+        # 타임아웃 초과 — 기존 미체결 주문 취소 후 신규 허용
+        await self._cancel_pending_order(stock_code, pending, reason="timeout_replace")
+        return False
+
+    async def _cancel_pending_order(
+        self, stock_code: str, pending: PendingOrder, reason: str
+    ) -> None:
+        """미체결 주문을 취소하고 추적에서 제거한다 (실패해도 흐름 유지)."""
+        try:
+            await self._order.cancel(
+                order_no=pending.order_no, stock_code=stock_code,
+                quantity=pending.quantity,
+            )
+            logger.info(
+                "[미체결 취소] %s 주문번호=%s 수량=%d 사유=%s",
+                stock_code, pending.order_no, pending.quantity, reason,
+            )
+        except Exception:
+            logger.exception(
+                "[미체결 취소 실패] %s 주문번호=%s", stock_code, pending.order_no
+            )
+        finally:
+            self._pending_orders.pop(stock_code, None)
+            self._record_metric("ORDER_CANCELLED", {
+                "stock_code": stock_code, "order_no": pending.order_no,
+                "reason": reason, "cycle": self._cycle_count,
+            })
+
+    async def _cleanup_stale_pending_orders(self) -> None:
+        """타임아웃을 넘긴 미체결 주문을 일괄 취소한다 (사이클 시작 시 호출)."""
+        timeout = settings.strategy.order_pending_timeout_cycles
+        stale = [
+            (code, p) for code, p in list(self._pending_orders.items())
+            if self._cycle_count - p.placed_cycle >= timeout
+        ]
+        for code, pending in stale:
+            await self._cancel_pending_order(code, pending, reason="stale_cleanup")
+
+    async def _cancel_all_pending_orders(self) -> None:
+        """잔여 미체결 주문을 전부 취소한다 (장 마감 시 호출)."""
+        for code, pending in list(self._pending_orders.items()):
+            await self._cancel_pending_order(code, pending, reason="market_close")
 
     # ── 매매 데이터 DB 적재 ──────────────────────────────────
 

@@ -304,6 +304,10 @@ class StrategyConfig:
     min_profitable_close: float = field(
         default_factory=lambda: _env_float("MIN_PROFITABLE_CLOSE", 0.015)
     )
+    # 미체결 주문 타임아웃(사이클): 이 사이클 수 이상 미체결이면 취소(중복 억제·잔류 정리)
+    order_pending_timeout_cycles: int = field(
+        default_factory=lambda: _env_int("ORDER_PENDING_TIMEOUT_CYCLES", 3)
+    )
 
     def parse_mappings(self) -> dict[str, str]:
         """STRATEGY_MAPPINGS 환경변수를 파싱한다.
