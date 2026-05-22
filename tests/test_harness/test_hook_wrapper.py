@@ -16,6 +16,10 @@ def _run(
     extra_env: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     env = {**os.environ, "PYTHONPATH": str(WRAPPER.parents[2])}
+    # 사이클 컨텍스트(orchestrator)가 export한 변수가 상속되면 일반 세션 테스트가
+    # 오염되므로 명시적으로 제거. 필요한 테스트는 extra_env로 다시 주입한다.
+    for leaky in ("HARNESS_CYCLE_VERIFICATION_REQUIRED", "HARNESS_CYCLE_ARTIFACTS_PATH"):
+        env.pop(leaky, None)
     if extra_env:
         env.update(extra_env)
     proc = subprocess.run(  # noqa: S603 — fixed wrapper path, controlled test input
@@ -86,3 +90,35 @@ def test_stop_passes_in_normal_session_without_env() -> None:
         }
     )
     assert code == 0
+
+
+def test_stop_passes_when_artifacts_file_present(tmp_path: Path) -> None:
+    """페이로드에 산출물이 없어도 verifier 산출물 파일이 있으면 통과."""
+    artifacts_file = tmp_path / "cycle_artifacts.json"
+    artifacts_file.write_text(
+        json.dumps({"pytest": "814 passed", "mypy": "ok", "ruff": "ok"}),
+        encoding="utf-8",
+    )
+    code, _ = _run(
+        {"hook_event_name": "Stop", "verification_artifacts": {}},
+        extra_env={
+            "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1",
+            "HARNESS_CYCLE_ARTIFACTS_PATH": str(artifacts_file),
+        },
+    )
+    assert code == 0
+
+
+def test_stop_blocks_when_artifacts_file_partial(tmp_path: Path) -> None:
+    """산출물 파일이 일부 키만 가지면 여전히 차단."""
+    artifacts_file = tmp_path / "cycle_artifacts.json"
+    artifacts_file.write_text(json.dumps({"pytest": "ok"}), encoding="utf-8")
+    code, err = _run(
+        {"hook_event_name": "Stop", "verification_artifacts": {}},
+        extra_env={
+            "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1",
+            "HARNESS_CYCLE_ARTIFACTS_PATH": str(artifacts_file),
+        },
+    )
+    assert code == 2
+    assert "mypy" in err.lower()
