@@ -32,6 +32,8 @@ Initializer가 만든 claude-progress.json을 읽고, 5종 subagent에게 작업
 - exit 0 → 모든 IN_FLIGHT을 implemented 처리
 - exit 2 → 모든 IN_FLIGHT을 failed 처리 + rollback-handler dispatch
 - exit 3 → rollback-handler dispatch
+- **이 단계(run_verifier.py 실행)가 Stop 훅 검증 산출물 파일을 자동 기록한다.**
+  별도로 산출물 파일을 손으로 작성하지 말 것 — verifier를 돌리면 종료 게이트가 충족된다.
 
 ### 6. 회귀 사후 검증
 - `evaluator` agent 재dispatch — 변경이 골든 셋 회귀를 유발했는지
@@ -44,7 +46,7 @@ Initializer가 만든 claude-progress.json을 읽고, 5종 subagent에게 작업
 - `.env`/credentials.json/token.json 절대 편집 금지 (PreToolUse hook)
 - `git push --force`, `rm -rf`, `DROP TABLE` 금지 (PreToolUse hook)
 - 5파일 초과 변경은 implementer가 자가 차단
-- pytest/mypy/ruff 출력 부재 시 Stop hook이 차단
+- pytest/mypy/ruff 출력 부재 시 Stop hook이 차단 (step 5의 verifier 실행으로 충족)
 
 ## 금지
 - Initializer가 생성한 claude-progress.json을 직접 수정 (subagent들이 pipeline_append_progress.py로 쓰기)

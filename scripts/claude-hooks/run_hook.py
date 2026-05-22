@@ -14,8 +14,32 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 from src.harness.hooks import post_edit, pre_bash, pre_tool_use, stop
+
+_REQUIRED_ARTIFACTS = ("pytest", "mypy", "ruff")
+
+
+def _artifacts_path() -> Path:
+    """Verifier가 기록하는 검증 산출물 파일 경로.
+
+    HARNESS_CYCLE_ARTIFACTS_PATH로 오버라이드 가능(테스트 격리용),
+    기본값은 harness 상태 디렉토리(`~/.kis-autotrader/cycle_artifacts.json`).
+    """
+    override = os.environ.get("HARNESS_CYCLE_ARTIFACTS_PATH")
+    if override:
+        return Path(override)
+    return Path.home() / ".kis-autotrader" / "cycle_artifacts.json"
+
+
+def _load_artifacts_file() -> dict[str, object]:
+    """검증 산출물 파일을 읽어 dict로 반환(없거나 손상 시 빈 dict)."""
+    try:
+        loaded = json.loads(_artifacts_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def main() -> int:
@@ -63,10 +87,26 @@ def main() -> int:
         # 차단되던 디자인 결함 해결.
         if not os.environ.get("HARNESS_CYCLE_VERIFICATION_REQUIRED"):
             return 0
-        stop_decision = stop.evaluate(
-            verification_artifacts=payload.get("verification_artifacts", {}) or {},
-        )
+        # 산출물 출처 우선순위: Stop 페이로드 → verifier가 기록한 파일(폴백).
+        # Claude Code Stop 이벤트는 verification_artifacts를 싣지 않으므로,
+        # 파일 폴백이 없으면 사이클이 종료 시 항상 차단된다.
+        artifacts = dict(payload.get("verification_artifacts", {}) or {})
+        if not all(k in artifacts for k in _REQUIRED_ARTIFACTS):
+            artifacts = {**_load_artifacts_file(), **artifacts}
+        stop_decision = stop.evaluate(verification_artifacts=artifacts)
         if stop_decision.blocked:
+            # 재진입 가드: 첫 종료 시도(stop_hook_active 부재/false)에는 차단해
+            # 코디네이터가 verifier를 돌리도록 유도한다. 그러나 한 번 차단했는데도
+            # (stop_hook_active=true) 산출물이 여전히 부재하면, 무한 재개 루프(토큰/시간
+            # 낭비)를 막기 위해 통과시키되 경고한다. 최종 강제력은 후처리
+            # verifier(run_auto_implement.sh 재시작 게이트)가 가지므로 안전하다.
+            if payload.get("stop_hook_active"):
+                print(
+                    f"[stop] WARN: {stop_decision.reason} — 재진입 후에도 산출물 부재, "
+                    "루프 방지 위해 통과 (후처리 verifier가 최종 강제)",
+                    file=sys.stderr,
+                )
+                return 0
             print(f"[stop] BLOCKED: {stop_decision.reason}", file=sys.stderr)
             return 2
         return 0

@@ -64,8 +64,22 @@ def run_cycle(
             prompt_available = False
     else:
         logger.warning("prompt %s missing, invoke claude with empty prompt", prompt_path)
-    # Stop hook 활성화 — claude -p 종료 시 Verifier 검증 강제 (Phase 3 hotfix)
-    cycle_env = {**os.environ, "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1"}
+    # Stop hook 활성화 — claude -p 종료 시 Verifier 검증 강제 (Phase 3 hotfix).
+    # verifier(쓰기)와 Stop 훅(읽기)이 공유할 단일 산출물 경로를 확정해 주입한다.
+    artifacts_path = Path(
+        os.environ.get("HARNESS_CYCLE_ARTIFACTS_PATH")
+        or (Path.home() / ".kis-autotrader" / "cycle_artifacts.json")
+    )
+    # 이전 사이클의 산출물이 이번 사이클의 게이트를 거짓 통과시키지 않도록 사전 제거.
+    try:
+        artifacts_path.unlink()
+    except FileNotFoundError:
+        pass
+    cycle_env = {
+        **os.environ,
+        "HARNESS_CYCLE_VERIFICATION_REQUIRED": "1",
+        "HARNESS_CYCLE_ARTIFACTS_PATH": str(artifacts_path),
+    }
     claude_started = datetime.now(UTC)
     cp = subprocess.run(  # noqa: S603
         [
