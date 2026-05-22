@@ -252,3 +252,45 @@ class TestFormatSystem:
         result = format_system("자동매매 시스템 가동")
         assert "[시스템]" in result
         assert "자동매매 시스템 가동" in result
+
+
+# ── eval_profit_rate: 평가손익률(매입금액 기준) ──────────────
+
+from src.api.account import Balance, StockHolding  # noqa: E402
+from src.notify.formatter import eval_profit_rate  # noqa: E402
+
+
+def _holding(code: str, qty: int, avg: float, pl: int) -> StockHolding:
+    return StockHolding(
+        stock_code=code, stock_name=code, quantity=qty, avg_price=avg,
+        current_price=int(avg), eval_amount=int(avg * qty) + pl,
+        profit_loss=pl, profit_rate=0.0,
+    )
+
+
+def _balance(holdings: list[StockHolding], total_pl: int) -> Balance:
+    return Balance(
+        deposit=0, total_eval_amount=0, total_profit_loss=total_pl,
+        total_profit_rate=-1.83, holdings=holdings, raw_response={},
+    )
+
+
+def test_eval_profit_rate_matches_amount_sign() -> None:
+    """평가손익률은 매입금액 기준 — 금액과 부호가 일치한다(자산증감률과 무관)."""
+    bal = _balance([_holding("035420", 5, 196_400.0, 33_000)], total_pl=33_000)
+    # 33,000 / (196,400*5=982,000) * 100 ≈ +3.36% (KIS 자산증감률 -1.83%와 별개)
+    assert round(eval_profit_rate(bal), 2) == 3.36
+
+
+def test_eval_profit_rate_negative() -> None:
+    bal = _balance([_holding("000660", 10, 100_000.0, -50_000)], total_pl=-50_000)
+    assert eval_profit_rate(bal) < 0
+
+
+def test_eval_profit_rate_no_holdings_is_zero() -> None:
+    assert eval_profit_rate(_balance([], total_pl=0)) == 0.0
+
+
+def test_eval_profit_rate_ignores_zero_qty() -> None:
+    bal = _balance([_holding("035420", 0, 196_400.0, 0)], total_pl=0)
+    assert eval_profit_rate(bal) == 0.0

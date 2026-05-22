@@ -100,6 +100,28 @@ def format_sell(
     return "\n".join(lines)
 
 
+def eval_profit_rate(balance: Balance) -> float:
+    """보유분 평가손익률(%)을 매입금액 합계 기준으로 계산한다.
+
+    ``balance.total_profit_rate``는 KIS의 자산증감수익률(ASST_ICDC_ERNG_RT)이라
+    평가손익 금액(EVLU_PFLS_SMTL_AMT)과 지표가 달라, 한 줄에 함께 표기하면 부호가
+    어긋난다(예: +33,000원인데 -1.83%). 보유 종목 매입금액 합계로 평가손익률을
+    계산해 금액과 일관되게 맞춘다.
+
+    Args:
+        balance: 잔고 정보.
+
+    Returns:
+        평가손익률(%). 매입금액이 0이면 0.0.
+    """
+    invested = sum(
+        h.avg_price * h.quantity for h in balance.holdings if h.quantity > 0
+    )
+    if invested <= 0:
+        return 0.0
+    return balance.total_profit_loss / invested * 100.0
+
+
 def format_daily_summary(
     trade_date: str,
     count: int,
@@ -163,13 +185,14 @@ def format_daily_summary(
     # 계좌 현황
     if balance:
         bal_sign = "+" if balance.total_profit_loss >= 0 else ""
+        bal_rate = eval_profit_rate(balance)
         lines.append("")
         lines.append("\U0001f4b0 <b>계좌 현황</b>")
         lines.append(f"  • 예수금: {balance.deposit:,}원")
         lines.append(f"  • 평가금: {balance.total_eval_amount:,}원")
         lines.append(
             f"  • 평가손익: {bal_sign}{balance.total_profit_loss:,}원"
-            f" ({bal_sign}{balance.total_profit_rate:.2f}%)"
+            f" ({bal_sign}{bal_rate:.2f}%)"
         )
         if balance.holdings:
             held = [h for h in balance.holdings if h.quantity > 0]
