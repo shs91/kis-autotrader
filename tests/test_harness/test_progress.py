@@ -57,6 +57,86 @@ def test_transition_records_history():
     assert c.history[0].to_state == "in_flight"
 
 
+def _fresh() -> CycleProgress:
+    return CycleProgress(
+        cycle_id="c-x",
+        started_at=datetime(2026, 5, 14, 19, 0, tzinfo=UTC),
+        env="virtual",
+    )
+
+
+def test_transition_moves_into_in_flight_list():
+    """ready→in_flight 전이가 in_flight 리스트를 채운다."""
+    c = _fresh()
+    c.transition("docs/proposals/a.md", from_state="ready", to_state="in_flight")
+    assert c.in_flight == ["docs/proposals/a.md"]
+
+
+def test_transition_implemented_counts_as_completed():
+    """in_flight→implemented는 completed 리스트로 집계되고 in_flight에서 빠진다."""
+    c = _fresh()
+    c.transition("docs/proposals/a.md", from_state="ready", to_state="in_flight")
+    c.transition("docs/proposals/a.md", from_state="in_flight", to_state="implemented")
+    assert c.in_flight == []
+    assert c.completed == ["docs/proposals/a.md"]
+
+
+def test_transition_failed_list():
+    """in_flight→failed는 failed 리스트로 이동."""
+    c = _fresh()
+    c.transition("docs/proposals/a.md", from_state="ready", to_state="in_flight")
+    c.transition(
+        "docs/proposals/a.md", from_state="in_flight", to_state="failed",
+        reason="verify fail",
+    )
+    assert c.in_flight == []
+    assert c.failed == ["docs/proposals/a.md"]
+
+
+def test_transition_skipped_list():
+    """ready→skipped는 skipped 리스트를 채운다(안전 게이트 거절 경로)."""
+    c = _fresh()
+    c.transition(
+        "docs/proposals/a.md", from_state="ready", to_state="skipped",
+        reason="safety_gate_violation",
+    )
+    assert c.skipped == ["docs/proposals/a.md"]
+
+
+def test_transition_no_duplicate_on_repeat():
+    """동일 to 전이를 반복해도 리스트에 중복 적재되지 않는다."""
+    c = _fresh()
+    c.transition("docs/proposals/a.md", from_state="ready", to_state="skipped")
+    c.transition("docs/proposals/a.md", from_state="ready", to_state="skipped")
+    assert c.skipped == ["docs/proposals/a.md"]
+
+
+def test_transition_unknown_state_only_history():
+    """미지의 상태 라벨은 리스트를 건드리지 않고 history만 남긴다."""
+    c = _fresh()
+    c.transition("docs/proposals/a.md", from_state="ready", to_state="weird")
+    assert c.completed == [] and c.failed == [] and c.skipped == []
+    assert len(c.history) == 1
+
+
+def test_transition_counts_reflect_mixed_cycle():
+    """한 사이클의 혼합 결과가 카운트(리스트 길이)에 정확히 반영된다."""
+    c = _fresh()
+    # a: 구현 성공
+    c.transition("a.md", from_state="ready", to_state="in_flight")
+    c.transition("a.md", from_state="in_flight", to_state="implemented")
+    # b: 실패
+    c.transition("b.md", from_state="ready", to_state="in_flight")
+    c.transition("b.md", from_state="in_flight", to_state="failed")
+    # c, d: 안전 게이트 스킵
+    c.transition("c.md", from_state="ready", to_state="skipped")
+    c.transition("d.md", from_state="ready", to_state="skipped")
+    assert len(c.completed) == 1
+    assert len(c.failed) == 1
+    assert len(c.skipped) == 2
+    assert c.in_flight == []
+
+
 def test_load_missing_file_returns_none(tmp_path: Path):
     assert load_progress(tmp_path / "nope.json") is None
 

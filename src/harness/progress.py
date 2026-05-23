@@ -40,6 +40,20 @@ class StateTransition(BaseModel):
     reason: str | None = None
 
 
+# 상태 라벨 → CycleProgress의 현재 상태 리스트 필드명.
+# 제안서 상태 머신은 implemented를 쓰지만 집계 리스트는 completed이며,
+# ready는 아직 큐에 적재 전이라 pending 리스트로 묶는다.
+_STATE_LIST_FIELD: dict[str, str] = {
+    "pending": "pending",
+    "ready": "pending",
+    "in_flight": "in_flight",
+    "implemented": "completed",
+    "completed": "completed",
+    "failed": "failed",
+    "skipped": "skipped",
+}
+
+
 class CycleProgress(BaseModel):
     """단일 사이클의 진행 상태."""
 
@@ -64,7 +78,13 @@ class CycleProgress(BaseModel):
         to_state: str,
         reason: str | None = None,
     ) -> None:
-        """제안서 상태 전이를 history에 기록한다."""
+        """제안서 상태 전이를 기록한다.
+
+        history에 1건 append하고, 현재 상태 리스트(pending/in_flight/completed/
+        failed/skipped)도 from→to로 이동시킨다. 리스트를 유지해야 orchestrator·
+        텔레그램 상태가 카운트를 정확히 산출한다(과거엔 history만 남기고 리스트는
+        비어 있어 completed/failed/skipped가 항상 0으로 보고됐다).
+        """
         self.history.append(
             StateTransition(
                 path=path,
@@ -73,6 +93,16 @@ class CycleProgress(BaseModel):
                 reason=reason,
             )
         )
+        from_field = _STATE_LIST_FIELD.get(from_state)
+        if from_field is not None:
+            from_list: list[str] = getattr(self, from_field)
+            if path in from_list:
+                from_list.remove(path)
+        to_field = _STATE_LIST_FIELD.get(to_state)
+        if to_field is not None:
+            to_list: list[str] = getattr(self, to_field)
+            if path not in to_list:
+                to_list.append(path)
 
 
 def load_progress(path: Path) -> CycleProgress | None:

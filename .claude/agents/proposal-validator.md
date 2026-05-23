@@ -24,7 +24,18 @@ tools: Read, Grep, Glob, Bash
 
 ## 출력 (Bash로 호출)
 - 통과: 종료 (다음 단계인 implementer에게 위임)
-- 거절: `scripts/harness/pipeline_mark_skipped.py --path X --reason safety_gate_violation` 호출 후 종료
+- 거절: 아래 **두 명령을 순서대로** 호출 후 종료. DB 마킹과 progress 기록을 모두
+  해야 한다 — `append_progress`를 누락하면 `claude-progress.json`의 `skipped` 리스트가
+  비어 사이클 결산이 `skipped=0`으로 잘못 보고된다(implementer 패턴과 동일).
+
+  ```bash
+  python scripts/harness/pipeline_mark_skipped.py \
+    --path <proposal_path> --reason safety_gate_violation
+  python scripts/harness/pipeline_append_progress.py \
+    --progress ~/.kis-autotrader/claude-progress.json \
+    --proposal <proposal_path> \
+    --from-state ready --to-state skipped --reason safety_gate_violation
+  ```
 
 ## 금지
 - Write/Edit 도구 사용 금지
