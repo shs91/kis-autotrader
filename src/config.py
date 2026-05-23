@@ -217,6 +217,9 @@ class TradingConfig:
     daily_trade_limit: int = field(
         default_factory=lambda: _env_int("DAILY_TRADE_LIMIT", 10)
     )
+    max_daily_trades_per_stock: int = field(
+        default_factory=lambda: _env_int("MAX_DAILY_TRADES_PER_STOCK", 2)
+    )
     watchlist_codes: list[str] = field(
         default_factory=lambda: [
             c.strip()

@@ -1,8 +1,37 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (82건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (95건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-23] 종목별 당일 진입 횟수 제한 — 동일 종목 다중 진입 차단 (v0.5.0)
+- 제안서: docs/proposals/2026-05-23_daily-trade-limit-per-stock.md
+- 카테고리: enhancement
+- 변경 파일:
+  - src/config.py: `TradingConfig.max_daily_trades_per_stock` 추가(기본 2, env `MAX_DAILY_TRADES_PER_STOCK`).
+  - src/engine.py: `_process_stock` 매수 경로에 종목별 당일 진입 게이트 신설(전체 일일한도 체크 직후, check_buy_gates 직전). 한도 도달 시 `BUY_REJECT(reason=DAILY_TRADE_LIMIT_PER_STOCK)` 기록 후 매수 차단. 체결 확정 시 `_today_buys_per_stock[code]` 누적, `pre_market`에서 일자 단위 리셋.
+  - .env.example / README.md / CLAUDE.md: `MAX_DAILY_TRADES_PER_STOCK` 문서화.
+  - tests/test_engine_daily_trade_limit_per_stock.py: 한도 도달 차단 / 미만 허용 / 종목별 독립 / pre_market 리셋 4종 신규.
+- 배경: 2주 연속 동일 종목 3회전 진입 패턴(W21 §7) — 동일 종목 반복 진입이 손실을 누적. 매수 게이트는 종목별 진입 횟수를 보지 않았다.
+- 영향: 동일 종목 당일 매수 2회로 제한(3회차부터 차단). 매도(보유분 청산)는 항상 허용. 인메모리 카운터(`_today_trade_count`와 동일 패턴) — 일중 재시작 시 리셋되는 한계는 기존 일일 카운터와 동일.
+- 검증 결과: pytest **927 passed**(신규 4 포함) | mypy ✅ | ruff(변경 파일) ✅ | golden 11 ✅.
+- 비고: 주간분석 제안서가 안전 게이트(리스크 게이트 코드 변경)에 막혀 SKIPPED 처리된 것을 수동 검토 후 구현. 운영자 액션 — 전략 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
+
+---
+
+## [2026-05-23] sell_reason ↔ 실현 PL 부호 일관성 보정 — 760027 ETN STOP_LOSS anomaly 차단 (v0.4.6)
+- 제안서: docs/proposals/2026-05-23_sell-reason-classification-fix.md
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `_reconcile_sell_reason` 헬퍼 신설 — `_record_trade_to_db`에서 체결가 기준 실현 PL 부호로 STOP_LOSS↔TAKE_PROFIT 라벨을 보정(layer 1). 보정 시 `SELL_REASON_CORRECTED` 메트릭 기록. TRAILING_STOP/MARKET_CLOSE/STRATEGY는 분류가 명확하므로 유지.
+  - src/db/models.py: `Trade` `before_insert`/`before_update` listener로 PL-라벨 일관성 강제(defense-in-depth). 엔진을 우회하는 경로(백테스트·직접 적재)도 커버. (부수: 기존 E501 1건 정리)
+  - tests/test_engine_sell_reason.py(엔진 보정 4종) + tests/test_db/test_sell_reason_consistency.py(listener 8종) 신규.
+- 배경: 게이트는 조회 시점 시세로 sell_reason을 결정하나 profit_loss_pct는 체결가로 계산 → 시세 stale/이상값 시 둘이 어긋난다. 760027 ETN이 PL +18.54%인데 STOP_LOSS로 기록(2026-05-22 09:00), W21 손익비/sell_reason 통계 왜곡.
+- 영향: STOP_LOSS/TAKE_PROFIT 라벨이 실현 PL 부호와 항상 일치. 룰 A/B·통계가 sell_reason에 의존해도 측정 오류 제거. PL=0은 모호하므로 보정 안 함.
+- 검증 결과: pytest **927 passed**(신규 12 포함) | mypy ✅ | ruff(변경 파일) ✅ | golden 11 ✅.
+- 비고: 안전 게이트가 SKIPPED 처리한 제안서를 수동 검토 후 구현. 운영자 액션 — `com.kis.autotrader` 재시작 필요.
 
 ---
 
@@ -43,35 +72,6 @@
 - 영향: 분석 직후 리포트가 즉시 커밋돼 항상 보존된다. auto-implement 사이클이 보던 untracked 리포트 잔존도 일부 해소돼 `git_clean` 경고 완화. 제안서는 본 수정 범위 밖(DB 동기화 안전망 + 향후 별도 보호 검토).
 - 검증 결과: bash -n ✅ | 격리 git 스크래치 4케이스(신규 untracked 커밋 / 무변경 스킵 / 미생성 스킵 / 수정 재커밋) + 더티트리 surgical(리포트만 커밋, 수동 작업 보존) 검증 모두 exit 0 ✅.
 - 비고: 운영자 액션 불요 — launchd가 매일 스크립트 파일을 직접 실행하므로 다음 일간 분석(평일 16:30)부터 자동 적용. 이미 소실된 5/19·5/21·5/22 리포트는 복구 불가(분석 로그 요약만 잔존).
-
----
-
-## [2026-05-22] 일일 MDD halt 순손실 가드 — 흑자 구간 조기 halt 제거 (v0.4.2) — 🔴 핫픽스
-- 제안서: docs/proposals/2026-05-21_daily-drawdown-peak-denominator-fix.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/strategy/risk.py: `record_trade_result`의 MDD 발동 조건에 `self._daily_cumulative_pnl < 0` 순손실 가드 추가. 분모가 '당일 실현이익 피크'라 장 초반 작은 피크 직후 정상 손절 1건만으로 비율이 폭증하던 흑자 구간 오발동 제거.
-  - tests/test_strategy/test_risk.py: 신규 `TestDailyDrawdownNetLossGuard` 3종(흑자 무halt 회귀 / 순손실 halt 보존 / 연패 경로 무영향) + 기존 `test_daily_drawdown_halt_returns_specific_code`를 순손실 시나리오로 갱신.
-  - tests/test_engine_buy_gate_metric.py: 구 동작(흑자 halt) 의존 케이스를 순손실 시나리오로 갱신.
-- 배경: 2026-05-21 09:11 익절 +39,440(피크) → 09:21 손절 -24,300 → 누적 +15,140(흑자)인데 피크 대비 회수폭 61.6% ≥ 5%로 `MAX_DAILY_DRAWDOWN` halt 발동, 장 마감까지 5시간 35분 전면 중단(66사이클, 평소 500~700 대비 91% 급감). trip 값 61.6% > 허용 상한 15%라 param 튜닝으로 막을 수 없는 분모 정의(로직) 결함. 사용자가 안 (a) 순손실 가드 채택(고위험 리스크 게이트 완화 → 수동 승인 후 PR #37).
-- 영향: 일일 MDD halt는 당일 누적이 순손실(<0)일 때만 발동(일일 '손실' 한도 취지 일치). 흑자 구간 '첫 익절 → 손절' 오발동 제거로 정상 매매 지속(추정 600~700사이클 정상화). 흑자 구간 give-back 보호는 per-position 트레일링 스톱이 담당.
-- 검증 결과: pytest test_risk 53 + 전체 908 passed (flaky test_health_endpoint 1건 deselect — 실DB 신선도 의존, 무관) | ruff ✅ | mypy ✅.
-- 비고: 운영자 액션 — 전략 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요. 동반 권장(별도): halt 발동 시 system_metrics(HALT) 1회 적재로 모니터링 가시성 확보.
-
----
-
-## [2026-05-22] Stop 훅 검증 게이트를 in-session verifier와 실제 연결 — 충족불가 게이트의 헛돌이 루프 제거 (v0.4.1)
-- 카테고리: bug_fix
-- 변경 파일:
-  - scripts/harness/run_verifier.py: `HARNESS_CYCLE_ARTIFACTS_PATH`가 설정되면 Stop 훅이 읽는 표준 산출물 파일(`cycle_artifacts.json`, top-level pytest/mypy/ruff 키)을 함께 기록. in-session verifier agent가 step 5에서 실행하면 게이트 자동 충족. env 미설정(수동 실행)이면 미기록.
-  - src/harness/cycle/orchestrator.py: 위 env를 `claude` 서브프로세스에 주입 + 사이클 시작 시 이전 사이클 산출물 제거(거짓 통과 방지).
-  - scripts/claude-hooks/run_hook.py: 페이로드→파일 폴백 + 재진입 가드(`stop_hook_active`). 첫 종료 시도엔 차단(검증 유도), 재진입에도 부재면 통과+경고로 무한루프 차단. 최종 강제력은 후처리 verifier 재시작 게이트가 유지.
-  - scripts/auto_implement_prompt_v2.txt: step 5 verifier 실행이 게이트를 자동 충족함을 명시(코디네이터의 수동 파일 작성 방지).
-  - tests: test_hook_wrapper(재진입 가드/첫 시도 차단/격리 보강), test_verifier_cli(canonical 쓰기·스킵), test_cycle_orchestrator(env 주입·stale 제거) 신규 7종.
-- 배경: orchestrator가 `HARNESS_CYCLE_VERIFICATION_REQUIRED=1`로 `claude -p`를 띄우면 Stop 훅이 `verification_artifacts`를 요구하나 Claude Code Stop 이벤트는 이를 절대 싣지 않음. 산출물을 만드는 후처리 verifier는 claude 종료 *후* 실행돼 시점상 게이트 충족 불가 → 매 종료 차단 → headless claude가 강제 재개되어 Claude Code 내부 상한까지 무의미한 턴/토큰/시간 소모(검증 강제는 못 함). 격리 재현 테스트로 headless가 Stop exit 2를 정직히 따라 재진입(loop)함을 실증했고, 호스트 `~/.kis-autotrader/cycle_artifacts.json`에 코디네이터가 수동으로 써넣은 흔적(5/22 17:16)으로 실제 차단 발생을 확증.
-- 영향: verifier(쓰기)와 Stop 훅(읽기)이 단일 산출물 경로를 공유해 게이트가 의도대로 작동. step 5 verifier 실행만으로 종료 게이트 충족, 재진입 가드로 헛돌이 루프 제거(이전 11분대 사이클 정상화 기대).
-- 검증 결과: pytest test_harness 169 passed (신규 7 포함) | ruff 변경 파일 ✅ | mypy 변경 파일 ✅ | E2E 배선 4시나리오 실증(쓰기→읽기 통과 / 첫 시도 차단(2) / 재진입 루프 차단(0+경고)).
-- 비고: PR #36 머지. 함께 묶였던 2026-05-21 파이프라인 문서 3건은 `docs/pipeline-artifacts-2026-05-21` 브랜치로 분리(critical drawdown 제안서 (a)/(b) 결정 대기). 하네스 내부 도구 변경이라 서비스 재시작 불요 — 다음 자동구현 cron(월 17:15)부터 적용.
 
 ---
 

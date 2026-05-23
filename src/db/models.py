@@ -18,10 +18,15 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -101,7 +106,9 @@ class Stock(Base):
     )
 
     orders: Mapped[list[Order]] = relationship("Order", back_populates="stock")
-    portfolio: Mapped[Portfolio | None] = relationship("Portfolio", back_populates="stock", uselist=False)
+    portfolio: Mapped[Portfolio | None] = relationship(
+        "Portfolio", back_populates="stock", uselist=False
+    )
 
     def __repr__(self) -> str:
         return f"<Stock(code={self.code!r}, name={self.name!r})>"
@@ -271,6 +278,38 @@ class Trade(Base):
             f"<Trade(id={self.id}, {self.stock_code} {self.trade_type.value} "
             f"qty={self.quantity} @{self.price})>"
         )
+
+
+@event.listens_for(Trade, "before_insert")
+@event.listens_for(Trade, "before_update")
+def _enforce_sell_reason_pl_consistency(
+    _mapper: Any, _connection: Any, target: Trade
+) -> None:
+    """매도 PL 부호와 STOP_LOSS/TAKE_PROFIT 라벨의 일관성을 영속화 직전 보정한다.
+
+    sell_reason은 조회 시점 시세로 게이트가 결정하지만 profit_loss_pct는 체결가로
+    계산된다. 시세가 stale/이상값이면 둘이 어긋나 통계가 왜곡된다(760027 ETN anomaly:
+    STOP_LOSS인데 PL +18.54%). PL 부호와 모순되는 STOP_LOSS/TAKE_PROFIT만 보정하고,
+    분류가 명확한 TRAILING_STOP/MARKET_CLOSE/STRATEGY는 PL 부호와 무관하게 유지한다.
+    엔진(layer 1)을 우회하는 경로(백테스트·직접 적재)에 대한 defense-in-depth.
+    """
+    if target.trade_type != TradeType.SELL:
+        return
+    pl = target.profit_loss_pct
+    if pl is None:
+        return
+    if pl > 0 and target.sell_reason == SellReason.STOP_LOSS:
+        logger.warning(
+            "sell_reason anomaly: STOP_LOSS인데 PL +%.2f%% (종목 %s) → TAKE_PROFIT 보정",
+            pl, target.stock_code,
+        )
+        target.sell_reason = SellReason.TAKE_PROFIT
+    elif pl < 0 and target.sell_reason == SellReason.TAKE_PROFIT:
+        logger.warning(
+            "sell_reason anomaly: TAKE_PROFIT인데 PL %.2f%% (종목 %s) → STOP_LOSS 보정",
+            pl, target.stock_code,
+        )
+        target.sell_reason = SellReason.STOP_LOSS
 
 
 class Signal(Base):
