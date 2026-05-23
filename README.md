@@ -445,7 +445,8 @@ WS_RECONNECT_BASE_DELAY=5         # 웹소켓 재연결 기본 대기(초)
 # Trading
 MAX_LOSS_RATE=0.03                 # 최대 손실률 (3%, 손절선)
 MAX_POSITION_RATIO=0.2             # 최대 포지션 비율 (20%)
-DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한
+DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한 (전체)
+MAX_DAILY_TRADES_PER_STOCK=2       # 종목별 당일 최대 진입(매수) 횟수 — 동일 종목 다중 진입 차단
 
 # 이익 청산 (트레일링 스톱 + 마감 게이트)
 TRAILING_STOP_ENABLED=true         # 트레일링 스톱 사용 (false면 +5% 고정 익절로 폴백)

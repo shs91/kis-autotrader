@@ -112,6 +112,8 @@ class TradingEngine:
         self._screened_codes: set[str] = set()
 
         self._today_trade_count = 0
+        # 종목별 당일 매수(진입) 횟수 — 동일 종목 다중 진입 차단용 (일자 단위 리셋)
+        self._today_buys_per_stock: dict[str, int] = {}
         self._cycle_count = 0
         self._daily_limit_reached = False
 
@@ -283,6 +285,7 @@ class TradingEngine:
         """장 시작 전 작업: 토큰 갱신, 잔고 확인, 일봉 캐싱, 스크리닝."""
         logger.info("=== 장 시작 전 작업 시작 ===")
         self._today_trade_count = 0
+        self._today_buys_per_stock.clear()
         self._cycle_count = 0
         self._daily_limit_reached = False
         self._risk.reset_daily_risk()
@@ -776,6 +779,26 @@ class TradingEngine:
             )
             return
 
+        # BUY 시그널 — 종목별 당일 진입 횟수 제한 (proposal 2026-05-23)
+        # 동일 종목 동일 거래일 N회 이상 진입을 차단. 매도(청산)는 제한하지 않는다.
+        buys_today = self._today_buys_per_stock.get(stock_code, 0)
+        if buys_today >= settings.trading.max_daily_trades_per_stock:
+            skip_reason = "daily_trade_limit_per_stock"
+            self._record_buy_reject(
+                stock_code=stock_code,
+                reason="DAILY_TRADE_LIMIT_PER_STOCK",
+                confidence=signal.confidence,
+                context={
+                    "buys_today": buys_today,
+                    "limit": settings.trading.max_daily_trades_per_stock,
+                },
+            )
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason=skip_reason,
+            )
+            return
+
         # BUY 시그널 — 게이트 사유 진단 (저신뢰/잔고/리스크)
         gate_reason = self._risk.check_buy_gates(signal, float(deposit))
         if gate_reason is not None:
@@ -1054,6 +1077,10 @@ class TradingEngine:
             fill_qty = filled
             fill_price = int(price)
             self._today_trade_count += 1
+            # 종목별 당일 진입 횟수 누적 (다음 사이클 이후 동일 종목 재진입 차단용)
+            self._today_buys_per_stock[stock_code] = (
+                self._today_buys_per_stock.get(stock_code, 0) + 1
+            )
             # 체결 완료 — 미체결 추적 해제
             self._pending_orders.pop(stock_code, None)
             # 신규/추가 매수 — 다음 사이클에 max(avg, current)로 재시드
@@ -1341,6 +1368,41 @@ class TradingEngine:
             return BuyReason.ENSEMBLE
         return None
 
+    def _reconcile_sell_reason(
+        self,
+        sell_reason: SellReason | None,
+        profit_loss_pct: float,
+        stock_code: str,
+    ) -> SellReason | None:
+        """체결가 기준 실현 PL 부호로 STOP_LOSS/TAKE_PROFIT 라벨을 보정한다.
+
+        게이트는 조회 시점 시세로 sell_reason을 정하지만 profit_loss_pct는 체결가로
+        계산된다. 시세 stale/이상값 시 둘이 어긋나 통계가 왜곡된다(760027 ETN anomaly).
+        PL 부호와 모순되는 STOP_LOSS/TAKE_PROFIT만 보정하고, 분류가 명확한
+        TRAILING_STOP/MARKET_CLOSE/STRATEGY는 유지한다.
+        """
+        corrected = sell_reason
+        if sell_reason == SellReason.STOP_LOSS and profit_loss_pct > 0:
+            corrected = SellReason.TAKE_PROFIT
+        elif sell_reason == SellReason.TAKE_PROFIT and profit_loss_pct < 0:
+            corrected = SellReason.STOP_LOSS
+        if corrected is not sell_reason:
+            logger.warning(
+                "[%s] sell_reason 보정: %s → %s (실현 PL %+.2f%%)",
+                stock_code,
+                sell_reason.value if sell_reason else None,
+                corrected.value if corrected else None,
+                profit_loss_pct,
+            )
+            self._record_metric("SELL_REASON_CORRECTED", {
+                "stock_code": stock_code,
+                "from": sell_reason.value if sell_reason else None,
+                "to": corrected.value if corrected else None,
+                "profit_loss_pct": round(profit_loss_pct, 4),
+                "cycle": self._cycle_count,
+            })
+        return corrected
+
     def _record_trade_to_db(
         self,
         stock_code: str,
@@ -1375,6 +1437,9 @@ class TradingEngine:
                     profit_loss_pct = float(((price - avg_price) / avg_price) * 100)
                     profit_loss_amount = int((price - avg_price) * quantity)
                     self._risk.record_trade_result(profit_loss_amount)
+                    sell_reason = self._reconcile_sell_reason(
+                        sell_reason, profit_loss_pct, stock_code,
+                    )
 
             self._task_queue.enqueue(
                 task_type="record_trade",
