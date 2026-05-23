@@ -1,8 +1,20 @@
 # 변경 이력 (최근 5건)
 
-> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (95건+).
+> 전체 이력은 `implementation_logs` DB 테이블에 저장됩니다 (96건+).
 > 이 파일은 최근 5건만 유지하며, 새 구현 시 가장 오래된 항목이 제거됩니다.
 > 제안서 경로: docs/proposals/
+
+---
+
+## [2026-05-23] 사이클 카운터 관측성 수정 — progress.transition이 상태 리스트 유지 (v0.5.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/harness/progress.py: `CycleProgress.transition`이 history append뿐 아니라 상태 리스트(pending/in_flight/completed/failed/skipped)도 from→to로 이동. `_STATE_LIST_FIELD` 매핑(implemented→completed, ready→pending) 신설.
+  - .claude/agents/proposal-validator.md: 안전 게이트 거절 시 `pipeline_mark_skipped`에 더해 `pipeline_append_progress`(ready→skipped)도 호출(implementer 패턴과 일치).
+- 배경: `transition()`이 history에만 append하고 상태 리스트는 비워둬 orchestrator의 `len(completed/failed/skipped)`가 항상 0. 신format 사이클 9건 전부 `completed=0 failed=0 skipped=0`으로 보고(75건 implemented된 날 포함). 추가로 validator는 progress 기록을 아예 안 해 skip이 history에도 안 남았다(2026-05-23 W21 제안서 2건 SKIP이 결산엔 0으로 표시된 사례).
+- 영향: 사이클 결산(`[cycle] ... completed/failed/skipped`)과 텔레그램 상태가 실제 처리 결과를 정확히 카운트. 안전 게이트 SKIP도 결산·history에 반영돼 "왜 0건인가" 진단이 즉시 가능.
+- 검증 결과: pytest **934 passed**(신규 7: transition 리스트 유지) | mypy ✅ | ruff(변경 파일) ✅.
+- 비고: 하네스 내부 변경(progress.py + 에이전트 프롬프트) — 서비스 재시작 불요, 다음 자동구현 cron(평일 17:15)부터 적용.
 
 ---
 
@@ -61,17 +73,6 @@
 - 영향: 변경 파일에서 발생한 mypy 에러만 게이트에 반영. 정상 변경(예: MDD 커밋 risk.py 자체 에러 0건)은 PASS, 변경 파일에 새 타입 에러가 들어오면 FAIL 유지(회귀 검출력 보존). E2E로 MDD 커밋(35047a4) 재검증 시 `overall passed=True, mypy error_count=0`(이전 errors=82) 확인.
 - 검증 결과: pytest test_harness 171 passed(신규 2 포함) | ruff 변경 파일 ✅ | mypy 변경 파일(runner.py) 에러 0 | E2E verifier(35047a4) PASS.
 - 비고: 하네스 내부 검증 도구 변경이라 서비스 재시작 불요 — 다음 자동구현 cron(평일 17:15)부터 적용. 전역 mypy baseline(≈85건) 자체 정리(pandas-stubs/override 등)는 별도 과제로 잔존.
-
----
-
-## [2026-05-22] 일간 분석 리포트 영속화 — 구현 0건인 날 리포트 소실 수정 (v0.4.3)
-- 카테고리: bug_fix
-- 변경 파일:
-  - scripts/run_daily_analysis.sh: 분석(`claude -p`) 직후 `docs/reports/<날짜>_daily.md`를 단독 커밋하는 블록 추가(`git add -- <파일>` → `git commit --no-verify -- <파일>`). 현재 브랜치에 해당 파일만 커밋하므로 작업 중 변경/제안서 등 나머지 워킹트리는 무영향(surgical). 파일 미생성(데이터 부족 등)·무변경 시 스킵.
-- 배경: `claude -p`가 생성하는 일간 리포트는 untracked 상태로 남는데, 제안서를 구현한 날에는 auto-implement 커밋이 우연히 휩쓸어 보존됐지만 구현 0건인 날(룰 게이트 보류 등)에는 커밋 없이 방치되다 이후 수동/자동 git 작업에 소실됐다. 5/19·5/21·5/22 리포트가 디스크 및 전체 브랜치에 부재함을 확인(분석 로그상 "생성"으로 기록됐으나 파일 없음).
-- 영향: 분석 직후 리포트가 즉시 커밋돼 항상 보존된다. auto-implement 사이클이 보던 untracked 리포트 잔존도 일부 해소돼 `git_clean` 경고 완화. 제안서는 본 수정 범위 밖(DB 동기화 안전망 + 향후 별도 보호 검토).
-- 검증 결과: bash -n ✅ | 격리 git 스크래치 4케이스(신규 untracked 커밋 / 무변경 스킵 / 미생성 스킵 / 수정 재커밋) + 더티트리 surgical(리포트만 커밋, 수동 작업 보존) 검증 모두 exit 0 ✅.
-- 비고: 운영자 액션 불요 — launchd가 매일 스크립트 파일을 직접 실행하므로 다음 일간 분석(평일 16:30)부터 자동 적용. 이미 소실된 5/19·5/21·5/22 리포트는 복구 불가(분석 로그 요약만 잔존).
 
 ---
 
