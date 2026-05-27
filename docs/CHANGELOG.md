@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-05-27] 매매불가 종목 당일 블랙리스트 — rt_cd=1 매매불가 반복 거부 차단 (v0.5.2)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/utils/exceptions.py: `OrderError`가 KIS 응답의 `rt_cd`/`msg1`을 보존하도록 `__init__` 추가 — 호출부가 거부 사유(매매불가 등)를 식별 가능.
+  - src/api/order.py: `_parse_order_response`가 거부 시 `rt_cd`/`msg1`을 `OrderError`에 실어 전파.
+  - src/engine.py: `_untradable_today` 당일 블랙리스트 신설. `_execute_buy`가 ①블랙리스트 종목은 주문 시도 자체를 스킵, ②`매매불가` 거부(`_is_untradable_order_error`) 수신 시 블랙리스트 등록 + `BUY_UNTRADABLE` 메트릭 기록. `pre_market`에서 일자 단위 리셋.
+  - tests/test_engine_untradable_blacklist.py: 매매불가 거부→블랙리스트 / 블랙리스트 종목 주문 스킵 / 일반 거부는 비차단 / pre_market 리셋 / OrderError 필드 보존 5종 신규.
+- 배경: 2026-05-27 장중, 스크리너가 모의투자 매매불가 종목(230980 비유테크놀러지)을 후보로 올려 신뢰도 0.99 BUY 신호가 매 사이클 발생. 매수 주문이 `rt_cd=1 모의투자 주문처리가 안되었습니다(매매불가 종목)`로 거부되는데도 09:07부터 191회 무한 재시도(+ 주문 엔드포인트 500 782회). 재시도가 10초 매매 사이클을 넘겨 `max_instances=1` 작업 스킵 폭주 → 105분간 사이클 219회로 throughput 급감.
+- 영향: 매매불가 거부를 1회 받으면 같은 거래일 동안 해당 종목 매수 재시도를 차단. 무한 주문/500 폭주·사이클 블로킹 해소, API 호출 낭비 제거. 매도(보유분 청산)는 차단 대상 아님. 인메모리 셋(`_today_buys_per_stock`와 동일 패턴) — 일중 재시작 시 리셋되는 한계는 기존 일일 카운터와 동일.
+- 검증 결과: pytest **939 passed**(신규 5 포함) | mypy ✅(변경 3파일) | ruff ✅(변경 파일).
+- 비고: 운영자 액션 — 주문 실행 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
+
+---
+
 ## [2026-05-23] 사이클 카운터 관측성 수정 — progress.transition이 상태 리스트 유지 (v0.5.1)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -63,17 +77,4 @@
 - 비고: pandas는 `pandas-stubs` 대신 `ignore_missing_imports` 채택(엄격 스텁은 신규 에러 대량 유발). 변경 파일의 기존 ruff 위반 12건 정리는 별도 과제로 잔존.
 
 ---
-
-## [2026-05-22] Verifier mypy 게이트를 변경 파일로 스코프 — baseline 에러발 구조적 FAIL 제거 (v0.4.4)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/harness/verifier/runner.py: `_run_mypy`가 mypy 파싱 후 변경된 src 파일에서 발생한 에러만 남기도록 필터 추가(`e.file in changed`). mypy는 변경 파일만 타깃해도 import 그래프를 따라 미변경 의존 파일의 에러까지 보고하는데, 그 baseline 에러를 게이트 판정에서 제외(Phase 3 hotfix D2의 '변경 파일 한정' 의도 완성 — 타깃뿐 아니라 보고된 에러도 스코프 제한).
-  - tests/test_harness/test_verifier_runner.py: 미변경 의존 파일 에러 스코프 제거→PASS / 변경 파일 자체 에러 보존→FAIL 2종 신규.
-- 배경: 전역 mypy baseline이 약 85건(대부분 pandas/apscheduler `import-untyped` 미설치 스텁 + 실에러 일부). verifier는 변경 파일만 타깃하지만 mypy가 import 그래프를 따라가 미변경 파일의 사전 존재 에러까지 보고 → `MypyArtifact.passed`가 `error_count==0`을 요구하므로 코드 import만 닿아도 게이트가 구조적으로 항상 FAIL. 5/22 auto-implement(17:15·19:00) 모두 `verifier exit=2 (mypy errors=82)`로 차단됨을 확인. v0.4.1에서 고친 Stop 훅 충족불가 게이트와 동일 계열의 결함.
-- 영향: 변경 파일에서 발생한 mypy 에러만 게이트에 반영. 정상 변경(예: MDD 커밋 risk.py 자체 에러 0건)은 PASS, 변경 파일에 새 타입 에러가 들어오면 FAIL 유지(회귀 검출력 보존). E2E로 MDD 커밋(35047a4) 재검증 시 `overall passed=True, mypy error_count=0`(이전 errors=82) 확인.
-- 검증 결과: pytest test_harness 171 passed(신규 2 포함) | ruff 변경 파일 ✅ | mypy 변경 파일(runner.py) 에러 0 | E2E verifier(35047a4) PASS.
-- 비고: 하네스 내부 검증 도구 변경이라 서비스 재시작 불요 — 다음 자동구현 cron(평일 17:15)부터 적용. 전역 mypy baseline(≈85건) 자체 정리(pandas-stubs/override 등)는 별도 과제로 잔존.
-
----
-
 

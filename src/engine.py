@@ -37,7 +37,7 @@ from src.strategy.registry import StrategyRegistry
 from src.strategy.risk import RiskManager
 from src.strategy.screener import StockScreener
 from src.strategy.selector import StrategySelector
-from src.utils.exceptions import DailyLimitExceededError
+from src.utils.exceptions import DailyLimitExceededError, OrderError
 from src.utils.logger import setup_logger
 from src.worker.queue import TaskQueueService
 
@@ -114,6 +114,9 @@ class TradingEngine:
         self._today_trade_count = 0
         # 종목별 당일 매수(진입) 횟수 — 동일 종목 다중 진입 차단용 (일자 단위 리셋)
         self._today_buys_per_stock: dict[str, int] = {}
+        # 당일 매매불가 판정 종목 — KIS가 'rt_cd=1 매매불가 종목'으로 매수를 거부하면
+        # 같은 거래일 동안 재시도를 차단한다(무한 주문 재시도/사이클 블로킹 방지, 일자 단위 리셋)
+        self._untradable_today: set[str] = set()
         self._cycle_count = 0
         self._daily_limit_reached = False
 
@@ -286,6 +289,7 @@ class TradingEngine:
         logger.info("=== 장 시작 전 작업 시작 ===")
         self._today_trade_count = 0
         self._today_buys_per_stock.clear()
+        self._untradable_today.clear()
         self._cycle_count = 0
         self._daily_limit_reached = False
         self._risk.reset_daily_risk()
@@ -1011,11 +1015,26 @@ class TradingEngine:
 
     # ── 주문 실행 ─────────────────────────────────────────
 
+    @staticmethod
+    def _is_untradable_order_error(exc: OrderError) -> bool:
+        """KIS '매매불가 종목' 거부인지 판정한다.
+
+        rt_cd=1은 일반 거부에도 쓰이므로(예: 호출 초과), 메시지에 '매매불가'가 포함된
+        경우에만 매매불가로 본다.
+        """
+        text = f"{exc.msg1 or ''} {exc}"
+        return "매매불가" in text
+
     async def _execute_buy(
         self, stock_code: str, stock_name: str, quantity: int, price: int,
         signal: Signal | None = None, strategy_name: str = "",
     ) -> None:
         """매수 주문을 실행하고 DB에 기록한다."""
+        # 당일 매매불가 판정 종목은 주문을 시도하지 않는다(반복 거부 → 사이클 블로킹 방지).
+        if stock_code in self._untradable_today:
+            logger.debug("[매수 스킵] %s(%s) — 당일 매매불가 종목", stock_name, stock_code)
+            return
+
         # KIS 종목마스터 sync 결과(market_actions) 기반 차단 lookup.
         # 거래정지/관리종목/정리매매/시장경고/경고예고/불성실공시 중 하나라도 ON이면
         # 매수를 막는다. 미등록 종목은 통과(안전 기본값 — sync 전 매매 위축 방지).
@@ -1040,6 +1059,21 @@ class TradingEngine:
 
         try:
             result = await self._order.buy(stock_code=stock_code, quantity=quantity)
+        except OrderError as exc:
+            if self._is_untradable_order_error(exc):
+                # 당일 블랙리스트 등록 — 같은 거래일 동안 재진입 시도 차단
+                self._untradable_today.add(stock_code)
+                logger.warning(
+                    "[매수 차단] %s(%s) — 매매불가 종목, 당일 재시도 차단 (rt_cd=%s, msg=%s)",
+                    stock_name, stock_code, exc.rt_cd, exc.msg1,
+                )
+                self._record_metric("BUY_UNTRADABLE", {
+                    "stock_code": stock_code, "rt_cd": exc.rt_cd,
+                    "msg": exc.msg1, "cycle": self._cycle_count,
+                })
+                return
+            logger.exception("[매수 주문 실패] %s(%s)", stock_name, stock_code)
+            return
         except Exception:
             logger.exception("[매수 주문 실패] %s(%s)", stock_name, stock_code)
             return

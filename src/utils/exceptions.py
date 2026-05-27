@@ -24,7 +24,22 @@ class DailyLimitExceededError(RateLimitExceededError):
 
 
 class OrderError(KISAutoTraderError):
-    """주문 관련 에러."""
+    """주문 관련 에러.
+
+    KIS 응답의 ``rt_cd``/``msg1``을 보존해 호출부가 거부 사유(예: 매매불가 종목)를
+    식별할 수 있게 한다.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        rt_cd: str | None = None,
+        msg1: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.rt_cd = rt_cd
+        self.msg1 = msg1
 
 
 class InsufficientBalanceError(OrderError):

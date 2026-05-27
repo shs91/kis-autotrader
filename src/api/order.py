@@ -266,7 +266,9 @@ class OrderAPI:
         msg1 = response.get("msg1", "")
 
         if rt_cd != "0":
-            raise OrderError(f"주문 실패 (rt_cd={rt_cd}): {msg1}")
+            raise OrderError(
+                f"주문 실패 (rt_cd={rt_cd}): {msg1}", rt_cd=rt_cd, msg1=msg1,
+            )
 
         output = response.get("output", {})
         return OrderResult(
