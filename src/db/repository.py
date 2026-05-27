@@ -22,6 +22,7 @@ from src.db.models import (
     MarketAction,
     NewsChunk,
     NewsCollectionState,
+    NewsSourceType,
     Order,
     OrderStatus,
     OrderType,
@@ -1454,6 +1455,22 @@ class NewsChunkRepository:
             .limit(1)
         )
         return self._session.execute(stmt).first() is not None
+
+    def get_recent_disclosure_titles(
+        self, ticker: str, since: datetime
+    ) -> list[str]:
+        """종목의 최근(`since` 이후) DISCLOSURE 공시 제목 목록을 반환한다.
+
+        공시 기반 매수 리스크 게이트(상장폐지/정리매매 등 치명 키워드 탐지)용 조회.
+        제목이 없는(NULL) 청크는 제외한다.
+        """
+        stmt = select(NewsChunk.title).where(
+            NewsChunk.ticker == ticker,
+            NewsChunk.source_type == NewsSourceType.DISCLOSURE,
+            NewsChunk.event_time >= since,
+            NewsChunk.title.is_not(None),
+        )
+        return [t for (t,) in self._session.execute(stmt).all() if t]
 
     def get_collection_state(self, source: str) -> datetime | None:
         """소스별 마지막 수집 시각 (`last_collected_at`)을 반환한다."""

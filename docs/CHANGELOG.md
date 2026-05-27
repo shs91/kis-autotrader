@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-05-27] 공시 기반 매수 리스크 게이트 — 종목마스터 sync 사각지대 보완 (v0.6.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/config.py: `TradingConfig.news_risk_gate_enabled`(기본 on, env `NEWS_RISK_GATE_ENABLED`), `news_risk_lookback_days`(기본 30, env `NEWS_RISK_LOOKBACK_DAYS`) 추가.
+  - src/db/repository.py: `NewsChunkRepository.get_recent_disclosure_titles(ticker, since)` — 최근 DISCLOSURE 공시 제목 조회.
+  - src/engine.py: `_CRITICAL_DISCLOSURE_KEYWORDS`(상장폐지/정리매매/관리종목/회생절차/감사의견거절/횡령/배임/부도/영업정지) 신설. `_match_critical_disclosure`(순수 키워드 매처) + `_check_disclosure_risk_block`(설정 gate + DB 조회, 실패 swallow). `_execute_buy`에서 market_action 차단 직후 호출 — 매칭 시 `BUY_DISCLOSURE_BLOCK` 메트릭 기록 후 매수 차단.
+  - tests/test_engine_disclosure_risk_gate.py: 키워드 매처(해제=호재 오탐 회피 포함)/게이트 on·off/DB 실패 swallow/_execute_buy 차단·통과 10종 신규.
+- 배경: 2026-05-27 230980(비유테크놀러지) 매매불가 사고에서, KIS 종목마스터 sync(`market_actions`)는 230980을 정상(모든 플래그 false)으로 표시했으나 DART 공시는 5/21자 "상장폐지에 따른 정리매매 개시"(sentiment -0.85)를 이미 포착. 종목마스터 sync에 사각지대가 존재함이 확인됨.
+- 영향: 최근 30일 내 치명 공시가 있는 종목의 매수를 사전 차단(모델 미사용, 순수 룰베이스). `_check_market_action_block`(종목마스터 기반)을 DART 공시로 보완 — 라이브 DB 검증서 230980·464680(상폐) 차단, 005930(삼성전자, 공시 5건) 통과. '거래정지해제'(거래 재개=호재) 오탐 방지로 바레 '거래정지'는 키워드 제외. 매도(청산)는 영향 없음.
+- 검증 결과: pytest **949 passed**(신규 10 포함) | mypy ✅(변경 3파일) | ruff ✅.
+- 비고: 운영자 액션 — 매수 게이트 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
+
+---
+
 ## [2026-05-27] 매매불가 종목 당일 블랙리스트 — rt_cd=1 매매불가 반복 거부 차단 (v0.5.2)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -58,23 +72,6 @@
 - 영향: STOP_LOSS/TAKE_PROFIT 라벨이 실현 PL 부호와 항상 일치. 룰 A/B·통계가 sell_reason에 의존해도 측정 오류 제거. PL=0은 모호하므로 보정 안 함.
 - 검증 결과: pytest **927 passed**(신규 12 포함) | mypy ✅ | ruff(변경 파일) ✅ | golden 11 ✅.
 - 비고: 안전 게이트가 SKIPPED 처리한 제안서를 수동 검토 후 구현. 운영자 액션 — `com.kis.autotrader` 재시작 필요.
-
----
-
-## [2026-05-22] mypy strict baseline 정리 — 85건 → 0건 (전역 타입 클린업) (v0.4.5)
-- 카테고리: refactor
-- 변경 파일:
-  - pyproject.toml: 타입 스텁 없는 서드파티(pandas/apscheduler/google_auth_oauthlib/googleapiclient)에 `ignore_missing_imports` override 추가 → `import-untyped` 16건 제거.
-  - src/db/: JSONB·payload 컬럼/파라미터 `dict`→`dict[str, Any]`(type-arg 14건), analytics 제너레이터 item type(`int|None`→`or 0`)·unary minus 대상 `cast(int, ...)`.
-  - src/worker/: screener·engine의 `ranked: list[object]`→`list[VolumeRankItem]`, runner `task: object`→`TaskQueue`, queue의 SQLAlchemy `delete(TaskQueue)` 구문·`CursorResult.rowcount` cast.
-  - src/engine.py: `object`/`list[object]`→실타입 `Balance`/`Execution`/`VolumeRankItem` 주입.
-  - src/strategy/: rsi 불용 `type: ignore` 제거, macd/bollinger 초기화값 `cast(int/float, ...)`.
-  - src/api/: auth/quote/account `.json()` Any 반환 `cast(str, ...)`, rate_limiter 동기 redis 반환 cast(stub의 sync/async 모호성).
-  - src/calendar/google_auth.py: google-auth 부분 미타입 메서드 `cast`+`# type: ignore[no-untyped-call]`. src/notify/bot.py: params `dict[str, str|int]`·json 반환 cast. src/scheduler/jobs.py: `asyncio.run` 인자 Coroutine 타입. src/market_stats.py: 불용 type:ignore 제거.
-- 배경: strict mypy가 전역 85건 에러를 안고 있어 타입 신호가 무력화돼 있었음. v0.4.4에서 verifier 게이트는 '변경 파일 스코프'로 우회했으나 baseline 자체는 미정리 상태였다. 노이즈 16건(스텁 미설치 `import-untyped`) + 실에러 69건(`object` 파라미터·bare `dict`·`Any` 반환 등).
-- 영향: `mypy src/` Success(0건, 이전 85건). 이제 verifier/CI에서 mypy 0-tolerance 강제 가능. 런타임 동작 무변경 — 전부 타입/주석/cast/import만 손댔고 pytest 911 passed로 확인. 5개 모듈 병렬 에이전트로 작업 후 중앙 검증(full mypy + 전체 테스트).
-- 검증 결과: `mypy src/` Success: no issues found in 93 source files | pytest **911 passed** | ruff 신규 위반 0(기존 E501/F401 12건은 pre-existing, 무관).
-- 비고: pandas는 `pandas-stubs` 대신 `ignore_missing_imports` 채택(엄격 스텁은 신규 에러 대량 유발). 변경 파일의 기존 ruff 위반 12건 정리는 별도 과제로 잔존.
 
 ---
 

@@ -27,6 +27,8 @@ def _make_engine() -> TradingEngine:
     engine._record_order_to_db = MagicMock()  # type: ignore[method-assign]
     engine._record_trade_to_db = MagicMock()  # type: ignore[method-assign]
     engine._record_metric = MagicMock()  # type: ignore[method-assign]
+    # 공시 리스크 게이트는 본 테스트 관심사 밖(DB 의존) — 통과로 고정
+    engine._check_disclosure_risk_block = MagicMock(return_value=None)  # type: ignore[method-assign]
     return engine
 
 
