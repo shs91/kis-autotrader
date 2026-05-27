@@ -220,6 +220,14 @@ class TradingConfig:
     max_daily_trades_per_stock: int = field(
         default_factory=lambda: _env_int("MAX_DAILY_TRADES_PER_STOCK", 2)
     )
+    # 공시 기반 매수 리스크 게이트 — 최근 N일 내 치명 공시(상장폐지/정리매매 등) 종목 매수 차단.
+    # KIS 종목마스터(market_actions) sync 사각지대를 DART 공시로 보완(모델 미사용).
+    news_risk_gate_enabled: bool = field(
+        default_factory=lambda: _env("NEWS_RISK_GATE_ENABLED", "true").lower() == "true"
+    )
+    news_risk_lookback_days: int = field(
+        default_factory=lambda: _env_int("NEWS_RISK_LOOKBACK_DAYS", 30)
+    )
     watchlist_codes: list[str] = field(
         default_factory=lambda: [
             c.strip()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -23,6 +23,7 @@ from src.db.repository import (
     DailyPerformanceRepository,
     DailySummaryRepository,
     MarketActionRepository,
+    NewsChunkRepository,
     OrderRepository,
     PortfolioRepository,
     ScreeningResultRepository,
@@ -45,6 +46,22 @@ logger = setup_logger(__name__)
 
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
+
+# 공시 기반 매수 차단 키워드 — DART 공시 제목에 포함 시 매수를 막는다.
+# KIS 종목마스터(market_actions) sync 사각지대 보완용(2026-05-27 230980 정리매매 사고).
+# '거래정지해제'(거래 재개=호재) 오탐 방지를 위해 바레 '거래정지'는 의도적으로 제외.
+_CRITICAL_DISCLOSURE_KEYWORDS: tuple[str, ...] = (
+    "상장폐지",
+    "정리매매",
+    "관리종목",
+    "회생절차",
+    "감사의견거절",
+    "감사의견 거절",
+    "횡령",
+    "배임",
+    "부도",
+    "영업정지",
+)
 
 
 @dataclass
@@ -1046,6 +1063,20 @@ class TradingEngine:
             )
             return
 
+        # 공시 리스크 차단 — 종목마스터 sync가 놓치는 치명 공시(상장폐지/정리매매 등)를
+        # DART 공시로 보완 차단(모델 미사용). market_actions 차단의 사각지대 보완.
+        disclosure_block = self._check_disclosure_risk_block(stock_code)
+        if disclosure_block:
+            logger.warning(
+                "[매수 차단] %s(%s) — 치명 공시 감지: %s",
+                stock_name, stock_code, disclosure_block,
+            )
+            self._record_metric("BUY_DISCLOSURE_BLOCK", {
+                "stock_code": stock_code, "title": disclosure_block,
+                "cycle": self._cycle_count,
+            })
+            return
+
         # 중복 주문 억제: 동일 종목 미체결 주문이 있으면 스킵(또는 타임아웃 시 취소-재주문)
         if await self._suppress_or_replace_pending(stock_code, "BUY"):
             return
@@ -1687,6 +1718,41 @@ class TradingEngine:
         except Exception:
             logger.exception("market_action 차단 lookup 실패: %s", stock_code)
             return []
+
+    @staticmethod
+    def _match_critical_disclosure(titles: list[str]) -> str | None:
+        """공시 제목 목록에서 치명 키워드를 가진 첫 제목을 반환(없으면 None).
+
+        '거래정지해제'(거래 재개=호재) 오탐을 피하려고 바레 '거래정지'는 키워드에서
+        제외했다 — 상장폐지/정리매매/관리종목 등 명확한 항목으로 충분히 잡힌다.
+        """
+        for title in titles:
+            if any(kw in title for kw in _CRITICAL_DISCLOSURE_KEYWORDS):
+                return title
+        return None
+
+    def _check_disclosure_risk_block(self, stock_code: str) -> str | None:
+        """매수 전 공시 리스크 차단 lookup.
+
+        KIS 종목마스터(market_actions) sync가 놓치는 종목을 DART 공시로 보완한다.
+        최근 `news_risk_lookback_days`일 내 DISCLOSURE 공시 제목에 치명 키워드가 있으면
+        해당 제목(차단 사유)을 반환한다. 게이트 비활성이거나 조회 실패 시 None(통과 —
+        매매를 막지 않는 안전 기본값).
+        """
+        if not settings.trading.news_risk_gate_enabled:
+            return None
+        try:
+            since = datetime.now(UTC) - timedelta(
+                days=settings.trading.news_risk_lookback_days
+            )
+            with get_session() as session:
+                titles = NewsChunkRepository(session).get_recent_disclosure_titles(
+                    stock_code, since
+                )
+            return self._match_critical_disclosure(titles)
+        except Exception:
+            logger.exception("공시 리스크 차단 lookup 실패: %s", stock_code)
+            return None
 
     def _record_screening_match_metric(self, stock_code: str) -> None:
         """신규 BUY 직후 동일 stock_code의 screening_results 매칭 여부를 메트릭으로 기록한다.

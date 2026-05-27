@@ -6,7 +6,7 @@
 ## 주요 기능
 
 - **자동 매매** — 이동평균 교차, RSI, MACD, 볼린저밴드, 앙상블 전략 기반 자동 매수/매도
-- **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 종목별 당일 진입 제한, 손절/트레일링 스톱(고점 대비 되돌림)/마감 청산 게이트 자동 판단, 당일 MDD/연패 감시, 매매불가 종목 당일 블랙리스트(반복 거부 차단)
+- **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 종목별 당일 진입 제한, 손절/트레일링 스톱(고점 대비 되돌림)/마감 청산 게이트 자동 판단, 당일 MDD/연패 감시, 매매불가 종목 당일 블랙리스트(반복 거부 차단), 공시 기반 매수 차단(상장폐지/정리매매 등 치명 공시 종목)
 - **실시간 시세** — 웹소켓 기반 실시간 호가/체결 수신 (상태 머신 + 자동 재연결)
 - **API 안전장치** — Token Bucket Rate Limiter, Redis 분산 Rate Limiter, Circuit Breaker, exponential backoff 재시도
 - **Worker 비동기 처리** — PostgreSQL Outbox 패턴으로 외부 I/O(Calendar, Telegram, DB 기록)를 별도 Worker에서 처리. 네트워크 장애 시 자동 재시도
@@ -447,6 +447,8 @@ MAX_LOSS_RATE=0.03                 # 최대 손실률 (3%, 손절선)
 MAX_POSITION_RATIO=0.2             # 최대 포지션 비율 (20%)
 DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한 (전체)
 MAX_DAILY_TRADES_PER_STOCK=2       # 종목별 당일 최대 진입(매수) 횟수 — 동일 종목 다중 진입 차단
+# NEWS_RISK_GATE_ENABLED=true      # 공시 기반 매수 차단 (상장폐지/정리매매 등 치명 공시 종목)
+# NEWS_RISK_LOOKBACK_DAYS=30       # 치명 공시 조회 기간(일)
 
 # 이익 청산 (트레일링 스톱 + 마감 게이트)
 TRAILING_STOP_ENABLED=true         # 트레일링 스톱 사용 (false면 +5% 고정 익절로 폴백)
