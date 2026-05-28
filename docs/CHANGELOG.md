@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-05-28] 일일 헬스체크 (12:30·15:35) — 매매 0건 감지 시 즉시 Telegram 경고 (v0.6.0)
+- 카테고리: feature
+- 변경 파일:
+  - src/scheduler/healthcheck.py: 신규 — `HealthcheckSlot(MORNING/CLOSING)`, `HealthcheckResult`(frozen dataclass), `build_healthcheck_message`(0건 분기 `⚠️` + 상위 매수 거절 사유 동봉), `_query_today_counts`(오늘자 signals BUY/SELL + orders BUY/SELL + event_logs 거절사유 집계), `collect_healthcheck`(KIS 잔고 holdings/deposit + engine cycle/api_calls), `run_healthcheck`(휴장일·엔진없음·DB실패 모두 swallow).
+  - src/scheduler/jobs.py: `healthcheck_morning_job`(12:30 KST)·`healthcheck_closing_job`(15:35 KST) 메서드 + `_register_jobs`에 평일 cron 등록.
+  - tests/test_scheduler/test_healthcheck.py: 신규 11종 — 0건 경고/정상 분기/슬롯 라벨(오전·마감)/거절사유 표기/휴장일 스킵/엔진없음 스킵/Telegram 전송/에러 swallow/_query_today_counts 시그니처/KST today 위임.
+  - README.md: 스케줄러 표에 헬스체크 2행 추가.
+- 배경: 2026-05-28 사용자가 "오늘 매매기록이 아예 없네"로 인지. 진단 결과 시스템은 정상이었으나(KIS 모의계좌 보유 0개 + 강한 BUY 후보 1종목=230980 비유테크놀러지가 정리매매로 v0.6.0 공시 게이트 차단, SELL 후보 1종목=001740 SK네트웍스가 미보유로 `sell_without_position` skip) 가시성이 부족해 운영자가 즉시 알기 어려운 상태였음.
+- 영향: 장중 12:30·마감 직후 15:35에 사이클/시그널/주문/잔고를 Telegram으로 보고. 매매 0건이면 `⚠️` 마커 + 상위 매수 거절 사유(DISCLOSURE_FATAL/POSITION_RATIO/DAILY_TRADE_LIMIT_PER_STOCK 등) 동봉. 운영 영향 0(전송 실패 swallow). 함께 stale `portfolios` 12종목(5/25 이후 sync 안 됨) 단발 DELETE — 엔진은 KIS 잔고 API를 신뢰하므로 영향 없음.
+- 검증 결과: pytest tests/test_scheduler/ ✅ **18 passed**(신규 11 포함) | tests/test_notify+scheduler+db ✅ **194 passed** | mypy ✅(src/scheduler/healthcheck.py + jobs.py) | ruff ✅(신규 파일).
+- 비고: 운영자 액션 — 신규 cron 등록을 위해 `com.kis.autotrader` 재시작 필요.
+
+---
+
 ## [2026-05-27] 공시 기반 매수 리스크 게이트 — 종목마스터 sync 사각지대 보완 (v0.6.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -58,20 +72,6 @@
 - 영향: 동일 종목 당일 매수 2회로 제한(3회차부터 차단). 매도(보유분 청산)는 항상 허용. 인메모리 카운터(`_today_trade_count`와 동일 패턴) — 일중 재시작 시 리셋되는 한계는 기존 일일 카운터와 동일.
 - 검증 결과: pytest **927 passed**(신규 4 포함) | mypy ✅ | ruff(변경 파일) ✅ | golden 11 ✅.
 - 비고: 주간분석 제안서가 안전 게이트(리스크 게이트 코드 변경)에 막혀 SKIPPED 처리된 것을 수동 검토 후 구현. 운영자 액션 — 전략 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
-
----
-
-## [2026-05-23] sell_reason ↔ 실현 PL 부호 일관성 보정 — 760027 ETN STOP_LOSS anomaly 차단 (v0.4.6)
-- 제안서: docs/proposals/2026-05-23_sell-reason-classification-fix.md
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: `_reconcile_sell_reason` 헬퍼 신설 — `_record_trade_to_db`에서 체결가 기준 실현 PL 부호로 STOP_LOSS↔TAKE_PROFIT 라벨을 보정(layer 1). 보정 시 `SELL_REASON_CORRECTED` 메트릭 기록. TRAILING_STOP/MARKET_CLOSE/STRATEGY는 분류가 명확하므로 유지.
-  - src/db/models.py: `Trade` `before_insert`/`before_update` listener로 PL-라벨 일관성 강제(defense-in-depth). 엔진을 우회하는 경로(백테스트·직접 적재)도 커버. (부수: 기존 E501 1건 정리)
-  - tests/test_engine_sell_reason.py(엔진 보정 4종) + tests/test_db/test_sell_reason_consistency.py(listener 8종) 신규.
-- 배경: 게이트는 조회 시점 시세로 sell_reason을 결정하나 profit_loss_pct는 체결가로 계산 → 시세 stale/이상값 시 둘이 어긋난다. 760027 ETN이 PL +18.54%인데 STOP_LOSS로 기록(2026-05-22 09:00), W21 손익비/sell_reason 통계 왜곡.
-- 영향: STOP_LOSS/TAKE_PROFIT 라벨이 실현 PL 부호와 항상 일치. 룰 A/B·통계가 sell_reason에 의존해도 측정 오류 제거. PL=0은 모호하므로 보정 안 함.
-- 검증 결과: pytest **927 passed**(신규 12 포함) | mypy ✅ | ruff(변경 파일) ✅ | golden 11 ✅.
-- 비고: 안전 게이트가 SKIPPED 처리한 제안서를 수동 검토 후 구현. 운영자 액션 — `com.kis.autotrader` 재시작 필요.
 
 ---
 
