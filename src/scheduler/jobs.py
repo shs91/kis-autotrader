@@ -22,6 +22,12 @@ QUOTA_MARKET_OPEN_MINUTE = 55
 QUOTA_POST_MARKET_HOUR = 15
 QUOTA_POST_MARKET_MINUTE = 25
 
+# 일일 헬스체크 (KST) — 오전 점검 + 마감 직후
+HEALTHCHECK_MORNING_HOUR = 12
+HEALTHCHECK_MORNING_MINUTE = 30
+HEALTHCHECK_CLOSING_HOUR = 15
+HEALTHCHECK_CLOSING_MINUTE = 35
+
 if TYPE_CHECKING:
     from src.engine import TradingEngine
 
@@ -168,6 +174,18 @@ class TradingScheduler:
             logger.warning("매매 엔진이 설정되지 않음, 스킵")
             return
         _run_async(self._engine.post_market())
+
+    def healthcheck_morning_job(self) -> None:
+        """오전 헬스체크 (12:30 KST). 휴장일·엔진없음은 healthcheck 내부에서 스킵."""
+        from src.scheduler.healthcheck import HealthcheckSlot, run_healthcheck
+
+        _run_async(run_healthcheck(self._engine, slot=HealthcheckSlot.MORNING))
+
+    def healthcheck_closing_job(self) -> None:
+        """장 마감 직후 헬스체크 (15:35 KST)."""
+        from src.scheduler.healthcheck import HealthcheckSlot, run_healthcheck
+
+        _run_async(run_healthcheck(self._engine, slot=HealthcheckSlot.CLOSING))
 
     @staticmethod
     def summarize_daily_job() -> None:
@@ -386,6 +404,33 @@ class TradingScheduler:
             QUOTA_PRE_MARKET_HOUR, QUOTA_PRE_MARKET_MINUTE,
             QUOTA_MARKET_OPEN_HOUR, QUOTA_MARKET_OPEN_MINUTE,
             QUOTA_POST_MARKET_HOUR, QUOTA_POST_MARKET_MINUTE,
+        )
+
+        # 일일 헬스체크 (평일 12:30, 15:35) — 매매 0건 감지 즉시 Telegram 경고
+        self._scheduler.add_job(
+            func=self.healthcheck_morning_job,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=HEALTHCHECK_MORNING_HOUR,
+            minute=HEALTHCHECK_MORNING_MINUTE,
+            id="healthcheck_morning",
+            name="일일 헬스체크 (오전)",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            func=self.healthcheck_closing_job,
+            trigger="cron",
+            day_of_week="mon-fri",
+            hour=HEALTHCHECK_CLOSING_HOUR,
+            minute=HEALTHCHECK_CLOSING_MINUTE,
+            id="healthcheck_closing",
+            name="일일 헬스체크 (마감)",
+            replace_existing=True,
+        )
+        logger.info(
+            "일일 헬스체크 등록: 평일 %02d:%02d(오전), %02d:%02d(마감)",
+            HEALTHCHECK_MORNING_HOUR, HEALTHCHECK_MORNING_MINUTE,
+            HEALTHCHECK_CLOSING_HOUR, HEALTHCHECK_CLOSING_MINUTE,
         )
 
     def start(self) -> None:

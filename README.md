@@ -570,6 +570,8 @@ DISCONNECTED → CONNECTING → CONNECTED → SUBSCRIBING → ACTIVE
 |------|------|------|
 | 08:30 | `pre_market_job` | OAuth 토큰 갱신, 관심종목 로딩 |
 | 09:00~15:20 | `trading_job` | 시세 조회 → 전략 실행 → 주문 (종목 수 기반 간격 자동 계산) |
+| 12:30 | `healthcheck_morning_job` | 오전 매매 수치(사이클·시그널·주문·잔고) Telegram 전송, 0건이면 경고 |
+| 15:35 | `healthcheck_closing_job` | 장 마감 직후 종합 헬스체크 Telegram 전송 |
 | 15:40 | `post_market_job` | 일일 결산, DailyPerformance 저장, Calendar 이벤트 등록, Telegram 결산 알림 |
 | 16:00 | `summarize_daily_job` | 일일 요약 집계 (trades, signals, screening_results → daily_summary UPSERT) |
 | 30분 간격 | `heartbeat` | 스케줄러 쓰레드 keepalive (macOS 장시간 sleep 방지) |
