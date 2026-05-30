@@ -144,6 +144,8 @@ class TradingEngine:
         self._peak_prices: dict[str, float] = {}
         # 미체결 주문 추적: {종목코드: PendingOrder} — 중복 억제·잔류 정리용
         self._pending_orders: dict[str, PendingOrder] = {}
+        # 종목별 직전 BUY/SELL 신호 (단기 반전 관측용, BUY/SELL만 저장, 일자 단위 리셋)
+        self._last_signal_by_stock: dict[str, tuple[SignalType, float, datetime]] = {}
 
         logger.info(
             "매매 엔진 초기화: 기본전략=%s, 관심종목모드=%s",
@@ -303,6 +305,7 @@ class TradingEngine:
         self._balance_cache = None
         self._peak_prices = self._load_peak_prices()
         self._pending_orders.clear()
+        self._last_signal_by_stock.clear()
 
         try:
             await self._client._auth.get_access_token()
@@ -719,6 +722,9 @@ class TradingEngine:
             f"{current.current_price:,}",
         )
 
+        # 3-0. 단기 신호 반전 관측 (순수 관측 — 매매 동작 불변)
+        self._observe_signal_reversal(stock_code, signal)
+
         # 3-1. 사이클 전략 평가 카운터 갱신
         if signal.signal_type == SignalType.BUY:
             self._cycle_buy_count += 1
@@ -1038,6 +1044,7 @@ class TradingEngine:
         # 당일 매매불가 판정 종목은 주문을 시도하지 않는다(반복 거부 → 사이클 블로킹 방지).
         if stock_code in self._untradable_today:
             logger.debug("[매수 스킵] %s(%s) — 당일 매매불가 종목", stock_name, stock_code)
+            self._record_buy_outcome(stock_code, "SKIP_UNTRADABLE_TODAY")
             return
 
         # KIS 종목마스터 sync 결과(market_actions) 기반 차단 lookup.
@@ -1049,6 +1056,7 @@ class TradingEngine:
                 "[매수 차단] %s(%s) — 사유: %s",
                 stock_name, stock_code, ",".join(block_reasons),
             )
+            self._record_buy_outcome(stock_code, "BLOCK_MARKET_ACTION")
             return
 
         # 공시 리스크 차단 — 종목마스터 sync가 놓치는 치명 공시(상장폐지/정리매매 등)를
@@ -1063,10 +1071,12 @@ class TradingEngine:
                 "stock_code": stock_code, "title": disclosure_block,
                 "cycle": self._cycle_count,
             })
+            self._record_buy_outcome(stock_code, "BLOCK_DISCLOSURE")
             return
 
         # 중복 주문 억제: 동일 종목 미체결 주문이 있으면 스킵(또는 타임아웃 시 취소-재주문)
         if await self._suppress_or_replace_pending(stock_code, "BUY"):
+            self._record_buy_outcome(stock_code, "SUPPRESS_PENDING")
             return
 
         # 주문 직전 보유 수량 스냅샷 (체결 확인 기준점, 캐시 사용)
@@ -1090,11 +1100,14 @@ class TradingEngine:
                     "stock_code": stock_code, "rt_cd": exc.rt_cd,
                     "msg": exc.msg1, "cycle": self._cycle_count,
                 })
+                self._record_buy_outcome(stock_code, "ORDER_UNTRADABLE")
                 return
             logger.exception("[매수 주문 실패] %s(%s)", stock_name, stock_code)
+            self._record_buy_outcome(stock_code, "ORDER_FAIL")
             return
         except Exception:
             logger.exception("[매수 주문 실패] %s(%s)", stock_name, stock_code)
+            self._record_buy_outcome(stock_code, "ORDER_FAIL")
             return
 
         # 주문 접수 이후 처리(체결 확인·기록·알림)는 DB/Queue 장애에도 사이클을
@@ -1118,6 +1131,7 @@ class TradingEngine:
                     "stock_code": stock_code, "side": "BUY",
                     "order_no": result.order_no, "cycle": self._cycle_count,
                 })
+                self._record_buy_outcome(stock_code, "UNFILLED")
                 # 미체결 주문 추적 등록 — 중복 억제·잔류 정리 대상
                 self._pending_orders[stock_code] = PendingOrder(
                     order_no=result.order_no, side="BUY", quantity=quantity,
@@ -1149,6 +1163,7 @@ class TradingEngine:
                 stock_code, stock_name, TradeType.BUY, fill_qty, fill_price,
                 signal=signal,
             )
+            self._record_buy_outcome(stock_code, "FILLED")
             self._record_screening_match_metric(stock_code)
 
             self._task_queue.enqueue(
@@ -1642,6 +1657,50 @@ class TradingEngine:
             )
         except Exception:
             logger.exception("메트릭 큐 적재 실패: %s", metric_type)
+
+    def _record_buy_outcome(self, stock_code: str, outcome: str) -> None:
+        """``_execute_buy``의 각 종단 결과를 ``BUY_OUTCOME`` 메트릭으로 1건 적재한다.
+
+        proposal 2026-05-30: acted→실체결 매핑률을 단일 쿼리로 분해하기 위한 관측 전용
+        퍼널 메트릭. 한 번의 ``_execute_buy`` 호출은 종단 상호배타이므로 정확히 1건만 남는다.
+        매매 동작에는 영향이 없으며 기록 실패는 ``_record_metric`` 내부에서 swallow 된다.
+        """
+        self._record_metric("BUY_OUTCOME", {
+            "stock_code": stock_code,
+            "outcome": outcome,
+            "cycle": self._cycle_count,
+        })
+
+    def _observe_signal_reversal(self, stock_code: str, signal: Signal) -> None:
+        """동일 종목의 단기 BUY↔SELL 신호 반전을 SIGNAL_REVERSAL 메트릭으로 관측한다.
+
+        매매 동작에는 영향이 없는 순수 관측 경로다. HOLD는 무행동이므로 제외한다.
+        기록 실패는 매매 본 흐름에 영향이 없도록 swallow 한다.
+        """
+        if signal.signal_type not in (SignalType.BUY, SignalType.SELL):
+            return
+        try:
+            now = datetime.now(UTC)
+            prev = self._last_signal_by_stock.get(stock_code)
+            if prev is not None:
+                prev_type, prev_conf, prev_time = prev
+                gap = (now - prev_time).total_seconds()
+                window = settings.trading.signal_reversal_window_seconds
+                if prev_type != signal.signal_type and 0 <= gap <= window:
+                    self._record_metric("SIGNAL_REVERSAL", {
+                        "stock_code": stock_code,
+                        "prev_type": prev_type.value,
+                        "new_type": signal.signal_type.value,
+                        "prev_confidence": round(float(prev_conf), 4),
+                        "new_confidence": round(float(signal.confidence), 4),
+                        "gap_seconds": round(gap, 1),
+                        "cycle": self._cycle_count,
+                    })
+            self._last_signal_by_stock[stock_code] = (
+                signal.signal_type, signal.confidence, now,
+            )
+        except Exception:
+            logger.exception("SIGNAL_REVERSAL 관측 실패: %s", stock_code)
 
     def _record_buy_reject(
         self,
