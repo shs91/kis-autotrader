@@ -18,9 +18,9 @@ from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, select
 
-from src.db.models import EventLog, Order, OrderType, Signal
+from src.db.models import Order, OrderType, Signal, SystemMetric
 from src.db.session import get_session
 from src.notify.telegram import TelegramNotifier
 from src.scheduler.holidays import is_market_closed
@@ -129,13 +129,13 @@ def _query_today_counts() -> dict[str, Any]:
             # 1. signals (action_taken=True가 의미있는 매매 트리거)
             sig_q = select(
                 func.sum(
-                    func.case(
+                    case(
                         (Signal.signal_value.op("->>")("reason").ilike("%BUY%"), 1),
                         else_=0,
                     )
                 ).label("buy_count"),
                 func.sum(
-                    func.case(
+                    case(
                         (Signal.signal_value.op("->>")("reason").ilike("%SELL%"), 1),
                         else_=0,
                     )
@@ -169,26 +169,25 @@ def _query_today_counts() -> dict[str, Any]:
                 elif otype == OrderType.SELL:
                     o_sell = int(cnt)
 
-            # 3. BUY_REJECT 카운트 (event_logs.category='trade', message에 'BUY_REJECT'/'매수 차단')
-            reject_q = (
-                select(EventLog.message, func.count(EventLog.id))
-                .where(
-                    and_(
-                        EventLog.timestamp >= start_utc_naive,
-                        EventLog.timestamp < end_utc_naive,
-                        or_(
-                            EventLog.message.ilike("%BUY_REJECT%"),
-                            EventLog.message.ilike("%매수 차단%"),
-                            EventLog.message.ilike("%DISCLOSURE_FATAL%"),
-                        ),
-                    )
+            # 3. 매수 거절 사유 — system_metrics 집계.
+            #    엔진은 거절을 event_logs가 아니라 system_metrics에 기록한다
+            #    (BUY_REJECT / BUY_DISCLOSURE_BLOCK / BUY_UNTRADABLE). recorded_at은
+            #    timezone-aware이므로 KST aware 경계로 비교한다(Order의 naive UTC 아님).
+            reject_q = select(
+                SystemMetric.metric_type, SystemMetric.detail
+            ).where(
+                and_(
+                    SystemMetric.recorded_at >= start_kst,
+                    SystemMetric.recorded_at < end_kst,
+                    SystemMetric.metric_type.in_(
+                        ("BUY_REJECT", "BUY_DISCLOSURE_BLOCK", "BUY_UNTRADABLE")
+                    ),
                 )
-                .group_by(EventLog.message)
             )
             reasons: dict[str, int] = {}
-            for msg, cnt in session.execute(reject_q):
-                key = _extract_reject_reason(msg)
-                reasons[key] = reasons.get(key, 0) + int(cnt)
+            for mtype, detail in session.execute(reject_q):
+                label = _reject_label(mtype, detail)
+                reasons[label] = reasons.get(label, 0) + 1
 
             return {
                 "signals_buy": buy,
@@ -203,28 +202,23 @@ def _query_today_counts() -> dict[str, Any]:
         return defaults
 
 
-def _extract_reject_reason(message: str) -> str:
-    """이벤트 메시지에서 거절 사유 라벨을 추출한다.
+def _reject_label(metric_type: str, detail: dict[str, Any] | None) -> str:
+    """system_metrics 행을 사람이 읽을 거절 사유 라벨로 변환한다.
 
-    BRIDGE_SPEC 카테고리 식별자(예: DISCLOSURE_FATAL, RISK_HALT)가 메시지에
-    포함되어 있으면 그것을 우선 사용한다. 못 찾으면 "OTHER" 폴백.
+    - ``BUY_DISCLOSURE_BLOCK`` → ``DISCLOSURE`` (상장폐지/정리매매 등 치명 공시)
+    - ``BUY_UNTRADABLE`` → ``UNTRADABLE`` (rt_cd=1 매매불가)
+    - ``BUY_REJECT`` → ``detail.reason`` 코드(MARKET_CLOSE_GUARD/LOW_CONFIDENCE 등)
+
+    detail이 없거나 reason이 비면 ``OTHER`` 폴백.
     """
-    known = [
-        "DISCLOSURE_FATAL",
-        "DAILY_TRADE_LIMIT_PER_STOCK",
-        "DAILY_TRADE_LIMIT",
-        "POSITION_RATIO",
-        "INSUFFICIENT_CASH",
-        "LOW_CONFIDENCE",
-        "MARKET_CLOSE_GUARD",
-        "RISK_HALT",
-    ]
-    upper = message.upper()
-    for k in known:
-        if k in upper:
-            return k
-    if "매수 차단" in message:
-        return "BUY_BLOCK"
+    if metric_type == "BUY_DISCLOSURE_BLOCK":
+        return "DISCLOSURE"
+    if metric_type == "BUY_UNTRADABLE":
+        return "UNTRADABLE"
+    if isinstance(detail, dict):
+        reason = detail.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason
     return "OTHER"
 
 

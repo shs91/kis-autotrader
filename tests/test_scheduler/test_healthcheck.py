@@ -231,6 +231,110 @@ class TestQueryTodayCounts:
         assert healthcheck._query_today_counts.__name__ == "_query_today_counts"
 
 
+class TestQueryTodayCountsExecutes:
+    """_query_today_counts 실제 SQL 실행 — 회귀 가드.
+
+    기존 smoke 테스트가 시그니처만 검사해 ``func.case``(PostgreSQL에 없는 함수)
+    버그가 라이브에서 매 실행 예외를 던지며 통과했었다. 실제 인메모리 DB에
+    행을 넣고 카운트가 기본값(0)이 아닌 실값으로 돌아오는지 검증한다.
+    """
+
+    @pytest.fixture()
+    def session(self):  # type: ignore[no-untyped-def]
+        from sqlalchemy import create_engine
+        from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
+        from sqlalchemy.orm import sessionmaker
+
+        from src.db.models import Base
+
+        if not hasattr(SQLiteTypeCompiler, "visit_JSONB"):
+            def visit_jsonb(self, type_, **kw):  # type: ignore[no-untyped-def]
+                return "JSON"
+            SQLiteTypeCompiler.visit_JSONB = visit_jsonb  # type: ignore[attr-defined]
+        if not hasattr(SQLiteTypeCompiler, "visit_VECTOR"):
+            def visit_vector(self, type_, **kw):  # type: ignore[no-untyped-def]
+                return "TEXT"
+            SQLiteTypeCompiler.visit_VECTOR = visit_vector  # type: ignore[attr-defined]
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(bind=engine)
+        factory = sessionmaker(bind=engine, expire_on_commit=False)
+        sess = factory()
+        try:
+            yield sess
+        finally:
+            sess.close()
+            engine.dispose()
+
+    def test_counts_signals_orders_and_rejects(self, session) -> None:  # type: ignore[no-untyped-def]
+        """오늘자 시그널/주문/거절사유가 기본값이 아닌 실값으로 집계된다."""
+        from contextlib import contextmanager
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from src.db.models import Order, OrderType, Signal, SystemMetric
+        from src.scheduler import healthcheck
+
+        kst = ZoneInfo("Asia/Seoul")
+        # 결정적 창: 2026-05-28 00:00~05-29 00:00 KST
+        start_kst = datetime(2026, 5, 28, 0, 0, tzinfo=kst)
+        end_kst = datetime(2026, 5, 29, 0, 0, tzinfo=kst)
+        mid_kst = datetime(2026, 5, 28, 10, 0, tzinfo=kst)
+        # Order.created_at은 naive UTC — 같은 날 KST 창의 UTC 투영 안쪽(05-28 05:00 UTC = 14:00 KST)
+        mid_utc_naive = datetime(2026, 5, 28, 5, 0)
+
+        session.add_all([
+            Signal(
+                stock_code="230980", stock_name="비유테크놀러지",
+                signal_type="ENSEMBLE",
+                signal_value={"reason": "앙상블 가중투표: BUY n_win=2", "confidence": 1.0},
+                confidence=1.0, action_taken=True,
+                detected_at=mid_kst, created_at=mid_kst,
+            ),
+            Signal(
+                stock_code="001740", stock_name="SK네트웍스",
+                signal_type="ENSEMBLE",
+                signal_value={"reason": "앙상블 가중투표: SELL n_win=2", "confidence": 0.5},
+                confidence=0.5, action_taken=False,
+                detected_at=mid_kst, created_at=mid_kst,
+            ),
+            Order(
+                stock_id=1, order_type=OrderType.BUY, quantity=10, price=1000.0,
+                order_no="REAL-1", created_at=mid_utc_naive, updated_at=mid_utc_naive,
+            ),
+            SystemMetric(
+                metric_type="BUY_DISCLOSURE_BLOCK",
+                detail={"stock_code": "230980", "title": "상장폐지에 따른 정리매매"},
+                recorded_at=mid_kst,
+            ),
+            SystemMetric(
+                metric_type="BUY_REJECT",
+                detail={"stock_code": "001740", "reason": "MARKET_CLOSE_GUARD"},
+                recorded_at=mid_kst,
+            ),
+        ])
+        session.commit()
+
+        @contextmanager
+        def fake_get_session():  # type: ignore[no-untyped-def]
+            yield session
+
+        with patch("src.scheduler.healthcheck.get_session", fake_get_session), patch(
+            "src.scheduler.healthcheck._today_kst_window",
+            return_value=(start_kst, end_kst),
+        ):
+            counts = healthcheck._query_today_counts()
+
+        # ── func.case 버그가 있으면 예외 → 전부 기본값(0/빈dict) → 아래 단언 실패
+        assert counts["signals_buy"] == 1
+        assert counts["signals_sell"] == 1
+        assert counts["orders_buy"] == 1
+        assert counts["orders_sell"] == 0
+        # 거절 사유는 system_metrics에서 집계 (event_logs 아님)
+        assert counts["buy_reject_reasons"].get("MARKET_CLOSE_GUARD") == 1
+        assert counts["buy_reject_reasons"].get("DISCLOSURE") == 1
+
+
 def test_market_closed_today_uses_kst_date() -> None:
     """헬스체크의 휴장일 판단은 KST 기준 today를 사용한다."""
     from src.scheduler import healthcheck

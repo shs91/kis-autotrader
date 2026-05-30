@@ -6,6 +6,21 @@
 
 ---
 
+## [2026-05-30] 매매 0건 근본 대응 — 스크리닝 위험종목 사전 배제 + 헬스체크 거절사유 가시성 복구 (v0.7.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/strategy/disclosure_risk.py: 신규 — 치명 공시 키워드(`CRITICAL_DISCLOSURE_KEYWORDS`) + 순수 매처(`match_critical_disclosure`)를 단일 진실원천으로 분리. engine buy-time 게이트와 스크리닝 Worker가 공유(키워드 드리프트 방지).
+  - src/worker/screener.py: `_run_screening`이 `filter_candidates` 직전 `_load_risk_blocked_codes`로 위험종목(market_actions 차단 OR 치명 공시)을 후보 풀에서 사전 배제 + `SCREENING_RISK_EXCLUDED` 메트릭 기록.
+  - src/engine.py: `_CRITICAL_DISCLOSURE_KEYWORDS`/`_match_critical_disclosure`를 disclosure_risk로 이관. `_match_critical_disclosure`는 위임 래퍼로 유지(기존 테스트 보존).
+  - src/scheduler/healthcheck.py: `func.case`→`case`(PostgreSQL에 없는 `case()` 함수 호출로 매 실행 예외→기본값 전송하던 크래시 수정) + 매수 거절 사유 조회를 `event_logs`→`system_metrics`(BUY_REJECT/BUY_DISCLOSURE_BLOCK/BUY_UNTRADABLE)로 교정. `_extract_reject_reason`→`_reject_label`.
+  - tests: test_disclosure_risk.py 신규 7종, test_screener.py 위험배제 4종, test_healthcheck.py 실제 SQL 실행 회귀 가드 1종.
+- 배경: 5/26 이후 매매 0건 조사. 시스템은 정상(750사이클/0에러)이었고, 앙상블이 상장폐지 정리매매 종목(230980 비유테크놀러지)에 conf 1.000 BUY를 고착 생성 → v0.6.0 공시 게이트가 679건 전량 정당 차단. 정리매매 급등락이 기술지표를 강한 BUY로 속인 것(앙상블 버그 아님). 헬스체크 0건 경고는 `func.case` 예외로 매 실행 기본값(0) 전송, 거절사유는 system_metrics에만 기록되는데 event_logs를 조회해 항상 공란이었음.
+- 영향: 위험종목이 후보 풀·신호 평가에 진입조차 못 해 단일종목 고착 차단(게이트 호출 644→0, SIGNAL_SKIP noise 감소). 헬스체크 0건 경고가 신호 BUY/SELL 수·상위 거절사유(DISCLOSURE/MARKET_CLOSE_GUARD 등)를 정확히 표기 → 운영자 즉시 진단 가능. DB 마이그레이션·신규 env 없음(기존 NEWS_RISK_GATE_ENABLED/LOOKBACK 재사용).
+- 검증 결과: pytest **972 passed**(신규 12 포함) | mypy ✅(변경 4파일) | ruff ✅(변경 7파일).
+- 비고: 운영자 액션 — 스크리닝/헬스체크 로직 반영을 위해 `com.kis.autotrader` 재시작 필요.
+
+---
+
 ## [2026-05-28] 일일 헬스체크 (12:30·15:35) — 매매 0건 감지 시 즉시 Telegram 경고 (v0.6.0)
 - 카테고리: feature
 - 변경 파일:
@@ -57,21 +72,6 @@
 - 영향: 사이클 결산(`[cycle] ... completed/failed/skipped`)과 텔레그램 상태가 실제 처리 결과를 정확히 카운트. 안전 게이트 SKIP도 결산·history에 반영돼 "왜 0건인가" 진단이 즉시 가능.
 - 검증 결과: pytest **934 passed**(신규 7: transition 리스트 유지) | mypy ✅ | ruff(변경 파일) ✅.
 - 비고: 하네스 내부 변경(progress.py + 에이전트 프롬프트) — 서비스 재시작 불요, 다음 자동구현 cron(평일 17:15)부터 적용.
-
----
-
-## [2026-05-23] 종목별 당일 진입 횟수 제한 — 동일 종목 다중 진입 차단 (v0.5.0)
-- 제안서: docs/proposals/2026-05-23_daily-trade-limit-per-stock.md
-- 카테고리: enhancement
-- 변경 파일:
-  - src/config.py: `TradingConfig.max_daily_trades_per_stock` 추가(기본 2, env `MAX_DAILY_TRADES_PER_STOCK`).
-  - src/engine.py: `_process_stock` 매수 경로에 종목별 당일 진입 게이트 신설(전체 일일한도 체크 직후, check_buy_gates 직전). 한도 도달 시 `BUY_REJECT(reason=DAILY_TRADE_LIMIT_PER_STOCK)` 기록 후 매수 차단. 체결 확정 시 `_today_buys_per_stock[code]` 누적, `pre_market`에서 일자 단위 리셋.
-  - .env.example / README.md / CLAUDE.md: `MAX_DAILY_TRADES_PER_STOCK` 문서화.
-  - tests/test_engine_daily_trade_limit_per_stock.py: 한도 도달 차단 / 미만 허용 / 종목별 독립 / pre_market 리셋 4종 신규.
-- 배경: 2주 연속 동일 종목 3회전 진입 패턴(W21 §7) — 동일 종목 반복 진입이 손실을 누적. 매수 게이트는 종목별 진입 횟수를 보지 않았다.
-- 영향: 동일 종목 당일 매수 2회로 제한(3회차부터 차단). 매도(보유분 청산)는 항상 허용. 인메모리 카운터(`_today_trade_count`와 동일 패턴) — 일중 재시작 시 리셋되는 한계는 기존 일일 카운터와 동일.
-- 검증 결과: pytest **927 passed**(신규 4 포함) | mypy ✅ | ruff(변경 파일) ✅ | golden 11 ✅.
-- 비고: 주간분석 제안서가 안전 게이트(리스크 게이트 코드 변경)에 막혀 SKIPPED 처리된 것을 수동 검토 후 구현. 운영자 액션 — 전략 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
 
 ---
 
