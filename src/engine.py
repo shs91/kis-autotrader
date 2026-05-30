@@ -34,6 +34,7 @@ from src.db.repository import (
 from src.db.session import get_session
 from src.notify.telegram import TelegramNotifier
 from src.strategy.base import BaseStrategy, Signal, SignalType
+from src.strategy.disclosure_risk import match_critical_disclosure
 from src.strategy.registry import StrategyRegistry
 from src.strategy.risk import RiskManager
 from src.strategy.screener import StockScreener
@@ -47,21 +48,8 @@ logger = setup_logger(__name__)
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
 
-# 공시 기반 매수 차단 키워드 — DART 공시 제목에 포함 시 매수를 막는다.
-# KIS 종목마스터(market_actions) sync 사각지대 보완용(2026-05-27 230980 정리매매 사고).
-# '거래정지해제'(거래 재개=호재) 오탐 방지를 위해 바레 '거래정지'는 의도적으로 제외.
-_CRITICAL_DISCLOSURE_KEYWORDS: tuple[str, ...] = (
-    "상장폐지",
-    "정리매매",
-    "관리종목",
-    "회생절차",
-    "감사의견거절",
-    "감사의견 거절",
-    "횡령",
-    "배임",
-    "부도",
-    "영업정지",
-)
+# 공시 기반 매수 차단 키워드·매처는 src.strategy.disclosure_risk로 단일화했다
+# (스크리닝 Worker의 후보 사전 배제와 동일 로직 공유 — 드리프트 방지).
 
 
 @dataclass
@@ -1723,13 +1711,10 @@ class TradingEngine:
     def _match_critical_disclosure(titles: list[str]) -> str | None:
         """공시 제목 목록에서 치명 키워드를 가진 첫 제목을 반환(없으면 None).
 
-        '거래정지해제'(거래 재개=호재) 오탐을 피하려고 바레 '거래정지'는 키워드에서
-        제외했다 — 상장폐지/정리매매/관리종목 등 명확한 항목으로 충분히 잡힌다.
+        실로직은 ``src.strategy.disclosure_risk.match_critical_disclosure``에 단일화
+        (스크리닝 Worker와 공유). 본 메서드는 하위호환 위임 래퍼다.
         """
-        for title in titles:
-            if any(kw in title for kw in _CRITICAL_DISCLOSURE_KEYWORDS):
-                return title
-        return None
+        return match_critical_disclosure(titles)
 
     def _check_disclosure_risk_block(self, stock_code: str) -> str | None:
         """매수 전 공시 리스크 차단 lookup.

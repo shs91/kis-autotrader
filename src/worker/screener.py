@@ -25,7 +25,7 @@ Redis Rate Limiter를 통해 API 호출 할당량을 관리한다.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from typing import cast
 from zoneinfo import ZoneInfo
 
@@ -36,9 +36,15 @@ from src.api.client import KISClient
 from src.api.quote import QuoteAPI, VolumeRankItem
 from src.api.rate_limiter import HybridRateLimiter, RateLimiter
 from src.config import settings
-from src.db.repository import ScreeningResultRepository, SystemMetricRepository
+from src.db.repository import (
+    MarketActionRepository,
+    NewsChunkRepository,
+    ScreeningResultRepository,
+    SystemMetricRepository,
+)
 from src.db.session import get_session
 from src.scheduler.holidays import is_market_closed
+from src.strategy.disclosure_risk import match_critical_disclosure
 from src.strategy.registry import StrategyRegistry
 from src.strategy.screener import ScoredCandidate, ScreeningFilter, StockScreener
 from src.strategy.selector import StrategySelector
@@ -149,6 +155,22 @@ class ScreeningWorker:
         except Exception:
             logger.debug("기존 스크리닝 코드 로드 실패")
 
+        # 2-1단계: 위험종목 사전 배제 — 상장폐지/정리매매/관리종목 등은 후보 풀에서
+        # 제거한다. 정리매매 종목의 급등락이 기술지표를 강한 BUY로 속여 단일 위험종목에
+        # 매수신호가 고착되던 문제(2026-05-27~ 230980)를 신호 생성 이전에 차단한다.
+        # 매매 엔진 buy-time 게이트와 동일 데이터·키워드를 사용(disclosure_risk 공유).
+        risk_blocked = self._load_risk_blocked_codes(
+            {item.stock_code for item in ranked}
+        )
+        if risk_blocked:
+            exclude_codes |= set(risk_blocked)
+            self._record_risk_excluded_metric(risk_blocked)
+            logger.info(
+                "스크리닝 위험종목 사전 배제: %d종목 (%s)",
+                len(risk_blocked),
+                ", ".join(sorted(risk_blocked)),
+            )
+
         filtered = self._screener.filter_candidates(ranked, exclude_codes)
 
         # 3단계: 전략 분석 + 스코어링
@@ -202,6 +224,54 @@ class ScreeningWorker:
             repo = ScreeningResultRepository(session)
             results = repo.get_by_date(date.today())
             return {r.stock_code for r in results if r.converted_to_trade}
+
+    def _load_risk_blocked_codes(self, codes: set[str]) -> dict[str, str]:
+        """후보 중 매수 위험종목(시장조치 차단 OR 치명 공시)을 ``{code: 사유}``로 반환.
+
+        매매 엔진 buy-time 게이트(``_check_market_action_block`` /
+        ``_check_disclosure_risk_block``)와 동일한 데이터(market_actions, DART 공시)와
+        키워드(``disclosure_risk``)를 사용해, 위험종목이 애초에 후보 풀·신호 평가에
+        들어오지 못하게 한다. DB 조회 실패는 스크리닝을 막지 않도록 swallow(빈 dict).
+        """
+        if not codes:
+            return {}
+        tcfg = settings.trading
+        blocked: dict[str, str] = {}
+        try:
+            since = datetime.now(UTC) - timedelta(days=tcfg.news_risk_lookback_days)
+            gate_on = tcfg.news_risk_gate_enabled
+            with get_session() as session:
+                ma_repo = MarketActionRepository(session)
+                news_repo = NewsChunkRepository(session)
+                for code in codes:
+                    ma = ma_repo.get(code)
+                    if ma is not None and ma.should_block_buy:
+                        blocked[code] = ",".join(ma.block_reasons) or "MARKET_ACTION"
+                        continue
+                    if gate_on:
+                        title = match_critical_disclosure(
+                            news_repo.get_recent_disclosure_titles(code, since)
+                        )
+                        if title:
+                            blocked[code] = title
+        except Exception:
+            logger.exception("위험종목 사전 배제 lookup 실패 (스크리닝은 계속)")
+        return blocked
+
+    def _record_risk_excluded_metric(self, blocked: dict[str, str]) -> None:
+        """배제된 위험종목을 ``SCREENING_RISK_EXCLUDED`` 메트릭으로 기록(관측용)."""
+        try:
+            with get_session() as session:
+                SystemMetricRepository(session).record_metric(
+                    metric_type="SCREENING_RISK_EXCLUDED",
+                    detail={
+                        "cycle": self._cycle_count,
+                        "count": len(blocked),
+                        "codes": sorted(blocked.keys()),
+                    },
+                )
+        except Exception:
+            logger.debug("SCREENING_RISK_EXCLUDED 메트릭 기록 실패")
 
     def _record_to_db(
         self,
