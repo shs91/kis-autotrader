@@ -6,6 +6,23 @@
 
 ---
 
+## [2026-05-30] 실전 전환 전 안전장치 6종 — 킬스위치·DB프리체크·고아체결 회수·halt 재시작 복원·긴급알림 폴백 (v0.8.0)
+- 카테고리: feature
+- 변경 파일:
+  - src/engine.py: 수동 킬스위치(`run_trading_cycle` 진입부 — `halt_file` 존재 시 사이클 전체 동결 + 1회 Telegram 알림, 해제 시 재개). 주문 직전 DB 헬스체크(`_execute_buy`/`_execute_sell`가 `db_healthcheck()` 실패 시 주문 보류 + `ORDER_SKIPPED_DB_DOWN`). 고아 체결 회수(`_reconcile_orphan_fill` — `_cancel_pending_order`가 취소 직전 잔고 재확인, 지연 체결이면 트레이드 기록 후 취소 스킵). 장중 재시작 리스크 복원(`_restore_risk_state_if_needed` — pre_market 미실행 시 당일 `trades` 재생으로 halt/연패/누적손익 결정적 재구성 + peak_prices 재적재, 1회 한정). `PendingOrder`에 qty_before/price/avg_price/signal_type 추가.
+  - src/strategy/risk.py: `RiskManager.snapshot()`/`restore()` — 포트폴리오 리스크 상태 직렬화·복원(타입·누락 키 방어).
+  - src/db/session.py: `db_healthcheck()` — `SELECT 1`로 DB 가용성 점검(예외 swallow→False).
+  - src/notify/telegram.py: 긴급(urgent) 전송 실패 시 `logs/urgent_alerts.fallback.log`에 추기(치명 알림 소실 방지).
+  - src/config.py: `TradingConfig` 플래그 3종 — `halt_file`(기본 `.trading_halt`), `db_precheck_before_order`(실전=true·모의=false 기본), `reconcile_orphan_fills`(기본 true).
+  - scripts/bootstrap_real_db.sh: 신규 — kis_trader_real 스키마 1회 부트스트랩(`KIS_ENV=real alembic upgrade head`, 운영자 실행).
+  - tests: test_engine_safety_phase0.py 9종(킬스위치/DB프리체크/고아체결/재시작복원), test_strategy/test_risk_snapshot.py 4종, test_notify/test_telegram_fallback.py 3종 신규.
+- 배경: 2026-05-30 모의→실전(시드 50만원) 전환 준비도 검토(7개 차원·다중 에이전트 적대 검증). 실전 전용 안전경로에 확인된 치명 공백 — 손절 사이클당 1회 검사(갭 우회), halt 상태 in-memory(재시작 시 유실→한도 우회), 미체결 취소 시 고아 체결 미정합(추적 불가 포지션), DB장애 중 주문, 텔레그램 알림 미보장, kis_trader_real 미마이그레이션. 6/1 전면 자동매매 전환은 No-Go, 본 PR은 Phase 0 안전장치.
+- 영향: 운영자 비상정지(`touch .trading_halt`) 가능. DB 불가 시 'KIS엔 체결·DB엔 미기록'인 추적 불가 실포지션 예방(실전 기본 on). 폴링 윈도를 지난 지연 체결을 취소 대신 회수해 DB 정합 유지. 장중 크래시 재기동 후에도 당일 손실 한도(halt/연패/MDD)가 정본 trades로 복원되어 우회 차단. 긴급 알림 파일 폴백으로 깜깜이 방지. 매수/매도 정상 경로·기존 테스트 전부 불변. DB 마이그레이션 없음(신규 env 3종은 선택, .env.example 문서화).
+- 검증 결과: pytest **1005 passed**(신규 16 포함) | mypy ✅ strict | ruff ✅(변경 5파일).
+- 비고: 운영자 액션 — ①실전 첫 기동 전 `scripts/bootstrap_real_db.sh` 1회 실행 ②안전장치 반영 위해 `com.kis.autotrader` 재시작. 실시간 손절 모니터링·50만용 설정(DAILY_TRADE_LIMIT 등)은 Phase 1 과제로 미포함.
+
+---
+
 ## [2026-05-30] 관측성 메트릭 2종 — acted→체결 퍼널(BUY_OUTCOME) + 단기 신호 반전(SIGNAL_REVERSAL) (v0.7.1)
 - 카테고리: performance
 - 변경 파일:
@@ -59,20 +76,6 @@
 - 영향: 최근 30일 내 치명 공시가 있는 종목의 매수를 사전 차단(모델 미사용, 순수 룰베이스). `_check_market_action_block`(종목마스터 기반)을 DART 공시로 보완 — 라이브 DB 검증서 230980·464680(상폐) 차단, 005930(삼성전자, 공시 5건) 통과. '거래정지해제'(거래 재개=호재) 오탐 방지로 바레 '거래정지'는 키워드 제외. 매도(청산)는 영향 없음.
 - 검증 결과: pytest **949 passed**(신규 10 포함) | mypy ✅(변경 3파일) | ruff ✅.
 - 비고: 운영자 액션 — 매수 게이트 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
-
----
-
-## [2026-05-27] 매매불가 종목 당일 블랙리스트 — rt_cd=1 매매불가 반복 거부 차단 (v0.5.2)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/utils/exceptions.py: `OrderError`가 KIS 응답의 `rt_cd`/`msg1`을 보존하도록 `__init__` 추가 — 호출부가 거부 사유(매매불가 등)를 식별 가능.
-  - src/api/order.py: `_parse_order_response`가 거부 시 `rt_cd`/`msg1`을 `OrderError`에 실어 전파.
-  - src/engine.py: `_untradable_today` 당일 블랙리스트 신설. `_execute_buy`가 ①블랙리스트 종목은 주문 시도 자체를 스킵, ②`매매불가` 거부(`_is_untradable_order_error`) 수신 시 블랙리스트 등록 + `BUY_UNTRADABLE` 메트릭 기록. `pre_market`에서 일자 단위 리셋.
-  - tests/test_engine_untradable_blacklist.py: 매매불가 거부→블랙리스트 / 블랙리스트 종목 주문 스킵 / 일반 거부는 비차단 / pre_market 리셋 / OrderError 필드 보존 5종 신규.
-- 배경: 2026-05-27 장중, 스크리너가 모의투자 매매불가 종목(230980 비유테크놀러지)을 후보로 올려 신뢰도 0.99 BUY 신호가 매 사이클 발생. 매수 주문이 `rt_cd=1 모의투자 주문처리가 안되었습니다(매매불가 종목)`로 거부되는데도 09:07부터 191회 무한 재시도(+ 주문 엔드포인트 500 782회). 재시도가 10초 매매 사이클을 넘겨 `max_instances=1` 작업 스킵 폭주 → 105분간 사이클 219회로 throughput 급감.
-- 영향: 매매불가 거부를 1회 받으면 같은 거래일 동안 해당 종목 매수 재시도를 차단. 무한 주문/500 폭주·사이클 블로킹 해소, API 호출 낭비 제거. 매도(보유분 청산)는 차단 대상 아님. 인메모리 셋(`_today_buys_per_stock`와 동일 패턴) — 일중 재시작 시 리셋되는 한계는 기존 일일 카운터와 동일.
-- 검증 결과: pytest **939 passed**(신규 5 포함) | mypy ✅(변경 3파일) | ruff ✅(변경 파일).
-- 비고: 운영자 액션 — 주문 실행 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
 
 ---
 

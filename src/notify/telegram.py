@@ -31,6 +31,24 @@ _KST = ZoneInfo("Asia/Seoul")
 
 SEND_MESSAGE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 REQUEST_TIMEOUT = 10.0
+# 긴급(urgent) 알림 전송이 실패하면 이 파일에 추기한다. 손절/에러/서비스다운 같은
+# 치명 알림이 텔레그램 장애로 소실되어 운영자가 깜깜이가 되는 상황을 방지한다.
+URGENT_FALLBACK_FILE = "logs/urgent_alerts.fallback.log"
+
+
+def _write_urgent_fallback(message: str, cause: str) -> None:
+    """긴급 알림 전송 실패 시 로컬 파일에 추기한다(전파 없음)."""
+    try:
+        from pathlib import Path
+
+        path = Path(URGENT_FALLBACK_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(_KST).isoformat(timespec="seconds")
+        with path.open("a", encoding="utf-8") as f:
+            f.write(f"[{stamp}] ({cause}) {message}\n")
+        logger.warning("긴급 알림 텔레그램 전송 실패 → 파일 폴백 기록: %s", URGENT_FALLBACK_FILE)
+    except Exception:
+        logger.exception("긴급 알림 파일 폴백 기록 실패")
 
 
 class TelegramNotifier:
@@ -60,6 +78,8 @@ class TelegramNotifier:
             return
         if not self._token or not self._chat_id:
             logger.warning("Telegram 설정 미완료 (토큰 또는 채팅ID 없음), 알림 스킵")
+            if urgent:
+                _write_urgent_fallback(message, "not_configured")
             return
         try:
             url = SEND_MESSAGE_URL.format(token=self._token)
@@ -77,8 +97,14 @@ class TelegramNotifier:
                         response.status_code,
                         response.text[:200],
                     )
+                    if urgent:
+                        _write_urgent_fallback(
+                            message, f"http_{response.status_code}"
+                        )
         except Exception:
             logger.exception("Telegram 알림 전송 중 에러 (매매에 영향 없음)")
+            if urgent:
+                _write_urgent_fallback(message, "exception")
 
     # ── 매수 알림 (무음) ──────────────────────────────────
 
