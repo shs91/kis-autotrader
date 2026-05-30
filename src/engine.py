@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -31,7 +33,7 @@ from src.db.repository import (
     TradeRepository,
     WatchlistRepository,
 )
-from src.db.session import get_session
+from src.db.session import db_healthcheck, get_session
 from src.notify.telegram import TelegramNotifier
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.disclosure_risk import match_critical_disclosure
@@ -47,6 +49,9 @@ logger = setup_logger(__name__)
 
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
+
+# 거래일 경계 판단용(장중 재시작 시 '오늘' 체결 복원에 사용)
+_KST = ZoneInfo("Asia/Seoul")
 
 # 공시 기반 매수 차단 키워드·매처는 src.strategy.disclosure_risk로 단일화했다
 # (스크리닝 Worker의 후보 사전 배제와 동일 로직 공유 — 드리프트 방지).
@@ -69,6 +74,11 @@ class PendingOrder:
     quantity: int
     placed_cycle: int
     stock_name: str = ""
+    # 고아 체결 회수용 — 취소 직전 잔고 재확인으로 지연 체결을 잡아 DB에 기록한다.
+    qty_before: int = 0
+    price: int = 0
+    avg_price: float | None = None
+    signal_type: str | None = None
 
 
 class TradingEngine:
@@ -146,6 +156,14 @@ class TradingEngine:
         self._pending_orders: dict[str, PendingOrder] = {}
         # 종목별 직전 BUY/SELL 신호 (단기 반전 관측용, BUY/SELL만 저장, 일자 단위 리셋)
         self._last_signal_by_stock: dict[str, tuple[SignalType, float, datetime]] = {}
+
+        # 장중 재시작 복구 — pre_market이 이번 프로세스에서 실행됐는지 추적.
+        # 미실행 상태로 매매 사이클이 돌면(=장중 크래시 후 재기동) 오늘 체결로
+        # 리스크 상태(halt/연패/누적손익)를 1회 재구성해 한도 우회를 막는다.
+        self._pre_market_ran = False
+        self._risk_state_restored = False
+        # 수동 킬스위치 — 동결 로그/알림 중복 방지(엔게이지 동안 1회만 통지).
+        self._kill_switch_logged = False
 
         logger.info(
             "매매 엔진 초기화: 기본전략=%s, 관심종목모드=%s",
@@ -289,6 +307,71 @@ class TradingEngine:
         log_warning("API 일일 한도 초과, 당일 매매 사이클 중단")
         self._record_metric("API_LIMIT", {"cycle": self._cycle_count})
 
+    # ── 안전장치: 수동 킬스위치 · 장중 재시작 복구 ─────────────
+
+    def _is_trading_halted_manual(self) -> bool:
+        """수동 킬스위치(halt 파일) 활성 여부를 반환한다.
+
+        운영자가 ``settings.trading.halt_file`` 경로의 파일을 생성하면 매매를
+        즉시 동결한다. 파일을 지우면 재개된다(런타임 토글, 재시작 불필요).
+        """
+        try:
+            return os.path.exists(settings.trading.halt_file)
+        except Exception:
+            return False
+
+    def _restore_risk_state_if_needed(self) -> None:
+        """장중 재시작 시 오늘 체결로 리스크 상태(halt/연패/누적손익)를 1회 재구성한다.
+
+        halt·연패·누적손익은 RiskManager의 in-memory 상태라 프로세스 크래시 시
+        유실되어, 이미 일일 손실 한도를 넘긴 날에도 재기동 후 매매가 재개되는
+        위험이 있다. 정본인 ``trades`` 테이블의 당일 매도 체결을 시간순으로
+        ``record_trade_result``에 재생하면 동일 로직으로 halt 여부까지 결정적으로
+        복원된다. pre_market이 정상 실행된 경우(``_risk_state_restored`` True)는
+        새 거래일 초기화가 이미 끝났으므로 건너뛴다.
+        """
+        if self._risk_state_restored:
+            return
+        # 성공/실패와 무관하게 1회만 시도(매 사이클 DB 조회·재구성 반복 방지).
+        self._risk_state_restored = True
+        try:
+            today = datetime.now(_KST).date()
+            with get_session() as session:
+                trades = TradeRepository(session).get_trades_by_date(today)
+            sells = [
+                t
+                for t in trades
+                if t.trade_type == TradeType.SELL and t.profit_loss_amount is not None
+            ]
+            sells.sort(key=lambda t: t.traded_at)
+            if not sells:
+                logger.info("장중 재시작 복구: 당일 매도 체결 없음 — 리스크 초기값 유지")
+                return
+            self._risk.reset_daily_risk()
+            for t in sells:
+                self._risk.record_trade_result(int(t.profit_loss_amount or 0))
+            # 당일 매매 카운트도 근사 복원(일일 한도 정확도)
+            self._today_trade_count = len(trades)
+            self._peak_prices = self._load_peak_prices()
+            logger.warning(
+                "장중 재시작 복구 완료: 당일매도 %d건 재생 → 누적PnL=%d, 연패=%d, halted=%s",
+                len(sells),
+                self._risk.daily_cumulative_pnl,
+                self._risk.consecutive_losses,
+                self._risk.is_portfolio_halted,
+            )
+            self._record_metric(
+                "RISK_STATE_RESTORED",
+                {
+                    "sells_replayed": len(sells),
+                    "cumulative_pnl": self._risk.daily_cumulative_pnl,
+                    "consecutive_losses": self._risk.consecutive_losses,
+                    "halted": self._risk.is_portfolio_halted,
+                },
+            )
+        except Exception:
+            logger.exception("장중 재시작 리스크 복구 실패 — 보수적으로 초기값 유지")
+
     # ── 메인 작업 ─────────────────────────────────────────
 
     async def pre_market(self) -> None:
@@ -340,11 +423,39 @@ class TradingEngine:
         except Exception:
             logger.exception("장 시작 전 작업 중 에러 발생")
 
+        # pre_market이 정상 실행됨 — 장중 재시작 복구 경로를 비활성화한다.
+        self._pre_market_ran = True
+        self._risk_state_restored = True
         logger.info("=== 장 시작 전 작업 완료 ===")
 
     async def run_trading_cycle(self) -> None:
         """장중 매매 사이클 1회 실행."""
         self._cycle_count += 1
+
+        # 수동 킬스위치 — 비상 동결(운영자 halt 파일). 신규/청산 주문 모두 즉시 중단.
+        if self._is_trading_halted_manual():
+            if not self._kill_switch_logged:
+                logger.warning(
+                    "수동 킬스위치 활성(%s) — 매매 사이클 동결", settings.trading.halt_file
+                )
+                log_warning(f"수동 킬스위치 활성 — 매매 동결 ({settings.trading.halt_file})")
+                self._record_metric("KILL_SWITCH_ENGAGED", {"cycle": self._cycle_count})
+                try:
+                    await self._notifier.notify_error(
+                        "매매 동결",
+                        f"수동 킬스위치 활성 — 모든 매매 중단 ({settings.trading.halt_file})",
+                    )
+                except Exception:
+                    logger.exception("킬스위치 알림 전송 실패")
+                self._kill_switch_logged = True
+            return
+        if self._kill_switch_logged:
+            logger.warning("수동 킬스위치 해제 — 매매 재개")
+            self._record_metric("KILL_SWITCH_RELEASED", {"cycle": self._cycle_count})
+            self._kill_switch_logged = False
+
+        # 장중 재시작(pre_market 미실행)이면 오늘 체결로 리스크 상태를 1회 재구성
+        self._restore_risk_state_if_needed()
 
         # 일일 한도 초과 또는 포트폴리오 리스크 시 이후 사이클 전부 즉시 중단
         if self._daily_limit_reached:
@@ -1079,6 +1190,19 @@ class TradingEngine:
             self._record_buy_outcome(stock_code, "SUPPRESS_PENDING")
             return
 
+        # 주문 직전 DB 헬스체크 — DB 불가 시 주문 보류(KIS엔 체결·DB엔 미기록인
+        # 추적 불가 실포지션 방지). 기본은 실전(KIS_ENV=real)에서만 활성.
+        if settings.trading.db_precheck_before_order and not db_healthcheck():
+            logger.error(
+                "[매수 보류] %s(%s) — DB 헬스체크 실패, 주문 미실행", stock_name, stock_code
+            )
+            self._record_metric(
+                "ORDER_SKIPPED_DB_DOWN",
+                {"stock_code": stock_code, "side": "BUY", "cycle": self._cycle_count},
+            )
+            self._record_buy_outcome(stock_code, "DB_DOWN")
+            return
+
         # 주문 직전 보유 수량 스냅샷 (체결 확인 기준점, 캐시 사용)
         try:
             qty_before = await self._holding_quantity(stock_code, force=False)
@@ -1132,10 +1256,11 @@ class TradingEngine:
                     "order_no": result.order_no, "cycle": self._cycle_count,
                 })
                 self._record_buy_outcome(stock_code, "UNFILLED")
-                # 미체결 주문 추적 등록 — 중복 억제·잔류 정리 대상
+                # 미체결 주문 추적 등록 — 중복 억제·잔류 정리·고아 체결 회수 대상
                 self._pending_orders[stock_code] = PendingOrder(
                     order_no=result.order_no, side="BUY", quantity=quantity,
                     placed_cycle=self._cycle_count, stock_name=stock_name,
+                    qty_before=qty_before, price=int(price),
                 )
                 return
 
@@ -1200,6 +1325,17 @@ class TradingEngine:
         if await self._suppress_or_replace_pending(stock_code, "SELL"):
             return
 
+        # 주문 직전 DB 헬스체크 — DB 불가 시 주문 보류(추적 불가 포지션 방지).
+        if settings.trading.db_precheck_before_order and not db_healthcheck():
+            logger.error(
+                "[매도 보류] %s(%s) — DB 헬스체크 실패, 주문 미실행", stock_name, stock_code
+            )
+            self._record_metric(
+                "ORDER_SKIPPED_DB_DOWN",
+                {"stock_code": stock_code, "side": "SELL", "cycle": self._cycle_count},
+            )
+            return
+
         # 주문 직전 보유 수량 스냅샷 (체결 확인 기준점, 캐시 사용)
         try:
             qty_before = await self._holding_quantity(stock_code, force=False)
@@ -1234,10 +1370,12 @@ class TradingEngine:
                     "stock_code": stock_code, "side": "SELL",
                     "order_no": result.order_no, "cycle": self._cycle_count,
                 })
-                # 미체결 주문 추적 등록 — 중복 억제·잔류 정리 대상
+                # 미체결 주문 추적 등록 — 중복 억제·잔류 정리·고아 체결 회수 대상
                 self._pending_orders[stock_code] = PendingOrder(
                     order_no=result.order_no, side="SELL", quantity=quantity,
                     placed_cycle=self._cycle_count, stock_name=stock_name,
+                    qty_before=qty_before, price=int(price),
+                    avg_price=avg_price, signal_type=signal_type,
                 )
                 return
 
@@ -1372,7 +1510,21 @@ class TradingEngine:
     async def _cancel_pending_order(
         self, stock_code: str, pending: PendingOrder, reason: str
     ) -> None:
-        """미체결 주문을 취소하고 추적에서 제거한다 (실패해도 흐름 유지)."""
+        """미체결 주문을 취소하고 추적에서 제거한다 (실패해도 흐름 유지).
+
+        취소 직전 잔고를 한 번 더 확인해, 폴링 윈도를 지나 뒤늦게 체결된 주문
+        (고아 체결)을 회수해 트레이드로 기록한다. 회수에 성공하면 취소하지 않고
+        반환한다(KIS엔 체결·DB엔 미기록인 추적 불가 포지션 방지).
+        """
+        if settings.trading.reconcile_orphan_fills:
+            try:
+                if await self._reconcile_orphan_fill(stock_code, pending):
+                    return
+            except Exception:
+                logger.exception(
+                    "[고아 체결 회수 실패] %s 주문번호=%s — 취소로 진행",
+                    stock_code, pending.order_no,
+                )
         try:
             await self._order.cancel(
                 order_no=pending.order_no, stock_code=stock_code,
@@ -1392,6 +1544,83 @@ class TradingEngine:
                 "stock_code": stock_code, "order_no": pending.order_no,
                 "reason": reason, "cycle": self._cycle_count,
             })
+
+    async def _reconcile_orphan_fill(
+        self, stock_code: str, pending: PendingOrder
+    ) -> bool:
+        """취소 직전 잔고 재확인으로 지연 체결(고아 체결)을 회수한다.
+
+        주문 등록 시 저장한 ``qty_before`` 대비 현재 보유 수량 변화를 1회 폴링해,
+        체결이 확인되면 트레이드로 기록·알림하고 취소를 건너뛴다.
+
+        Returns:
+            지연 체결을 회수(기록)했으면 True. 미체결이면 False(취소 진행).
+        """
+        filled = await self._confirm_fill(
+            stock_code, pending.side, pending.qty_before, retries=1, delay=0.0
+        )
+        if filled <= 0:
+            return False
+
+        fill_price = int(pending.price)
+        self._today_trade_count += 1
+        self._pending_orders.pop(stock_code, None)
+        self._record_metric(
+            "ORPHAN_FILL_RECONCILED",
+            {
+                "stock_code": stock_code, "side": pending.side,
+                "order_no": pending.order_no, "filled": filled,
+                "cycle": self._cycle_count,
+            },
+        )
+        logger.warning(
+            "[고아 체결 회수] %s %s %d주 @ %d 주문번호=%s — 취소 대신 트레이드 기록",
+            stock_code, pending.side, filled, fill_price, pending.order_no,
+        )
+        log_trade(
+            f"지연체결 회수 {pending.side} {pending.stock_name}({stock_code}) "
+            f"{filled}주 @ {fill_price:,}원"
+        )
+
+        if pending.side == "BUY":
+            self._today_buys_per_stock[stock_code] = (
+                self._today_buys_per_stock.get(stock_code, 0) + 1
+            )
+            self._peak_prices.pop(stock_code, None)
+            self._record_trade_to_db(
+                stock_code, pending.stock_name, TradeType.BUY, filled, fill_price,
+            )
+            self._task_queue.enqueue(
+                task_type="telegram_notify",
+                payload={
+                    "notify_type": "buy",
+                    "message_data": {
+                        "stock_name": pending.stock_name, "stock_code": stock_code,
+                        "quantity": filled, "price": fill_price,
+                        "strategy": "", "reason": "지연체결 회수", "confidence": 0.0,
+                    },
+                },
+                priority=3,
+            )
+        else:
+            self._peak_prices.pop(stock_code, None)
+            self._record_trade_to_db(
+                stock_code, pending.stock_name, TradeType.SELL, filled, fill_price,
+                reason="", signal_type=pending.signal_type, avg_price=pending.avg_price,
+            )
+            self._task_queue.enqueue(
+                task_type="telegram_notify",
+                payload={
+                    "notify_type": "sell",
+                    "message_data": {
+                        "stock_name": pending.stock_name, "stock_code": stock_code,
+                        "quantity": filled, "price": fill_price,
+                        "reason": "지연체결 회수", "avg_price": pending.avg_price or 0.0,
+                    },
+                },
+                priority=3,
+            )
+        return True
 
     async def _cleanup_stale_pending_orders(self) -> None:
         """타임아웃을 넘긴 미체결 주문을 일괄 취소한다 (사이클 시작 시 호출)."""

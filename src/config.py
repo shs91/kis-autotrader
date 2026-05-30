@@ -240,6 +240,25 @@ class TradingConfig:
         ]
     )
 
+    # 수동 킬스위치 — 이 파일이 존재하면 매매 사이클 전체를 즉시 동결한다.
+    # 운영자가 touch/rm로 런타임 제어(프로세스 재시작 불필요). 실전 비상정지용.
+    halt_file: str = field(
+        default_factory=lambda: _env("KIS_TRADING_HALT_FILE", ".trading_halt")
+    )
+    # 주문 직전 DB 헬스체크(SELECT 1) — 실패 시 주문 보류(추적 불가 실포지션 방지).
+    # 모의/테스트 영향 차단을 위해 기본은 실전(KIS_ENV=real)에서만 활성.
+    db_precheck_before_order: bool = field(
+        default_factory=lambda: _env(
+            "DB_PRECHECK_BEFORE_ORDER",
+            "true" if _env("KIS_ENV", "virtual") == "real" else "false",
+        ).lower()
+        == "true"
+    )
+    # 미체결 취소 직전 잔고 재확인으로 지연 체결(고아 체결)을 회수해 DB에 기록한다.
+    reconcile_orphan_fills: bool = field(
+        default_factory=lambda: _env("RECONCILE_ORPHAN_FILLS", "true").lower() == "true"
+    )
+
     # 포트폴리오 리스크
     max_daily_drawdown: float = field(
         default_factory=lambda: _env_float("MAX_DAILY_DRAWDOWN", 0.05)

@@ -161,6 +161,55 @@ class RiskManager:
         self._portfolio_halted = False
         self._halt_reason = None
 
+    def snapshot(self) -> dict[str, int | bool | str | None]:
+        """현재 포트폴리오 리스크 상태를 직렬화 가능한 dict로 반환한다.
+
+        장중 크래시→재시작 시 halt 상태/누적 손익/연패를 복원하기 위한 스냅샷이다.
+        in-memory 상태가 유실되면 한도를 넘긴 날에도 매매가 재개되는 위험을 막는다.
+
+        Returns:
+            복원에 필요한 리스크 상태 dict.
+        """
+        return {
+            "daily_peak_pnl": self._daily_peak_pnl,
+            "daily_cumulative_pnl": self._daily_cumulative_pnl,
+            "consecutive_losses": self._consecutive_losses,
+            "portfolio_halted": self._portfolio_halted,
+            "halt_reason": self._halt_reason,
+        }
+
+    def restore(self, state: dict[str, int | bool | str | None]) -> None:
+        """``snapshot``으로 만든 상태를 복원한다(장중 재시작 복구용).
+
+        키가 누락되면 현재 값을 유지한다(부분 복원 안전). 매매 차단 방향으로만
+        작동하도록, 잘못된 타입은 무시하고 보수적으로 적용한다.
+
+        Args:
+            state: ``snapshot()``이 반환한 형태의 dict.
+        """
+        peak = state.get("daily_peak_pnl")
+        if isinstance(peak, int):
+            self._daily_peak_pnl = peak
+        cum = state.get("daily_cumulative_pnl")
+        if isinstance(cum, int):
+            self._daily_cumulative_pnl = cum
+        losses = state.get("consecutive_losses")
+        if isinstance(losses, int):
+            self._consecutive_losses = losses
+        halted = state.get("portfolio_halted")
+        if isinstance(halted, bool):
+            self._portfolio_halted = halted
+        reason = state.get("halt_reason")
+        if reason is None or isinstance(reason, str):
+            self._halt_reason = reason
+        logger.info(
+            "리스크 상태 복원: 누적PnL=%d, 연패=%d, halted=%s, 사유=%s",
+            self._daily_cumulative_pnl,
+            self._consecutive_losses,
+            self._portfolio_halted,
+            self._halt_reason,
+        )
+
     def is_near_market_close(self, now: datetime | None = None) -> bool:
         """장 마감 임박 여부를 판단한다.
 

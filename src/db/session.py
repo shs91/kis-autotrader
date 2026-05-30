@@ -122,6 +122,28 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
+def db_healthcheck() -> bool:
+    """DB 연결 가용성을 ``SELECT 1``로 확인한다.
+
+    실주문을 내기 직전 호출하여, DB가 응답하지 않으면 주문을 보류시켜
+    'KIS에는 체결됐는데 DB에는 기록 못한' 추적 불가 실포지션을 예방한다.
+    어떤 예외도 전파하지 않고 False로 흡수한다(헬스체크 자체가 매매를 깨면 안 됨).
+
+    Returns:
+        DB가 응답하면 True, 아니면 False.
+    """
+    from sqlalchemy import text
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        logger.warning("DB 헬스체크 실패 (SELECT 1)", exc_info=True)
+        return False
+
+
 def init_db() -> None:
     """데이터베이스 테이블을 생성한다.
 
