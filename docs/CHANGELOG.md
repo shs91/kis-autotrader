@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-05-30] 관측성 메트릭 2종 — acted→체결 퍼널(BUY_OUTCOME) + 단기 신호 반전(SIGNAL_REVERSAL) (v0.7.1)
+- 카테고리: performance
+- 변경 파일:
+  - src/engine.py: `_execute_buy`의 8개 상호배타 종단에 `BUY_OUTCOME` 메트릭 1건씩 적재(`_record_buy_outcome` 헬퍼, outcome=FILLED/UNFILLED/ORDER_FAIL/ORDER_UNTRADABLE/SUPPRESS_PENDING/BLOCK_DISCLOSURE/BLOCK_MARKET_ACTION/SKIP_UNTRADABLE_TODAY). `_observe_signal_reversal` + `_last_signal_by_stock` 인메모리 상태(직전 BUY/SELL 기억, 윈도 내 반대방향 신호 시 `SIGNAL_REVERSAL` 기록, HOLD 제외), `pre_market` 일일 리셋.
+  - src/config.py: `TradingConfig.signal_reversal_window_seconds`(기본 600, env `SIGNAL_REVERSAL_WINDOW_SECONDS`).
+  - tests: test_engine_buy_funnel.py 신규(종단별 outcome + 상호배타 invariant), test_engine_signal_reversal.py 신규 6종(윈도/방향/종목분리/HOLD제외/pre_market 리셋).
+- 배경: 5월 월간·W22 리포트가 두 관측 공백을 지목. ①ENSEMBLE acted 5,332 vs 실체결 29(0.54%) 괴리가 `_execute_buy` 어느 종단(공시/시장조치/미체결/중복억제/실패)에서 새는지 단일 쿼리로 불가시. ②062970이 09:15 STOP_LOSS 매도 42초 뒤 BUY 재진입하는 등 정상 종목의 단기 신호 반전이 미계량(수작업 발굴 의존).
+- 영향: `system_metrics(BUY_OUTCOME)` GROUP BY outcome로 acted→체결 깔때기를 일·주 단위 분해(v0.7.0 사전배제 효과 정량 검증, BUY_OUTCOME 총합=acted·FILLED=실체결). `system_metrics(SIGNAL_REVERSAL)`로 반전 빈발 종목/시간대 정량화 → 신호 cooldown 또는 앙상블 confidence 평활화(EMA) 도입의 데이터 근거. 둘 다 매수/매도/게이트 경로 불변(순수 관측), 기록 실패 swallow. DB 마이그레이션·신규 의존성 없음.
+- 검증 결과: pytest **17 passed**(신규 테스트 2종) | mypy ✅(src/engine.py·config.py) | ruff ✅ | golden 회귀 PASS(10 invariant, 사전·사후 동일).
+- 비고: 운영자 액션 — 메트릭이 사이클에서 적재되려면 `com.kis.autotrader` 재시작 필요(매매 동작 변경은 없음).
+
+---
+
 ## [2026-05-30] 매매 0건 근본 대응 — 스크리닝 위험종목 사전 배제 + 헬스체크 거절사유 가시성 복구 (v0.7.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -60,18 +73,6 @@
 - 영향: 매매불가 거부를 1회 받으면 같은 거래일 동안 해당 종목 매수 재시도를 차단. 무한 주문/500 폭주·사이클 블로킹 해소, API 호출 낭비 제거. 매도(보유분 청산)는 차단 대상 아님. 인메모리 셋(`_today_buys_per_stock`와 동일 패턴) — 일중 재시작 시 리셋되는 한계는 기존 일일 카운터와 동일.
 - 검증 결과: pytest **939 passed**(신규 5 포함) | mypy ✅(변경 3파일) | ruff ✅(변경 파일).
 - 비고: 운영자 액션 — 주문 실행 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
-
----
-
-## [2026-05-23] 사이클 카운터 관측성 수정 — progress.transition이 상태 리스트 유지 (v0.5.1)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/harness/progress.py: `CycleProgress.transition`이 history append뿐 아니라 상태 리스트(pending/in_flight/completed/failed/skipped)도 from→to로 이동. `_STATE_LIST_FIELD` 매핑(implemented→completed, ready→pending) 신설.
-  - .claude/agents/proposal-validator.md: 안전 게이트 거절 시 `pipeline_mark_skipped`에 더해 `pipeline_append_progress`(ready→skipped)도 호출(implementer 패턴과 일치).
-- 배경: `transition()`이 history에만 append하고 상태 리스트는 비워둬 orchestrator의 `len(completed/failed/skipped)`가 항상 0. 신format 사이클 9건 전부 `completed=0 failed=0 skipped=0`으로 보고(75건 implemented된 날 포함). 추가로 validator는 progress 기록을 아예 안 해 skip이 history에도 안 남았다(2026-05-23 W21 제안서 2건 SKIP이 결산엔 0으로 표시된 사례).
-- 영향: 사이클 결산(`[cycle] ... completed/failed/skipped`)과 텔레그램 상태가 실제 처리 결과를 정확히 카운트. 안전 게이트 SKIP도 결산·history에 반영돼 "왜 0건인가" 진단이 즉시 가능.
-- 검증 결과: pytest **934 passed**(신규 7: transition 리스트 유지) | mypy ✅ | ruff(변경 파일) ✅.
-- 비고: 하네스 내부 변경(progress.py + 에이전트 프롬프트) — 서비스 재시작 불요, 다음 자동구현 cron(평일 17:15)부터 적용.
 
 ---
 

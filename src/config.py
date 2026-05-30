@@ -228,6 +228,10 @@ class TradingConfig:
     news_risk_lookback_days: int = field(
         default_factory=lambda: _env_int("NEWS_RISK_LOOKBACK_DAYS", 30)
     )
+    # 단기 신호 반전 관측 윈도 (proposal 2026-05-30, 관측 전용)
+    signal_reversal_window_seconds: int = field(
+        default_factory=lambda: _env_int("SIGNAL_REVERSAL_WINDOW_SECONDS", 600)
+    )
     watchlist_codes: list[str] = field(
         default_factory=lambda: [
             c.strip()

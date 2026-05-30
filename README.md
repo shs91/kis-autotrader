@@ -449,6 +449,7 @@ DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한 (전체)
 MAX_DAILY_TRADES_PER_STOCK=2       # 종목별 당일 최대 진입(매수) 횟수 — 동일 종목 다중 진입 차단
 # NEWS_RISK_GATE_ENABLED=true      # 공시 기반 매수 차단 (상장폐지/정리매매 등 치명 공시 종목)
 # NEWS_RISK_LOOKBACK_DAYS=30       # 치명 공시 조회 기간(일)
+# SIGNAL_REVERSAL_WINDOW_SECONDS=600 # 단기 신호 반전 관측 윈도(초) — 동일 종목 BUY↔SELL 반전을 SIGNAL_REVERSAL 메트릭으로 계량(관측 전용, 매매 무영향)
 
 # 이익 청산 (트레일링 스톱 + 마감 게이트)
 TRAILING_STOP_ENABLED=true         # 트레일링 스톱 사용 (false면 +5% 고정 익절로 폴백)
