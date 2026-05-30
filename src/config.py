@@ -258,6 +258,12 @@ class TradingConfig:
     reconcile_orphan_fills: bool = field(
         default_factory=lambda: _env("RECONCILE_ORPHAN_FILLS", "true").lower() == "true"
     )
+    # 실체결 슬리피지 계측 — 기대가(주문 시점 현재가) 대비 실체결가를 FILL_SLIPPAGE
+    # 메트릭으로 기록(소액 실전 캘리브레이션용). 매수=체결 후 잔고 매입평균가(신규 진입
+    # 한정·추가 API 없음), 매도=실전 한정 당일체결조회. 관측 전용(매매 동작 불변).
+    measure_fill_slippage: bool = field(
+        default_factory=lambda: _env("MEASURE_FILL_SLIPPAGE", "true").lower() == "true"
+    )
 
     # 포트폴리오 리스크
     max_daily_drawdown: float = field(

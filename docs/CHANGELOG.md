@@ -6,6 +6,21 @@
 
 ---
 
+## [2026-05-30] 실체결 슬리피지 계측(FILL_SLIPPAGE) + 분석·졸업판정 도구 — 소액 실전 캘리브레이션 (v0.8.1)
+- 카테고리: performance
+- 변경 파일:
+  - src/engine.py: `_record_fill_slippage`(기대가=주문 시점 현재가 대비 실체결가를 `FILL_SLIPPAGE` 메트릭으로 적재, `adverse_bps`=비용 방향[매수 더 비싸게/매도 더 싸게 체결 시 양수]). `_holding_avg_price`(체결 확인 후 캐시 잔고의 매입평균가 — 신규 진입은 이 값이 곧 실체결가, 추가 API 호출 없음). `_realized_price_via_executions`(매도측 실체결가를 당일체결조회로 best-effort, 실전 한정·order_no 매칭). `_execute_buy`는 신규 진입(qty_before==0) 체결 후, `_execute_sell`은 실전(real) 체결 후 계측 호출.
+  - src/config.py: `TradingConfig.measure_fill_slippage`(기본 true, env `MEASURE_FILL_SLIPPAGE`, 관측 전용).
+  - scripts/analyze_slippage.py: 신규 — `FILL_SLIPPAGE` 집계(매수/매도 평균·중앙·p90 adverse_bps) → 왕복비용(슬리피지×2 + 세금·수수료 21bps) 추정 → 모의 엣지(157bps, +1.57% gross) 대비 순엣지 및 50만원 확대 졸업 판정(표본≥20·순엣지>40% 기준).
+  - docs/CALIBRATION_RUNBOOK.md: 신규 — 운영자 런북(사전준비→실전DB 부트스트랩→캘리브 설정표[DAILY_TRADE_LIMIT 5·MAX_LOSS_RATE 0.02·SCREENING_MAX_PRICE 20000 등]→기동→일일점검→졸업판정→롤백).
+  - tests/test_engine_slippage.py: 신규 8종(bps 계산·비용방향·플래그 off·무효가격·잔고평균가·체결조회 매칭·매수흐름 통합).
+- 배경: PR #47(v0.8.0 안전장치) 머지 후 Phase 1 캘리브레이션. 모의는 슬리피지 0·즉시체결이라 실전 체결 비용이 미측정 — 모의 엣지(+1.57%/거래)가 실전 비용 차감 후 생존하는지 알 수 없음. 소액(20~30만) 실전으로 슬리피지를 계측해 데이터 기반으로 50만 확대 여부를 판정한다.
+- 영향: 매 체결 시 기대가 대비 실체결가 차이를 `system_metrics(FILL_SLIPPAGE)`에 적재. `analyze_slippage.py`로 왕복 비용·순엣지·졸업 판정을 1회 쿼리로 산출. 관측 전용 — 매수/매도/게이트 경로 불변, 기록 실패 swallow. DB 마이그레이션·신규 의존성 없음. 매수측은 체결 후 캐시 잔고 사용(추가 API 無), 매도측은 실전에서만 체결조회 1회 추가.
+- 검증 결과: pytest **1013 passed**(신규 8) | mypy ✅ strict | ruff ✅.
+- 비고: 운영자 액션 — `docs/CALIBRATION_RUNBOOK.md`대로 `.env` 캘리브 설정 + `scripts/bootstrap_real_db.sh` + `com.kis.autotrader` 재시작. 매도측 슬리피지는 실전 체결조회 신뢰도에 의존(모의는 미수집).
+
+---
+
 ## [2026-05-30] 실전 전환 전 안전장치 6종 — 킬스위치·DB프리체크·고아체결 회수·halt 재시작 복원·긴급알림 폴백 (v0.8.0)
 - 카테고리: feature
 - 변경 파일:
@@ -62,20 +77,6 @@
 - 영향: 장중 12:30·마감 직후 15:35에 사이클/시그널/주문/잔고를 Telegram으로 보고. 매매 0건이면 `⚠️` 마커 + 상위 매수 거절 사유(DISCLOSURE_FATAL/POSITION_RATIO/DAILY_TRADE_LIMIT_PER_STOCK 등) 동봉. 운영 영향 0(전송 실패 swallow). 함께 stale `portfolios` 12종목(5/25 이후 sync 안 됨) 단발 DELETE — 엔진은 KIS 잔고 API를 신뢰하므로 영향 없음.
 - 검증 결과: pytest tests/test_scheduler/ ✅ **18 passed**(신규 11 포함) | tests/test_notify+scheduler+db ✅ **194 passed** | mypy ✅(src/scheduler/healthcheck.py + jobs.py) | ruff ✅(신규 파일).
 - 비고: 운영자 액션 — 신규 cron 등록을 위해 `com.kis.autotrader` 재시작 필요.
-
----
-
-## [2026-05-27] 공시 기반 매수 리스크 게이트 — 종목마스터 sync 사각지대 보완 (v0.6.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/config.py: `TradingConfig.news_risk_gate_enabled`(기본 on, env `NEWS_RISK_GATE_ENABLED`), `news_risk_lookback_days`(기본 30, env `NEWS_RISK_LOOKBACK_DAYS`) 추가.
-  - src/db/repository.py: `NewsChunkRepository.get_recent_disclosure_titles(ticker, since)` — 최근 DISCLOSURE 공시 제목 조회.
-  - src/engine.py: `_CRITICAL_DISCLOSURE_KEYWORDS`(상장폐지/정리매매/관리종목/회생절차/감사의견거절/횡령/배임/부도/영업정지) 신설. `_match_critical_disclosure`(순수 키워드 매처) + `_check_disclosure_risk_block`(설정 gate + DB 조회, 실패 swallow). `_execute_buy`에서 market_action 차단 직후 호출 — 매칭 시 `BUY_DISCLOSURE_BLOCK` 메트릭 기록 후 매수 차단.
-  - tests/test_engine_disclosure_risk_gate.py: 키워드 매처(해제=호재 오탐 회피 포함)/게이트 on·off/DB 실패 swallow/_execute_buy 차단·통과 10종 신규.
-- 배경: 2026-05-27 230980(비유테크놀러지) 매매불가 사고에서, KIS 종목마스터 sync(`market_actions`)는 230980을 정상(모든 플래그 false)으로 표시했으나 DART 공시는 5/21자 "상장폐지에 따른 정리매매 개시"(sentiment -0.85)를 이미 포착. 종목마스터 sync에 사각지대가 존재함이 확인됨.
-- 영향: 최근 30일 내 치명 공시가 있는 종목의 매수를 사전 차단(모델 미사용, 순수 룰베이스). `_check_market_action_block`(종목마스터 기반)을 DART 공시로 보완 — 라이브 DB 검증서 230980·464680(상폐) 차단, 005930(삼성전자, 공시 5건) 통과. '거래정지해제'(거래 재개=호재) 오탐 방지로 바레 '거래정지'는 키워드 제외. 매도(청산)는 영향 없음.
-- 검증 결과: pytest **949 passed**(신규 10 포함) | mypy ✅(변경 3파일) | ruff ✅.
-- 비고: 운영자 액션 — 매수 게이트 로직 변경 반영을 위해 `com.kis.autotrader` 재시작 필요.
 
 ---
 
