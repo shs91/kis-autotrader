@@ -1291,6 +1291,12 @@ class TradingEngine:
             self._record_buy_outcome(stock_code, "FILLED")
             self._record_screening_match_metric(stock_code)
 
+            # 실체결 슬리피지 계측 — 신규 진입(qty_before==0)은 체결 후 매입평균가가
+            # 곧 실체결가. 기대가(주문 시점 현재가) 대비 차이를 기록(추가 API 없음).
+            if qty_before == 0:
+                realized = await self._holding_avg_price(stock_code)
+                self._record_fill_slippage("BUY", stock_code, float(price), realized, fill_qty)
+
             self._task_queue.enqueue(
                 task_type="telegram_notify",
                 payload={
@@ -1401,6 +1407,17 @@ class TradingEngine:
             # 청산 — 고점 추적 종료
             self._peak_prices.pop(stock_code, None)
 
+            # 매도 슬리피지 계측 — 실전 한정 당일체결조회로 실체결가 best-effort 조회.
+            # 모의는 체결조회가 불가하므로 호출하지 않는다(불필요 API·신뢰불가 회피).
+            if settings.trading.measure_fill_slippage and settings.kis.env == "real":
+                realized = await self._realized_price_via_executions(
+                    stock_code, result.order_no
+                )
+                if realized is not None:
+                    self._record_fill_slippage(
+                        "SELL", stock_code, float(price), realized, fill_qty
+                    )
+
             self._task_queue.enqueue(
                 task_type="telegram_notify",
                 payload={
@@ -1431,6 +1448,78 @@ class TradingEngine:
             if h.stock_code == stock_code:
                 return int(h.quantity)
         return 0
+
+    async def _holding_avg_price(self, stock_code: str) -> float:
+        """현재(캐시) 잔고에서 해당 종목 매입평균가(KIS PCHS_AVG_PRIC)를 반환한다.
+
+        체결 확인(`_confirm_fill`) 직후 호출하면 캐시가 체결 후 잔고라, 신규 진입은
+        이 평균가가 곧 실체결가다(추가 API 호출 없음). 없으면 0.0.
+        """
+        try:
+            balance = await self._get_balance(force=False)
+        except Exception:
+            return 0.0
+        for h in balance.holdings:
+            if h.stock_code == stock_code:
+                return float(h.avg_price)
+        return 0.0
+
+    async def _realized_price_via_executions(
+        self, stock_code: str, order_no: str
+    ) -> float | None:
+        """당일 체결조회로 실체결 평균가를 best-effort 조회한다(매도 슬리피지용).
+
+        실전(real)에서만 신뢰 가능(모의는 당일 체결 자료 미제공 — 호출자가 env 게이팅).
+        order_no 우선 매칭, 없으면 종목 최근 체결. 실패/미발견 시 None(슬리피지 미기록).
+        """
+        try:
+            execs = await self._account.get_executions()
+        except Exception:
+            logger.debug("슬리피지용 체결조회 실패 %s", stock_code, exc_info=True)
+            return None
+        matched = [e for e in execs if e.order_no == order_no and e.price > 0]
+        if not matched:
+            matched = [e for e in execs if e.stock_code == stock_code and e.price > 0]
+        if not matched:
+            return None
+        return float(matched[-1].price)
+
+    def _record_fill_slippage(
+        self,
+        side: str,
+        stock_code: str,
+        expected_price: float,
+        realized_price: float,
+        quantity: int,
+    ) -> None:
+        """기대가 대비 실체결가 슬리피지를 FILL_SLIPPAGE 메트릭으로 기록한다(관측 전용).
+
+        ``adverse_bps``는 비용 방향(양수=슬리피지로 손해): 매수는 더 비싸게, 매도는 더
+        싸게 체결될수록 양수. 분석 스크립트가 왕복 비용 추정에 사용한다.
+        """
+        if not settings.trading.measure_fill_slippage:
+            return
+        if expected_price <= 0 or realized_price <= 0:
+            return
+        signed_bps = round((realized_price - expected_price) / expected_price * 10000, 1)
+        adverse_bps = signed_bps if side == "BUY" else round(-signed_bps, 1)
+        self._record_metric(
+            "FILL_SLIPPAGE",
+            {
+                "side": side,
+                "stock_code": stock_code,
+                "expected": int(expected_price),
+                "realized": round(float(realized_price), 2),
+                "slippage_bps": signed_bps,
+                "adverse_bps": adverse_bps,
+                "quantity": quantity,
+                "cycle": self._cycle_count,
+            },
+        )
+        logger.info(
+            "[슬리피지] %s %s 기대 %d → 실체결 %.1f (%+.1f bps, 비용 %+.1f bps)",
+            side, stock_code, int(expected_price), realized_price, signed_bps, adverse_bps,
+        )
 
     async def _confirm_fill(
         self,
