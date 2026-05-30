@@ -6,6 +6,8 @@ build/
 .eggs/
 
 .env
+.env.bak*
+.env.*.bak
 credentials.json
 token.json
 dashboard/.streamlit/secrets.toml

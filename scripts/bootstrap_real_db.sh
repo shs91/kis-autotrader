@@ -19,24 +19,37 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# 프로젝트 venv 우선(시스템에 'python' 심볼릭이 없을 수 있음 — python3만 존재).
+if [ -x ".venv/bin/python" ]; then
+  PYTHON=".venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON="python"
+else
+  echo "✗ python 실행 파일을 찾을 수 없습니다 (.venv/bin/python 또는 python3)." >&2
+  exit 1
+fi
+
 # .env는 load_dotenv(override=False)로 로드되므로 여기서 export한 KIS_ENV가 우선한다.
 export KIS_ENV=real
 
+echo "▶ 사용 파이썬: $PYTHON"
 echo "▶ 대상 DB (real):"
-python - <<'PY'
+"$PYTHON" - <<'PY'
 from src.config import settings
 url = settings.db.url
 # 비밀번호 마스킹 후 출력
 import re
 print("   " + re.sub(r"//([^:]+):[^@]+@", r"//\1:***@", url))
-assert settings.env == "real", "KIS_ENV=real 강제 실패"
+assert settings.kis.env == "real", "KIS_ENV=real 강제 실패"
 PY
 
 echo "▶ 현재 마이그레이션 상태:"
-python -m alembic current || true
+"$PYTHON" -m alembic current || true
 
 echo "▶ alembic upgrade head 실행..."
-python -m alembic upgrade head
+"$PYTHON" -m alembic upgrade head
 
 echo "▶ 적재 결과 (kis_trader_real 테이블 수):"
 docker exec kis-postgres psql -U kis_user -d kis_trader_real -tc \

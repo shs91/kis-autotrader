@@ -6,6 +6,17 @@
 
 ---
 
+## [2026-05-30] bootstrap_real_db.sh 수정 — venv 파이썬 해석 + settings.kis.env (v0.8.2)
+- 카테고리: bug_fix
+- 변경 파일:
+  - scripts/bootstrap_real_db.sh: ① 시스템에 `python` 심볼릭이 없는 환경(macOS, python3만 존재) 대응 — `.venv/bin/python` > `python3` > `python` 순으로 `PYTHON` 해석 후 모든 호출에 사용(line26 `command not found` 해소). ② 인라인 검증의 `settings.env`(미존재 속성) → `settings.kis.env`로 수정.
+- 배경: PR #47에 추가된 `bootstrap_real_db.sh`가 실전 전환 직전 운영자 실행 시 (1) `python: command not found`, (2) `'Settings' object has no attribute 'env'` 2중 실패. 실전 DB(`kis_trader_real`) 스키마 부트스트랩이 막혀 있었음.
+- 영향: 스크립트 정상 동작 확인 — `kis_trader_real` 19개 테이블 + `alembic_version=a1b2c3d4e5f6`(head) 생성. 런타임 매매 코드 영향 없음(ops 스크립트 한정). DB 마이그레이션·신규 의존성 없음.
+- 검증 결과: 수동 실행 — kis_trader_real 19 테이블 + alembic head 확인. 기존 테스트 불변(스크립트 변경).
+- 비고: 운영자 액션 — 실전 첫 기동 전 1회 실행하는 스크립트. 이미 부트스트랩 완료된 경우 멱등(재실행 무해).
+
+---
+
 ## [2026-05-30] 실체결 슬리피지 계측(FILL_SLIPPAGE) + 분석·졸업판정 도구 — 소액 실전 캘리브레이션 (v0.8.1)
 - 카테고리: performance
 - 변경 파일:
@@ -63,20 +74,6 @@
 - 영향: 위험종목이 후보 풀·신호 평가에 진입조차 못 해 단일종목 고착 차단(게이트 호출 644→0, SIGNAL_SKIP noise 감소). 헬스체크 0건 경고가 신호 BUY/SELL 수·상위 거절사유(DISCLOSURE/MARKET_CLOSE_GUARD 등)를 정확히 표기 → 운영자 즉시 진단 가능. DB 마이그레이션·신규 env 없음(기존 NEWS_RISK_GATE_ENABLED/LOOKBACK 재사용).
 - 검증 결과: pytest **972 passed**(신규 12 포함) | mypy ✅(변경 4파일) | ruff ✅(변경 7파일).
 - 비고: 운영자 액션 — 스크리닝/헬스체크 로직 반영을 위해 `com.kis.autotrader` 재시작 필요.
-
----
-
-## [2026-05-28] 일일 헬스체크 (12:30·15:35) — 매매 0건 감지 시 즉시 Telegram 경고 (v0.6.0)
-- 카테고리: feature
-- 변경 파일:
-  - src/scheduler/healthcheck.py: 신규 — `HealthcheckSlot(MORNING/CLOSING)`, `HealthcheckResult`(frozen dataclass), `build_healthcheck_message`(0건 분기 `⚠️` + 상위 매수 거절 사유 동봉), `_query_today_counts`(오늘자 signals BUY/SELL + orders BUY/SELL + event_logs 거절사유 집계), `collect_healthcheck`(KIS 잔고 holdings/deposit + engine cycle/api_calls), `run_healthcheck`(휴장일·엔진없음·DB실패 모두 swallow).
-  - src/scheduler/jobs.py: `healthcheck_morning_job`(12:30 KST)·`healthcheck_closing_job`(15:35 KST) 메서드 + `_register_jobs`에 평일 cron 등록.
-  - tests/test_scheduler/test_healthcheck.py: 신규 11종 — 0건 경고/정상 분기/슬롯 라벨(오전·마감)/거절사유 표기/휴장일 스킵/엔진없음 스킵/Telegram 전송/에러 swallow/_query_today_counts 시그니처/KST today 위임.
-  - README.md: 스케줄러 표에 헬스체크 2행 추가.
-- 배경: 2026-05-28 사용자가 "오늘 매매기록이 아예 없네"로 인지. 진단 결과 시스템은 정상이었으나(KIS 모의계좌 보유 0개 + 강한 BUY 후보 1종목=230980 비유테크놀러지가 정리매매로 v0.6.0 공시 게이트 차단, SELL 후보 1종목=001740 SK네트웍스가 미보유로 `sell_without_position` skip) 가시성이 부족해 운영자가 즉시 알기 어려운 상태였음.
-- 영향: 장중 12:30·마감 직후 15:35에 사이클/시그널/주문/잔고를 Telegram으로 보고. 매매 0건이면 `⚠️` 마커 + 상위 매수 거절 사유(DISCLOSURE_FATAL/POSITION_RATIO/DAILY_TRADE_LIMIT_PER_STOCK 등) 동봉. 운영 영향 0(전송 실패 swallow). 함께 stale `portfolios` 12종목(5/25 이후 sync 안 됨) 단발 DELETE — 엔진은 KIS 잔고 API를 신뢰하므로 영향 없음.
-- 검증 결과: pytest tests/test_scheduler/ ✅ **18 passed**(신규 11 포함) | tests/test_notify+scheduler+db ✅ **194 passed** | mypy ✅(src/scheduler/healthcheck.py + jobs.py) | ruff ✅(신규 파일).
-- 비고: 운영자 액션 — 신규 cron 등록을 위해 `com.kis.autotrader` 재시작 필요.
 
 ---
 
