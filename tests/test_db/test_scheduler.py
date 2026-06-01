@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.config import settings
 from src.scheduler.jobs import TradingScheduler, _calculate_trading_interval
 
 
@@ -26,14 +27,31 @@ class TestCalculateTradingInterval:
         assert interval >= 1.0
 
     def test_zero_stocks(self) -> None:
-        """0종목일 때 기본 1.0초 간격이어야 한다."""
+        """0종목(스크리닝 의존 등 종목 미확정) 시 설정 하한을 따라야 한다.
+
+        과거에는 1.0초를 반환해 장중 1초 폭주(일일 API 한도 조기 소진)를 유발했다.
+        """
         interval = _calculate_trading_interval(0)
-        assert interval == 1.0
+        assert interval == settings.trading.min_trading_interval_seconds
 
     def test_negative_stocks(self) -> None:
-        """음수 종목일 때 기본 1.0초 간격이어야 한다."""
+        """음수 종목일 때도 설정 하한을 따라야 한다."""
         interval = _calculate_trading_interval(-1)
-        assert interval == 1.0
+        assert interval == settings.trading.min_trading_interval_seconds
+
+    def test_min_interval_configurable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """간격 하한은 settings.trading.min_trading_interval_seconds로 조절된다."""
+        import types
+
+        from src.scheduler import jobs
+
+        fake = types.SimpleNamespace(
+            rate_limit=types.SimpleNamespace(per_second=20),
+            trading=types.SimpleNamespace(min_trading_interval_seconds=5.0),
+        )
+        monkeypatch.setattr(jobs, "settings", fake)
+        assert jobs._calculate_trading_interval(0) == 5.0
+        assert jobs._calculate_trading_interval(5) == 5.0
 
 
 class TestTradingScheduler:
