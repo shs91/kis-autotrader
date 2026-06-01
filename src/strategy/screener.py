@@ -92,6 +92,9 @@ class ScreeningFilter:
     _ETF_BRAND_KEYWORDS: tuple[str, ...] = (
         "KODEX", "TIGER", "KBSTAR", "ARIRANG", "SOL ", "ACE ",
         "HANARO", "ETN", "레버리지", "인버스", "2X", "곱버스",
+        # 2024+ 리브랜딩·누락 브랜드 + 펀드형 상품 (2026-06-01 RISE 채권혼합 누수 대응)
+        "RISE ", "PLUS ", "KOSEF", "KINDEX", "TIMEFOLIO", "히어로즈", "마이다스",
+        "ETF", "채권혼합", "혼합형",
     )
 
     _ETF_BLOCKLIST: set[str] | None = None
@@ -112,8 +115,10 @@ class ScreeningFilter:
 
     @staticmethod
     def _is_etf_etn(stock_code: str, stock_name: str) -> bool:
-        """ETF/ETN/레버리지/인버스 종목 여부를 판별한다."""
-        if stock_code.startswith("Q"):
+        """ETF/ETN/레버리지/인버스/펀드형 등 비(非)일반주 여부를 판별한다."""
+        # 일반 상장주식은 6자리 숫자 코드. 문자 포함 코드(ETN Q…, ELW, 구조화상품
+        # 0162Z0 등)는 일반주가 아니므로 제외한다.
+        if not stock_code.isdigit():
             return True
         if stock_code in ScreeningFilter._load_etf_blocklist():
             return True

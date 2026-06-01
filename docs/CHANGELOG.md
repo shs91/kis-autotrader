@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-06-01] ETF/ETN 필터 보강 — 문자 코드 + RISE·채권혼합 누수 차단 (v0.8.5)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/strategy/screener.py: `_is_etf_etn` ① `startswith("Q")` → `not stock_code.isdigit()`로 일반화(문자 포함 코드=ETN/ELW/구조화상품 0162Z0 등 제외) ② `_ETF_BRAND_KEYWORDS`에 RISE·PLUS·KOSEF·KINDEX·TIMEFOLIO·히어로즈·마이다스·ETF·채권혼합·혼합형 추가.
+  - tests/test_strategy/test_screener.py: ETF 회귀 테스트 5종(문자코드·RISE·채권혼합) + 미사용 import 정리.
+- 배경: 실전 첫날(6/1) 스크리닝 깔때기 진단에서, ETF/펀드형 상품 `0162Z0 RISE 삼성전자SK하이닉스채권혼합50`이 매매 후보(converted)로 통과. 원인 — 코드가 Q로 시작 안 함 + 브랜드 키워드에 RISE/채권혼합 미등록.
+- 영향: 문자 포함 코드와 RISE/채권혼합/ETF 등 펀드형 상품이 스크리닝 후보·모니터링에서 차단. 매매 로직 불변(ETF 판별만 강화). DB 마이그레이션·신규 env 없음.
+- 검증 결과: pytest 전체 **1012 passed**(ETF 회귀 5건 포함) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 상태 기존 실패로 무관.
+- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 거래량 랭킹 소스 자체 개선(시총/유동성 결합)은 후속 과제.
+
+---
+
 ## [2026-06-01] 스크리닝 필터 실효화 — 엔진이 Worker 선정분만 모니터링 + buy-time 가격 하한 (v0.8.4)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -56,23 +68,6 @@
 - 영향: 매 체결 시 기대가 대비 실체결가 차이를 `system_metrics(FILL_SLIPPAGE)`에 적재. `analyze_slippage.py`로 왕복 비용·순엣지·졸업 판정을 1회 쿼리로 산출. 관측 전용 — 매수/매도/게이트 경로 불변, 기록 실패 swallow. DB 마이그레이션·신규 의존성 없음. 매수측은 체결 후 캐시 잔고 사용(추가 API 無), 매도측은 실전에서만 체결조회 1회 추가.
 - 검증 결과: pytest **1013 passed**(신규 8) | mypy ✅ strict | ruff ✅.
 - 비고: 운영자 액션 — `docs/CALIBRATION_RUNBOOK.md`대로 `.env` 캘리브 설정 + `scripts/bootstrap_real_db.sh` + `com.kis.autotrader` 재시작. 매도측 슬리피지는 실전 체결조회 신뢰도에 의존(모의는 미수집).
-
----
-
-## [2026-05-30] 실전 전환 전 안전장치 6종 — 킬스위치·DB프리체크·고아체결 회수·halt 재시작 복원·긴급알림 폴백 (v0.8.0)
-- 카테고리: feature
-- 변경 파일:
-  - src/engine.py: 수동 킬스위치(`run_trading_cycle` 진입부 — `halt_file` 존재 시 사이클 전체 동결 + 1회 Telegram 알림, 해제 시 재개). 주문 직전 DB 헬스체크(`_execute_buy`/`_execute_sell`가 `db_healthcheck()` 실패 시 주문 보류 + `ORDER_SKIPPED_DB_DOWN`). 고아 체결 회수(`_reconcile_orphan_fill` — `_cancel_pending_order`가 취소 직전 잔고 재확인, 지연 체결이면 트레이드 기록 후 취소 스킵). 장중 재시작 리스크 복원(`_restore_risk_state_if_needed` — pre_market 미실행 시 당일 `trades` 재생으로 halt/연패/누적손익 결정적 재구성 + peak_prices 재적재, 1회 한정). `PendingOrder`에 qty_before/price/avg_price/signal_type 추가.
-  - src/strategy/risk.py: `RiskManager.snapshot()`/`restore()` — 포트폴리오 리스크 상태 직렬화·복원(타입·누락 키 방어).
-  - src/db/session.py: `db_healthcheck()` — `SELECT 1`로 DB 가용성 점검(예외 swallow→False).
-  - src/notify/telegram.py: 긴급(urgent) 전송 실패 시 `logs/urgent_alerts.fallback.log`에 추기(치명 알림 소실 방지).
-  - src/config.py: `TradingConfig` 플래그 3종 — `halt_file`(기본 `.trading_halt`), `db_precheck_before_order`(실전=true·모의=false 기본), `reconcile_orphan_fills`(기본 true).
-  - scripts/bootstrap_real_db.sh: 신규 — kis_trader_real 스키마 1회 부트스트랩(`KIS_ENV=real alembic upgrade head`, 운영자 실행).
-  - tests: test_engine_safety_phase0.py 9종(킬스위치/DB프리체크/고아체결/재시작복원), test_strategy/test_risk_snapshot.py 4종, test_notify/test_telegram_fallback.py 3종 신규.
-- 배경: 2026-05-30 모의→실전(시드 50만원) 전환 준비도 검토(7개 차원·다중 에이전트 적대 검증). 실전 전용 안전경로에 확인된 치명 공백 — 손절 사이클당 1회 검사(갭 우회), halt 상태 in-memory(재시작 시 유실→한도 우회), 미체결 취소 시 고아 체결 미정합(추적 불가 포지션), DB장애 중 주문, 텔레그램 알림 미보장, kis_trader_real 미마이그레이션. 6/1 전면 자동매매 전환은 No-Go, 본 PR은 Phase 0 안전장치.
-- 영향: 운영자 비상정지(`touch .trading_halt`) 가능. DB 불가 시 'KIS엔 체결·DB엔 미기록'인 추적 불가 실포지션 예방(실전 기본 on). 폴링 윈도를 지난 지연 체결을 취소 대신 회수해 DB 정합 유지. 장중 크래시 재기동 후에도 당일 손실 한도(halt/연패/MDD)가 정본 trades로 복원되어 우회 차단. 긴급 알림 파일 폴백으로 깜깜이 방지. 매수/매도 정상 경로·기존 테스트 전부 불변. DB 마이그레이션 없음(신규 env 3종은 선택, .env.example 문서화).
-- 검증 결과: pytest **1005 passed**(신규 16 포함) | mypy ✅ strict | ruff ✅(변경 5파일).
-- 비고: 운영자 액션 — ①실전 첫 기동 전 `scripts/bootstrap_real_db.sh` 1회 실행 ②안전장치 반영 위해 `com.kis.autotrader` 재시작. 실시간 손절 모니터링·50만용 설정(DAILY_TRADE_LIMIT 등)은 Phase 1 과제로 미포함.
 
 ---
 

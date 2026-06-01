@@ -10,10 +10,8 @@ from src.strategy.base import Signal, SignalType
 from src.strategy.screener import (
     ScreeningFilter,
     ScreeningScorer,
-    ScoredCandidate,
     StockScreener,
 )
-
 
 # ── 테스트 데이터 팩토리 ──────────────────────────
 
@@ -292,6 +290,24 @@ class TestETFFilter:
     def test_is_etf_etn_filters_blocklist_code(self) -> None:
         """블록리스트에 있는 ETF 코드가 필터링된다."""
         assert ScreeningFilter._is_etf_etn("252670", "알수없는종목")
+
+    def test_is_etf_etn_filters_rise_bond_mixed(self) -> None:
+        """RISE 채권혼합형 ETF가 필터링된다 (2026-06-01 실전 누수 회귀 방지)."""
+        assert ScreeningFilter._is_etf_etn("0162Z0", "RISE 삼성전자SK하이닉스채권혼합50")
+
+    def test_is_etf_etn_filters_nonnumeric_code(self) -> None:
+        """6자리 숫자가 아닌 코드(ETN/ELW/구조화상품)는 일반주가 아니므로 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("0162Z0", "아무이름")
+        assert ScreeningFilter._is_etf_etn("580099K", "구조화상품")
+
+    def test_is_etf_etn_filters_rise_numeric_code(self) -> None:
+        """숫자 코드의 RISE ETF도 브랜드 키워드로 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("123450", "RISE 200")
+
+    def test_is_etf_etn_filters_bond_mixed_keyword(self) -> None:
+        """채권혼합/ETF 키워드가 필터링된다."""
+        assert ScreeningFilter._is_etf_etn("123450", "한투 채권혼합형")
+        assert ScreeningFilter._is_etf_etn("123450", "아무 ETF")
         assert ScreeningFilter._is_etf_etn("069500", "알수없는종목")
 
     def test_is_etf_etn_filters_name_equals_code(self) -> None:
