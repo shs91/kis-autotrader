@@ -73,12 +73,17 @@ def collect(target_date: date) -> dict[str, Any]:
             session, target_date, "SCREENING_RISK_EXCLUDED", "stock_code"
         )
 
-    # 스크리닝은 사이클마다 중복 기록 → 종목 단위로 고유화(마지막 기록 유지)
+    # 스크리닝은 사이클마다 중복 기록 → 종목 단위로 고유화.
+    # converted는 "해당일 어느 런에서든 1회라도 선정(converted_to_trade=True)"으로 판정한다.
+    # (last-wins로 보면 나중 런의 converted=False 재기록에 가려져 과소집계됨)
     uniq: dict[str, dict[str, Any]] = {}
+    converted_codes: set[str] = set()
     for it in screening.get("items", []):
         uniq[it["stock_code"]] = it
+        if it["converted_to_trade"]:
+            converted_codes.add(it["stock_code"])
 
-    converted = [it for it in uniq.values() if it["converted_to_trade"]]
+    converted = [uniq[c] for c in converted_codes]
     out_of_band = [
         it
         for it in uniq.values()
