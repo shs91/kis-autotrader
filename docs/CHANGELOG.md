@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-06-01] 장중 매매 사이클 1초 폭주 수정 — 간격 하한 설정화 + 0종목 폴백 (v0.8.3)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/config.py: `TradingConfig.min_trading_interval_seconds`(기본 10.0, env `TRADING_MIN_INTERVAL_SECONDS`).
+  - src/scheduler/jobs.py: `_calculate_trading_interval`의 0종목 폴백 `return 1.0`→설정 하한, `max(interval, 10.0)`→`max(interval, min_interval)`(하드코딩 하한 2곳을 설정값으로 통일).
+  - tests/test_scheduler/test_jobs.py: 신규 5종(0/음수→하한, 소수종목 바닥, 대량 종목 산출값>하한, env 오버라이드).
+  - .env.example: `TRADING_MIN_INTERVAL_SECONDS` 문서화.
+- 배경: 실전 첫날(2026-06-01) 장중 모니터링에서 매매잡이 `interval[0:00:01]`(1초)로 폭주. 원인 — WATCHLIST 비움(스크리닝 의존)으로 셋업 시 `_stock_count`=0 → `_calculate_trading_interval(0)`이 `if stock_count<=0: return 1.0` 경로로 빠져 기존 "최소 10초" 하한을 우회. ~175 calls/분으로 일일 API 한도(5만)를 ~14시 소진 전망 + KIS `EGW00201`(초당한도) 간헐 거부(screener.get_volume_rank 3회 재시도 소진 traceback) + `max instances` WARNING 폭주.
+- 영향: 0종목/소수종목 모두 설정 하한(기본 10초)을 따름 → 일일 API ~57k→~5.7k(종일 커버), EGW00201 버스트·max-instances WARNING 해소. 매매 로직·신호·게이트 경로 불변(사이클 간격만 변경, 손절/익절 반응 1초→10초·본 전략엔 충분). DB 마이그레이션 없음, 신규 env 1종(선택, .env.example 문서화).
+- 검증 결과: pytest 신규 5 + 스케줄러/config 회귀 45 passed | mypy ✅ strict(변경 2파일) | ruff ✅(추가 라인; jobs.py 기존 E501 2건은 본 변경과 무관·범위 외). 장중 전체 스위트는 운영 로그(logs/autotrader.log) 오염 방지 위해 장 마감 후 실행 권장.
+- 비고: 운영자 액션 — 반영하려면 `com.kis.autotrader` 재시작(코드는 순수 변경, 재시작은 별도 액션). 더 빠른 반응 원하면 `TRADING_MIN_INTERVAL_SECONDS=5`(여전히 안전, ~11.5k/일). 근본적으로는 장중 스크리닝 종목 수로 간격을 재계산하는 것이 정석이나 본 패치는 하한 보장으로 한정(MAX_SCREENED_STOCKS=5 기준 어차피 10초).
+
+---
+
 ## [2026-05-30] bootstrap_real_db.sh 수정 — venv 파이썬 해석 + settings.kis.env (v0.8.2)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -59,21 +73,6 @@
 - 영향: `system_metrics(BUY_OUTCOME)` GROUP BY outcome로 acted→체결 깔때기를 일·주 단위 분해(v0.7.0 사전배제 효과 정량 검증, BUY_OUTCOME 총합=acted·FILLED=실체결). `system_metrics(SIGNAL_REVERSAL)`로 반전 빈발 종목/시간대 정량화 → 신호 cooldown 또는 앙상블 confidence 평활화(EMA) 도입의 데이터 근거. 둘 다 매수/매도/게이트 경로 불변(순수 관측), 기록 실패 swallow. DB 마이그레이션·신규 의존성 없음.
 - 검증 결과: pytest **17 passed**(신규 테스트 2종) | mypy ✅(src/engine.py·config.py) | ruff ✅ | golden 회귀 PASS(10 invariant, 사전·사후 동일).
 - 비고: 운영자 액션 — 메트릭이 사이클에서 적재되려면 `com.kis.autotrader` 재시작 필요(매매 동작 변경은 없음).
-
----
-
-## [2026-05-30] 매매 0건 근본 대응 — 스크리닝 위험종목 사전 배제 + 헬스체크 거절사유 가시성 복구 (v0.7.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/strategy/disclosure_risk.py: 신규 — 치명 공시 키워드(`CRITICAL_DISCLOSURE_KEYWORDS`) + 순수 매처(`match_critical_disclosure`)를 단일 진실원천으로 분리. engine buy-time 게이트와 스크리닝 Worker가 공유(키워드 드리프트 방지).
-  - src/worker/screener.py: `_run_screening`이 `filter_candidates` 직전 `_load_risk_blocked_codes`로 위험종목(market_actions 차단 OR 치명 공시)을 후보 풀에서 사전 배제 + `SCREENING_RISK_EXCLUDED` 메트릭 기록.
-  - src/engine.py: `_CRITICAL_DISCLOSURE_KEYWORDS`/`_match_critical_disclosure`를 disclosure_risk로 이관. `_match_critical_disclosure`는 위임 래퍼로 유지(기존 테스트 보존).
-  - src/scheduler/healthcheck.py: `func.case`→`case`(PostgreSQL에 없는 `case()` 함수 호출로 매 실행 예외→기본값 전송하던 크래시 수정) + 매수 거절 사유 조회를 `event_logs`→`system_metrics`(BUY_REJECT/BUY_DISCLOSURE_BLOCK/BUY_UNTRADABLE)로 교정. `_extract_reject_reason`→`_reject_label`.
-  - tests: test_disclosure_risk.py 신규 7종, test_screener.py 위험배제 4종, test_healthcheck.py 실제 SQL 실행 회귀 가드 1종.
-- 배경: 5/26 이후 매매 0건 조사. 시스템은 정상(750사이클/0에러)이었고, 앙상블이 상장폐지 정리매매 종목(230980 비유테크놀러지)에 conf 1.000 BUY를 고착 생성 → v0.6.0 공시 게이트가 679건 전량 정당 차단. 정리매매 급등락이 기술지표를 강한 BUY로 속인 것(앙상블 버그 아님). 헬스체크 0건 경고는 `func.case` 예외로 매 실행 기본값(0) 전송, 거절사유는 system_metrics에만 기록되는데 event_logs를 조회해 항상 공란이었음.
-- 영향: 위험종목이 후보 풀·신호 평가에 진입조차 못 해 단일종목 고착 차단(게이트 호출 644→0, SIGNAL_SKIP noise 감소). 헬스체크 0건 경고가 신호 BUY/SELL 수·상위 거절사유(DISCLOSURE/MARKET_CLOSE_GUARD 등)를 정확히 표기 → 운영자 즉시 진단 가능. DB 마이그레이션·신규 env 없음(기존 NEWS_RISK_GATE_ENABLED/LOOKBACK 재사용).
-- 검증 결과: pytest **972 passed**(신규 12 포함) | mypy ✅(변경 4파일) | ruff ✅(변경 7파일).
-- 비고: 운영자 액션 — 스크리닝/헬스체크 로직 반영을 위해 `com.kis.autotrader` 재시작 필요.
 
 ---
 

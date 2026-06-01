@@ -240,6 +240,12 @@ class TradingConfig:
         ]
     )
 
+    # 장중 매매 사이클 최소 간격(초). 종목 수 기반 산출값과 0종목 폴백 모두 이 하한을 따른다.
+    # 1초 폭주(일일 API 한도 조기 소진 + KIS EGW00201 초당한도 거부) 방지용.
+    min_trading_interval_seconds: float = field(
+        default_factory=lambda: _env_float("TRADING_MIN_INTERVAL_SECONDS", 10.0)
+    )
+
     # 수동 킬스위치 — 이 파일이 존재하면 매매 사이클 전체를 즉시 동결한다.
     # 운영자가 touch/rm로 런타임 제어(프로세스 재시작 불필요). 실전 비상정지용.
     halt_file: str = field(

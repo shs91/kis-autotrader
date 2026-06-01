@@ -62,13 +62,16 @@ def _calculate_trading_interval(stock_count: int) -> float:
         시세 조회 주기 (초 단위, 소수점)
     """
     rate_limit = settings.rate_limit.per_second
+    min_interval = settings.trading.min_trading_interval_seconds
     if stock_count <= 0:
-        return 1.0
+        # 종목 미확정(스크리닝 의존으로 셋업 시 0종목 등) 상황에서도 1초 폭주를
+        # 막기 위해 설정 하한을 적용한다.
+        return min_interval
     # 종목당 2건(일봉+현재가) + 잔고 1건 = stock_count * 2 + 1
     calls_per_cycle = stock_count * 2 + 1
     # 여유 계수 1.2를 곱하여 안전 마진 확보
     interval = math.ceil((calls_per_cycle / rate_limit) * 1.2 * 10) / 10
-    return max(interval, 10.0)  # 최소 10초 간격
+    return max(interval, min_interval)  # 설정 하한(기본 10초) 보장
 
 
 def _run_async(coro: Coroutine[Any, Any, Any]) -> None:
