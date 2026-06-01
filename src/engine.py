@@ -709,13 +709,14 @@ class TradingEngine:
     # ── 종목 스크리닝 ─────────────────────────────────────
 
     async def _screen_stocks(self) -> None:
-        """screening_results 테이블에서 ScreeningWorker의 최신 결과를 읽는다.
+        """screening_results 테이블에서 ScreeningWorker가 선정한 종목을 읽는다.
 
         실제 스크리닝(API 호출 + 전략 분석)은 ScreeningWorker가 별도로 수행한다.
-        메인 엔진은 DB 결과만 읽어 매매 대상에 추가한다.
-        converted_to_trade 플래그와 무관하게 상위 랭킹 종목을 평가 대상에
-        포함한다 — 엔진이 자체 전략 분석을 수행하므로 Worker의 사전 필터에
-        의존하지 않는다.
+        메인 엔진은 Worker가 가격/등락률/ETF/위험 필터를 통과시켜 선정한
+        ``converted_to_trade=True`` 종목만 모니터링 대상에 추가한다 — Worker의
+        사전 필터(가격대·등락률·ETF·위험종목 배제)를 모니터링에 실제로 반영하기
+        위함. (2026-06-01: 필터 전 거래량 순위 원본을 그대로 담아 5원 정리매매
+        종목까지 모니터링되던 문제 대응)
         """
         scfg = self._screener.config
         if len(self._screened_codes) >= scfg.max_screened:
@@ -740,6 +741,10 @@ class TradingEngine:
                 seen.add(r.stock_code)
                 if r.stock_name and r.stock_name != r.stock_code:
                     name_map[r.stock_code] = r.stock_name
+                # Worker가 가격/등락률/ETF/위험 필터를 통과시켜 선정한 종목만 모니터링.
+                # 필터 전 원본 랭킹 종목(정리매매·페니·ETF 등)이 평가 대상에 새는 것을 막는다.
+                if not r.converted_to_trade:
+                    continue
                 if r.stock_code in self._screened_codes:
                     continue
                 if r.stock_code in watchlist_set:
@@ -1156,6 +1161,18 @@ class TradingEngine:
         if stock_code in self._untradable_today:
             logger.debug("[매수 스킵] %s(%s) — 당일 매매불가 종목", stock_name, stock_code)
             self._record_buy_outcome(stock_code, "SKIP_UNTRADABLE_TODAY")
+            return
+
+        # 하드 가격 안전 플로어 — KIS 종목마스터(market_actions)가 정리매매/관리 지정을
+        # 놓쳐도, 페니/정리매매성 종목(현재가 < 스크리닝 최저가)은 실시간 가격으로 매수를
+        # 차단한다. (2026-06-01: 5원 정리매매 종목이 모든 필터를 우회해 모니터링되던 사례 대응)
+        min_price = settings.screening.min_price
+        if price <= 0 or price < min_price:
+            logger.warning(
+                "[매수 차단] %s(%s) — 가격 하한 미달(현재가=%s원 < %s원)",
+                stock_name, stock_code, price, min_price,
+            )
+            self._record_buy_outcome(stock_code, "BLOCK_PRICE_FLOOR")
             return
 
         # KIS 종목마스터 sync 결과(market_actions) 기반 차단 lookup.

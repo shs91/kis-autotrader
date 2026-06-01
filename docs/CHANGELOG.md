@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-01] 스크리닝 필터 실효화 — 엔진이 Worker 선정분만 모니터링 + buy-time 가격 하한 (v0.8.4)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: ① `_screen_stocks`가 `converted_to_trade=True`(Worker가 가격/등락률/ETF/위험 필터를 통과시켜 선정)인 종목만 모니터링에 편입(기존: 거래량 순위 원본 전체를 필터 무시하고 편입). ② `_execute_buy`에 하드 가격 안전 플로어 추가(`현재가<SCREENING_MIN_PRICE` 또는 ≤0이면 `BLOCK_PRICE_FLOOR`로 매수 차단).
+  - tests/test_engine_db_integration.py: `_screen_stocks` 테스트 3종을 새 동작(converted-only)으로 갱신.
+  - tests/test_engine_buy_funnel.py: 가격 하한 차단(BLOCK_PRICE_FLOOR) 테스트 추가.
+- 배경: 실전 첫날(6/1) 진단 — 5원·-28.57% 정리매매성 종목 230980이 가격(≥1000)·등락률(-3~+15%)·ETF·위험 필터를 전부 우회해 모니터링됨. 근본원인 ① 엔진 `_screen_stocks`가 screening_results(=Worker가 `_record_to_db(ranked,…)`로 기록한 필터 전 거래량 순위 원본)를 순위순으로 편입하며 Worker 필터를 의도적으로 무시 ② market_actions에 230980 있으나 위험플래그 전부 FALSE(KIS 종목마스터 사각).
+- 영향: Worker의 `SCREENING_*` 필터가 모니터링/매매 유니버스에 실제 반영(파라미터 튜닝이 비로소 유효). buy-time 가격 하한이 종목마스터 사각을 보완해 페니/정리매매 매수를 실시간 차단. 모니터링 종목은 필터 통과분으로 좁아짐(품질↑). DB 마이그레이션·신규 env 없음(기존 SCREENING_MIN_PRICE 재사용).
+- 검증 결과: pytest 전체 **1008 passed**(신규/수정 4건 포함) | mypy strict ✅ | ruff ✅. 잔존 7건(test_order 1·pipeline_cli 6)은 공유 DB 상태 기존 실패로 본 변경과 무관(신규 실패 0).
+- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 모니터링 종목 수가 줄 수 있으므로(필터 생존분만) 스크리닝 소스/파라미터 튜닝과 함께 운용 권장.
+
+---
+
 ## [2026-06-01] 장중 매매 사이클 1초 폭주 수정 — 간격 하한 설정화 + 0종목 폴백 (v0.8.3)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -60,19 +73,6 @@
 - 영향: 운영자 비상정지(`touch .trading_halt`) 가능. DB 불가 시 'KIS엔 체결·DB엔 미기록'인 추적 불가 실포지션 예방(실전 기본 on). 폴링 윈도를 지난 지연 체결을 취소 대신 회수해 DB 정합 유지. 장중 크래시 재기동 후에도 당일 손실 한도(halt/연패/MDD)가 정본 trades로 복원되어 우회 차단. 긴급 알림 파일 폴백으로 깜깜이 방지. 매수/매도 정상 경로·기존 테스트 전부 불변. DB 마이그레이션 없음(신규 env 3종은 선택, .env.example 문서화).
 - 검증 결과: pytest **1005 passed**(신규 16 포함) | mypy ✅ strict | ruff ✅(변경 5파일).
 - 비고: 운영자 액션 — ①실전 첫 기동 전 `scripts/bootstrap_real_db.sh` 1회 실행 ②안전장치 반영 위해 `com.kis.autotrader` 재시작. 실시간 손절 모니터링·50만용 설정(DAILY_TRADE_LIMIT 등)은 Phase 1 과제로 미포함.
-
----
-
-## [2026-05-30] 관측성 메트릭 2종 — acted→체결 퍼널(BUY_OUTCOME) + 단기 신호 반전(SIGNAL_REVERSAL) (v0.7.1)
-- 카테고리: performance
-- 변경 파일:
-  - src/engine.py: `_execute_buy`의 8개 상호배타 종단에 `BUY_OUTCOME` 메트릭 1건씩 적재(`_record_buy_outcome` 헬퍼, outcome=FILLED/UNFILLED/ORDER_FAIL/ORDER_UNTRADABLE/SUPPRESS_PENDING/BLOCK_DISCLOSURE/BLOCK_MARKET_ACTION/SKIP_UNTRADABLE_TODAY). `_observe_signal_reversal` + `_last_signal_by_stock` 인메모리 상태(직전 BUY/SELL 기억, 윈도 내 반대방향 신호 시 `SIGNAL_REVERSAL` 기록, HOLD 제외), `pre_market` 일일 리셋.
-  - src/config.py: `TradingConfig.signal_reversal_window_seconds`(기본 600, env `SIGNAL_REVERSAL_WINDOW_SECONDS`).
-  - tests: test_engine_buy_funnel.py 신규(종단별 outcome + 상호배타 invariant), test_engine_signal_reversal.py 신규 6종(윈도/방향/종목분리/HOLD제외/pre_market 리셋).
-- 배경: 5월 월간·W22 리포트가 두 관측 공백을 지목. ①ENSEMBLE acted 5,332 vs 실체결 29(0.54%) 괴리가 `_execute_buy` 어느 종단(공시/시장조치/미체결/중복억제/실패)에서 새는지 단일 쿼리로 불가시. ②062970이 09:15 STOP_LOSS 매도 42초 뒤 BUY 재진입하는 등 정상 종목의 단기 신호 반전이 미계량(수작업 발굴 의존).
-- 영향: `system_metrics(BUY_OUTCOME)` GROUP BY outcome로 acted→체결 깔때기를 일·주 단위 분해(v0.7.0 사전배제 효과 정량 검증, BUY_OUTCOME 총합=acted·FILLED=실체결). `system_metrics(SIGNAL_REVERSAL)`로 반전 빈발 종목/시간대 정량화 → 신호 cooldown 또는 앙상블 confidence 평활화(EMA) 도입의 데이터 근거. 둘 다 매수/매도/게이트 경로 불변(순수 관측), 기록 실패 swallow. DB 마이그레이션·신규 의존성 없음.
-- 검증 결과: pytest **17 passed**(신규 테스트 2종) | mypy ✅(src/engine.py·config.py) | ruff ✅ | golden 회귀 PASS(10 invariant, 사전·사후 동일).
-- 비고: 운영자 액션 — 메트릭이 사이클에서 적재되려면 `com.kis.autotrader` 재시작 필요(매매 동작 변경은 없음).
 
 ---
 

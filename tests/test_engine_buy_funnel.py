@@ -94,6 +94,23 @@ async def test_outcome_block_market_action() -> None:
     assert _buy_outcomes(engine) == ["BLOCK_MARKET_ACTION"]
 
 
+# (보강) 가격 하한 미달(페니/정리매매) → BLOCK_PRICE_FLOOR
+@pytest.mark.asyncio
+async def test_outcome_block_price_floor() -> None:
+    """현재가가 스크리닝 최저가 미만이면 주문 없이 BLOCK_PRICE_FLOOR.
+
+    KIS 종목마스터(market_actions)가 정리매매 지정을 놓쳐도(시장조치 게이트 통과)
+    실시간 가격 하한이 먼저 5원짜리 매수를 차단한다.
+    """
+    engine = _make_engine()
+    engine._order.buy = AsyncMock()  # type: ignore[method-assign]
+    with patch.object(engine, "_check_market_action_block", return_value=[]):
+        await engine._execute_buy("230980", "비유테크놀러지", 100, 5)
+
+    engine._order.buy.assert_not_awaited()
+    assert _buy_outcomes(engine) == ["BLOCK_PRICE_FLOOR"]
+
+
 # 3. 치명 공시 차단 → BLOCK_DISCLOSURE (+ 기존 BUY_DISCLOSURE_BLOCK 유지)
 @pytest.mark.asyncio
 async def test_outcome_block_disclosure_keeps_legacy_metric() -> None:

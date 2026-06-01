@@ -621,22 +621,25 @@ class TestSignalSummaryMetric:
 
 
     @pytest.mark.asyncio
-    async def test_screen_stocks_includes_unconverted(self) -> None:
-        """converted_to_trade=False인 스크리닝 결과도 평가 대상에 포함된다."""
+    async def test_screen_stocks_excludes_unconverted(self) -> None:
+        """converted_to_trade=False(필터 탈락) 종목은 제외하고, Worker가 선정한
+        converted_to_trade=True 종목만 모니터링 대상에 반영한다."""
         engine = _make_engine()
         engine._screened_codes = set()
         # watchlist을 비워서 관심종목 제외 필터 방지
         engine._watchlist_codes = []
 
-        # screening_results DB 레코드 mock (모두 converted_to_trade=False)
+        # 999001만 Worker 선정(converted), 나머지는 필터 탈락(unconverted)
         mock_results = []
-        for i, (code, name) in enumerate([
-            ("999001", "테스트A"), ("999002", "테스트B"), ("999003", "테스트C"),
+        for i, (code, name, converted) in enumerate([
+            ("999001", "테스트A", True),
+            ("999002", "테스트B", False),
+            ("999003", "테스트C", False),
         ]):
             r = MagicMock()
             r.stock_code = code
             r.stock_name = name
-            r.converted_to_trade = False
+            r.converted_to_trade = converted
             r.screening_rank = i + 1
             mock_results.append(r)
 
@@ -649,8 +652,8 @@ class TestSignalSummaryMetric:
             mock_session.return_value.__exit__ = MagicMock(return_value=False)
             await engine._screen_stocks()
 
-        # converted_to_trade 필터 없이 3종목 모두 반영
-        assert engine._screened_codes == {"999001", "999002", "999003"}
+        # Worker가 선정한(converted_to_trade=True) 종목만 반영
+        assert engine._screened_codes == {"999001"}
 
     @pytest.mark.asyncio
     async def test_screen_stocks_deduplicates(self) -> None:
@@ -665,7 +668,7 @@ class TestSignalSummaryMetric:
             r = MagicMock()
             r.stock_code = "999001"
             r.stock_name = "테스트A"
-            r.converted_to_trade = False
+            r.converted_to_trade = True
             r.screening_rank = 1
             mock_results.append(r)
 
@@ -694,7 +697,7 @@ class TestSignalSummaryMetric:
             r = MagicMock()
             r.stock_code = code
             r.stock_name = f"종목{i}"
-            r.converted_to_trade = False
+            r.converted_to_trade = True
             r.screening_rank = i + 1
             mock_results.append(r)
 
