@@ -305,14 +305,17 @@ class QuoteAPI:
         """
         logger.info("[거래량 순위 조회] 시장=%s, 상위 %d종목", market, top_n)
 
+        # 소스단 필터: 관리종목/정리매매/투자위험/ETF/ETN/SPAC 등을 거래소 실시간 지정
+        # 기반으로 제외(market_actions 일일 sync 사각 보완). 랭킹 기준·보통주 여부도 설정값 사용.
+        scfg = settings.screening
         params = {
             "FID_COND_MRKT_DIV_CODE": market,
             "FID_COND_SCR_DIV_CODE": "20171",
             "FID_INPUT_ISCD": "0000",
-            "FID_DIV_CLS_CODE": "0",
-            "FID_BLNG_CLS_CODE": "0",
+            "FID_DIV_CLS_CODE": "1" if scfg.common_stock_only else "0",
+            "FID_BLNG_CLS_CODE": scfg.rank_metric,
             "FID_TRGT_CLS_CODE": "111111111",
-            "FID_TRGT_EXLS_CLS_CODE": "000000",
+            "FID_TRGT_EXLS_CLS_CODE": scfg.exclude_targets,
             "FID_INPUT_PRICE_1": "0",
             "FID_INPUT_PRICE_2": "0",
             "FID_VOL_CNT": "0",

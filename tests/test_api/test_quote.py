@@ -291,3 +291,34 @@ class TestQuoteAPI:
         params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
         assert params["FID_INPUT_ISCD"] == "005930"
         assert params["FID_COND_MRKT_DIV_CODE"] == "J"
+
+    async def test_get_volume_rank_passes_screening_filter_params(self) -> None:
+        """거래량순위 조회가 설정된 제외비트(10자리)·보통주·랭킹기준을 전송한다."""
+        from src.config import settings
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = {
+            "output": [
+                {
+                    "MKSC_SHRN_ISCD": "005930",
+                    "HTS_KOR_ISNM": "삼성전자",
+                    "STCK_PRPR": "70000",
+                    "PRDY_CTRT": "1.0",
+                    "ACML_VOL": "1000000",
+                    "LSTN_STCN": "5000000000",
+                }
+            ]
+        }
+
+        api = QuoteAPI(client=mock_client)
+        result = await api.get_volume_rank(top_n=10)
+
+        call_kwargs = mock_client.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params")
+        assert params["FID_TRGT_EXLS_CLS_CODE"] == settings.screening.exclude_targets
+        assert len(params["FID_TRGT_EXLS_CLS_CODE"]) == 10
+        assert params["FID_DIV_CLS_CODE"] == (
+            "1" if settings.screening.common_stock_only else "0"
+        )
+        assert params["FID_BLNG_CLS_CODE"] == settings.screening.rank_metric
+        assert result[0].stock_code == "005930"

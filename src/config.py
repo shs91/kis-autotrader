@@ -425,6 +425,24 @@ class ScreeningConfig:
         default_factory=lambda: _env_float("SCREENING_MIN_SCORE", 0.3)
     )
 
+    # ── 거래량순위 소스 파라미터 (KIS volume-rank FHPST01710000) ──
+    # 소속구분(랭킹 기준): "0"평균거래량 · "1"거래증가율 · "2"평균거래회전율 ·
+    # "3"거래금액순 · "4"평균거래금액회전율. 기본 "0"(거래량). 거래금액순 전환은 env로 토글.
+    rank_metric: str = field(
+        default_factory=lambda: _env("SCREENING_RANK_METRIC", "0")
+    )
+    # 대상제외 10자리 비트("1"=제외): 차례대로 투자위험/경고/주의·관리종목·정리매매·
+    # 불성실공시·우선주·거래정지·ETF·ETN·신용주문불가·SPAC. 기본은 투자위험·관리·정리매매·
+    # 불성실공시·거래정지·ETF·ETN·SPAC 제외(우선주는 common_stock_only로, 신용불가 미제외).
+    exclude_targets: str = field(
+        default_factory=lambda: _env("SCREENING_TRGT_EXLS", "1111011101")
+    )
+    # 보통주만 조회(우선주 제외). FID_DIV_CLS_CODE "1"(보통주)/"0"(전체).
+    common_stock_only: bool = field(
+        default_factory=lambda: _env("SCREENING_COMMON_STOCK_ONLY", "true").lower()
+        == "true"
+    )
+
 
 @dataclass(frozen=True)
 class HealthConfig:
