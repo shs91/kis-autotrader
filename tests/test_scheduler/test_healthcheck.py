@@ -115,6 +115,27 @@ class TestBuildHealthcheckMessage:
         assert "DISCLOSURE_FATAL" in text
         assert "445" in text
 
+    def test_message_includes_eval_amount_and_api_calls(self) -> None:
+        """보유평가·실제 API 호출수가 메시지에 표기된다(API 0 버그 회귀)."""
+        result = HealthcheckResult(
+            slot=HealthcheckSlot.MORNING,
+            cycle_count=1261,
+            api_calls=8091,
+            api_limit=50_000,
+            signals_buy=1,
+            signals_sell=0,
+            orders_buy=1,
+            orders_sell=0,
+            holdings_count=1,
+            holdings_codes=["005880"],
+            deposit=500_000,
+            eval_amount=49_920,
+        )
+        text = build_healthcheck_message(result)
+        assert "보유평가" in text
+        assert "49,920" in text
+        assert "8,091" in text
+
 
 class TestCollectHealthcheck:
     """collect_healthcheck — DB/engine 통합 수집기."""
@@ -124,10 +145,12 @@ class TestCollectHealthcheck:
         """engine과 DB에서 수치를 수집해 HealthcheckResult로 반환."""
         engine = MagicMock()
         engine._cycle_count = 470
+        engine._client._limiter.daily_count = 8091
 
         # KIS 잔고 mock
         balance = MagicMock()
         balance.deposit = 11_492_074
+        balance.total_eval_amount = 49_920
         balance.holdings = []
         engine._get_balance = AsyncMock(return_value=balance)
 
@@ -143,10 +166,12 @@ class TestCollectHealthcheck:
             result = await collect_healthcheck(engine, slot=HealthcheckSlot.MORNING)
 
         assert result.cycle_count == 470
+        assert result.api_calls == 8091  # limiter.daily_count에서 읽음(과거 항상 0이던 버그)
         assert result.signals_buy == 441
         assert result.orders_buy == 0
         assert result.holdings_count == 0
         assert result.deposit == 11_492_074
+        assert result.eval_amount == 49_920
         assert result.buy_reject_reasons == {"DISCLOSURE_FATAL": 445}
 
 

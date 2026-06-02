@@ -55,6 +55,7 @@ class HealthcheckResult:
     holdings_count: int
     holdings_codes: list[str]
     deposit: int
+    eval_amount: int = 0
     buy_reject_reasons: dict[str, int] = field(default_factory=dict)
 
 
@@ -83,7 +84,7 @@ def build_healthcheck_message(result: HealthcheckResult) -> str:
         f"• 주문 — 매도: <b>{result.orders_sell}건</b>",
         f"• 보유: {result.holdings_count}종목"
         + (f" ({', '.join(result.holdings_codes[:5])})" if result.holdings_codes else ""),
-        f"• 예수금: {result.deposit:,}원",
+        f"• 예수금: {result.deposit:,}원 · 보유평가: {result.eval_amount:,}원",
     ]
 
     if warn and result.buy_reject_reasons:
@@ -230,11 +231,13 @@ async def collect_healthcheck(
 
     # KIS 잔고 — 실패해도 빈 값으로 계속.
     deposit = 0
+    eval_amount = 0
     holdings_count = 0
     holdings_codes: list[str] = []
     try:
         balance = await engine._get_balance(force=False)  # noqa: SLF001
         deposit = int(getattr(balance, "deposit", 0) or 0)
+        eval_amount = int(getattr(balance, "total_eval_amount", 0) or 0)
         holdings = [h for h in getattr(balance, "holdings", []) if getattr(h, "quantity", 0) > 0]
         holdings_count = len(holdings)
         holdings_codes = [getattr(h, "stock_code", "") for h in holdings]
@@ -249,8 +252,13 @@ async def collect_healthcheck(
     except Exception:
         api_limit_attr = 50_000
 
-    # daily_api_calls는 engine 내부에 노출돼 있지 않으면 0으로.
-    api_calls = int(getattr(engine, "_daily_api_calls", 0) or 0)
+    # 일일 API 호출 수는 rate limiter가 보유(daily_count). 과거 engine._daily_api_calls
+    # (미존재 속성)를 읽어 항상 0으로 표기되던 버그 → limiter에서 직접 읽는다.
+    api_calls = 0
+    try:
+        api_calls = int(engine._client._limiter.daily_count)  # noqa: SLF001
+    except Exception:
+        api_calls = 0
 
     return HealthcheckResult(
         slot=slot,
@@ -264,6 +272,7 @@ async def collect_healthcheck(
         holdings_count=holdings_count,
         holdings_codes=holdings_codes,
         deposit=deposit,
+        eval_amount=eval_amount,
         buy_reject_reasons=dict(counts.get("buy_reject_reasons", {}) or {}),
     )
 
