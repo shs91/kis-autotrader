@@ -1,5 +1,29 @@
 # 공통 규칙 (모든 분석 프롬프트 적용)
 
+## 분석 대상 DB (실전 — 반드시 먼저 읽을 것)
+
+- **2026-06-01부로 실전(real) 전면 전환**. 모든 분석·리포트·제안서는 **실전 운영 DB `kis_trader_real`** 만을 대상으로 한다.
+- 모의 DB `kis_trader`는 **분석 대상이 아니다** (2026-05-30 이후 매매 사이클 비가동, 뉴스 수집기만 잔존). 모의 데이터를 실전 분석에 인용·혼용하지 말 것.
+- 실전은 **실 자본이 투입된 계좌**다. 손익·리스크 수치는 실제 원화 손익이며, 판단은 모의보다 보수적으로 한다.
+
+### DB 검증 가드 (필수 — 데이터 조회 전 1회 실행)
+
+데이터 조회를 시작하기 전에 반드시 아래를 실행해 연결 DB를 확인한다.
+
+```sql
+SELECT current_database();
+```
+
+- 결과가 **`kis_trader_real`** 이면 → 정상. 분석을 진행한다.
+- 결과가 `kis_trader`(모의) 또는 그 외이면 → **즉시 중단**한다. 모의/잘못된 DB로 리포트·제안서를 생성하지 말 것. 아래 메시지를 출력하고 종료한다:
+  > ⚠️ PostgreSQL MCP가 실전 DB(`kis_trader_real`)가 아닌 `<현재 DB>`에 연결되어 있습니다. 실전 분석 불가. Claude Desktop의 `kis-postgres`(Cowork) 및 repo `.mcp.json`(Code)의 연결 문자열 끝을 `.../kis_trader_real`로 변경한 뒤(Cowork는 Claude Desktop 재시작 필요) 재실행하세요.
+- **폴백(MCP 미연결 시에만, Code 루틴 `claude -p` 한정)**: PostgreSQL MCP 자체가 연결되지 않은 경우에 한해 `docker exec kis-postgres psql -U kis_user -d kis_trader_real` 로 조회한다. **반드시 `-d kis_trader_real`을 명시**한다. Cowork 세션은 psql 직접 실행 대신 위 가드로 중단·보고한다.
+
+## 실전 환경 특이사항 (분석 시 참고)
+
+- API 초당 호출 한도: 실전 **20건/초** (모의 5/초), 일일 50,000건. 1초 사이클은 오전 중 일일 한도를 소진할 수 있다(`_calculate_trading_interval` 하한이 레버). `api_limit_hits > 0`·오후 주문거부(EGW00201 등)는 한도 소진을 1순위로 의심한다.
+- 실전 첫 주(W23) 식별 결함: 휴장일 게이팅 누락(`holidays.json`), 단일 종목 교착, 실전 `event_logs` 미기록(관측성 공백). 동일 패턴 재발 여부를 점검한다.
+
 ## 타임존 규칙
 
 - DB의 timestamp는 UTC로 저장된다.
@@ -65,7 +89,7 @@ ORDER BY implemented_at DESC;
 ## 공통 주의사항
 
 - `.env`, `credentials.json`, `token.json` 절대 읽지 마.
-- Python 스크립트를 직접 실행하지 않는다. 모든 데이터 조회는 PostgreSQL MCP를 통해 수행한다.
+- Python 스크립트를 직접 실행하지 않는다. 데이터 조회는 PostgreSQL MCP를 통해 수행한다(연결 DB는 위 "DB 검증 가드"로 `kis_trader_real` 확인 필수). MCP 자체가 미연결인 경우에만, Code 루틴(`claude -p`)에 한해 `docker exec ... -d kis_trader_real` 폴백을 허용한다.
 - 데이터 부족 시 추측 금지: **"데이터 축적 필요 — N일 이상 데이터 축적 후 재분석"** 으로 명시.
 - 리포트·제안서는 한국어로 작성한다.
 - 파일명 날짜는 반드시 **KST 기준**으로 결정한다.

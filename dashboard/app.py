@@ -23,7 +23,7 @@ st.set_page_config(
 
 # ── DB 연결 ──────────────────────────────────────
 
-DB_URL = st.secrets.get("DATABASE_URL", "postgresql://kis_user:kis_password@localhost:5432/kis_trader")
+DB_URL = st.secrets.get("DATABASE_URL", "postgresql://kis_user:kis_password@localhost:5432/kis_trader_real")
 HEALTH_URL = st.secrets.get("HEALTH_URL", "http://localhost:18923/health")
 
 
@@ -37,6 +37,26 @@ def get_session() -> Session:
     """DB 세션을 반환한다."""
     factory = sessionmaker(bind=get_engine())
     return factory()
+
+
+def assert_real_db() -> None:
+    """연결된 DB가 실전(kis_trader_real)인지 확인하고, 아니면 경고 배너를 띄운다.
+
+    2026-06-01 실전 전면 전환. secrets.toml의 DATABASE_URL이 모의(kis_trader)로 설정돼
+    있으면 대시보드가 조용히 모의 데이터를 표시하므로, 시각적으로 차단한다.
+    """
+    try:
+        with get_engine().connect() as conn:
+            db_name = conn.execute(text("SELECT current_database()")).scalar()
+    except Exception:  # noqa: BLE001 — 연결 실패는 별도 헬스/쿼리 경로에서 처리
+        return
+    if db_name != "kis_trader_real":
+        st.warning(
+            f"⚠️ 대시보드가 실전 DB(`kis_trader_real`)가 아닌 `{db_name}`에 연결되어 있습니다. "
+            "모의 데이터를 표시 중일 수 있습니다 — `dashboard/.streamlit/secrets.toml`의 "
+            "`DATABASE_URL`을 `.../kis_trader_real`로 설정하세요.",
+            icon="⚠️",
+        )
 
 
 # ── 헬스체크 ─────────────────────────────────────
@@ -154,6 +174,7 @@ def load_recent_orders(limit: int = 50) -> pd.DataFrame:
 # ── 헤더 ────────────────────────────────────────
 
 st.title("\U0001f4c8 KIS 자동매매 대시보드")
+assert_real_db()  # 실전 DB(kis_trader_real) 연결 확인 — 모의면 경고 배너
 
 # ── 시스템 상태 ──────────────────────────────────
 
