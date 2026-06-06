@@ -1,5 +1,8 @@
 # 주간 분석 프롬프트
 
+> ⚠️ **DEPRECATED — 스케줄 미사용(참조용 보존).** 현재 주간 자동 통계는 `weekly_routine.md`(Code), 해석은 `weekly_review.md`(Cowork)가 수행한다.
+> 부득이 수동 실행 시에도 분석 대상은 **실전 `kis_trader_real`** 이며, `_common_rules.md`의 "DB 검증 가드"(`SELECT current_database();` ≠ `kis_trader_real`이면 즉시 중단)를 반드시 따른다.
+
 ## 공통 규칙
 
 `docs/prompts/_common_rules.md`를 먼저 읽고 적용할 것.

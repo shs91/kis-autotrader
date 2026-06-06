@@ -44,3 +44,7 @@ class TestIsMarketClosed:
     def test_christmas(self) -> None:
         """크리스마스는 휴장이다."""
         assert is_market_closed(date(2026, 12, 25)) is True
+
+    def test_local_election_day(self) -> None:
+        """제9회 전국동시지방선거 임시공휴일은 휴장이다."""
+        assert is_market_closed(date(2026, 6, 3)) is True

@@ -12,7 +12,7 @@ st.set_page_config(page_title="시그널 분석", page_icon="\U0001f4e1", layout
 
 DB_URL = st.secrets.get(
     "DATABASE_URL",
-    "postgresql://kis_user:kis_password@localhost:5432/kis_trader",
+    "postgresql://kis_user:kis_password@localhost:5432/kis_trader_real",
 )
 
 

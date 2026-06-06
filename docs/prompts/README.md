@@ -4,6 +4,9 @@
 
 분석 작업을 **Code (자동 실행)** 과 **Cowork (대화형 판단)** 으로 분리한다.
 
+> **분석 대상 DB = 실전 `kis_trader_real`** (2026-06-01 실전 전면 전환). 모의 `kis_trader`는 분석 대상이 아니다.
+> 데이터 소스: Code 루틴은 repo `.mcp.json`, Cowork는 Claude Desktop `kis-postgres` MCP — **둘 다 연결 문자열이 `.../kis_trader_real`이어야 한다.** 모든 프롬프트는 시작 시 `_common_rules.md`의 "DB 검증 가드"로 연결 DB를 확인한다.
+
 - **Code**: 결정론적 작업 (쿼리 실행, 정형 리포트 생성, 임계값 기반 제안서)
 - **Cowork**: 해석적 작업 (효과 검증, 전략 방향 논의, 아키텍처 판단)
 
@@ -18,9 +21,9 @@ docs/prompts/
 ├── weekend_review.md         ← [Cowork] 통합 진입점 (매주 토요일 스케줄)
 ├── weekly_review.md          ← [Cowork] 주간 해석·판단 (weekend_review에서 호출)
 ├── monthly_review.md         ← [Cowork] 월간 전략 논의 (마지막주 토요일만 호출)
-├── daily_analysis.md         ← [레거시] 기존 통합 프롬프트 (참조용 보존)
-├── weekly_analysis.md        ← [레거시] 기존 통합 프롬프트 (참조용 보존)
-└── monthly_analysis.md       ← [레거시] 기존 통합 프롬프트 (참조용 보존)
+├── daily_analysis.md         ← [레거시] 기존 통합 프롬프트 (참조용 보존, 스케줄 미사용)
+├── weekly_analysis.md        ← [레거시] 기존 통합 프롬프트 (참조용 보존, 스케줄 미사용)
+└── monthly_analysis.md       ← [활성] monthly_review가 참조하는 월간 쿼리 소스 (쿼리 1~11)
 ```
 
 ## 실행 흐름
@@ -153,6 +156,5 @@ Cowork 스케줄 **1개만** 등록 (매주 토요일):
 
 ## 레거시 프롬프트
 
-`daily_analysis.md`, `weekly_analysis.md`, `monthly_analysis.md`는 분리 전 통합 프롬프트.
-분리 완료 후에도 참조용으로 보존하되, Cowork 스케줄에서는 사용하지 않는다.
-향후 안정화되면 삭제 가능.
+`daily_analysis.md`, `weekly_analysis.md`는 분리 전 통합 프롬프트로, 참조용 보존이며 스케줄에서 사용하지 않는다(향후 안정화되면 삭제 가능).
+단, `monthly_analysis.md`는 **레거시가 아니라 활성**이다 — `monthly_review.md`(마지막주 토요일 Cowork)가 그 쿼리 1~11을 그대로 호출하는 월간 쿼리 소스다.

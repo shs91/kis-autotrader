@@ -1,8 +1,11 @@
 # 월간 분석 프롬프트
 
+> 분석 대상은 **실전 운영 DB `kis_trader_real`** 이다 (모의 `kis_trader` 아님).
+
 ## 공통 규칙
 
 `docs/prompts/_common_rules.md`를 먼저 읽고 적용할 것.
+**시작 시 "DB 검증 가드"(`SELECT current_database();`)를 실행**해 연결 DB가 실전 `kis_trader_real`인지 확인한다 (모의면 즉시 중단).
 
 ## 실행 조건 (최우선 확인)
 
