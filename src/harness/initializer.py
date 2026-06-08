@@ -32,6 +32,24 @@ logger = setup_logger(__name__)
 _KST = timezone(timedelta(hours=9))
 _DEFAULT_DISK_THRESHOLD_GB = 1.0
 
+# 분석 파이프라인(Cowork)이 작성하는 정상 산출물 경로.
+# 이들의 untracked 파일은 git_clean 위반으로 보지 않는다 — 제안서/리포트가
+# 커밋 전 untracked로 남는 것은 정상이며, 이를 FAIL로 잡으면 자동 구현
+# 코디네이터가 사이클을 보류해 처리 교착이 발생한다.
+_GIT_CLEAN_IGNORED_PREFIXES = ("docs/proposals/", "docs/reports/")
+
+
+def _is_ignorable_untracked(porcelain_line: str) -> bool:
+    """git status --porcelain 한 줄이 무시 가능한 untracked 산출물인지 판정.
+
+    untracked(``??``)이면서 경로가 docs/proposals·docs/reports 아래인 경우만
+    True. staged/modified tracked 변경이나 src/ 등 코드 변경은 항상 False.
+    """
+    if not porcelain_line.startswith("??"):
+        return False
+    path = porcelain_line[3:].strip().strip('"')
+    return path.startswith(_GIT_CLEAN_IGNORED_PREFIXES)
+
 
 @dataclass(frozen=True)
 class EnvCheckResult:
@@ -93,7 +111,9 @@ class Initializer:
     def _check_git_clean(self) -> EnvCheckResult:
         try:
             cp = subprocess.run(  # noqa: S603
-                ["git", "status", "--porcelain"],  # noqa: S607
+                # --untracked-files=all: untracked 디렉토리를 축약(`?? docs/`)하지
+                # 않고 개별 파일로 펼쳐, 경로 prefix 기반 무시 판정을 일관되게 한다.
+                ["git", "status", "--porcelain", "--untracked-files=all"],  # noqa: S607
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
@@ -112,11 +132,17 @@ class Initializer:
                 result=InitializerCheckResult.FAIL,
                 detail=cp.stderr.strip()[:200],
             )
-        if cp.stdout.strip():
+        blocking = [
+            line
+            for line in cp.stdout.splitlines()
+            if line.strip() and not _is_ignorable_untracked(line)
+        ]
+        if blocking:
+            joined = "\n".join(blocking)
             return EnvCheckResult(
                 name="git_clean",
                 result=InitializerCheckResult.FAIL,
-                detail=f"uncommitted changes:\n{cp.stdout.strip()[:200]}",
+                detail=f"uncommitted changes:\n{joined[:200]}",
             )
         return EnvCheckResult(name="git_clean", result=InitializerCheckResult.PASS)
 

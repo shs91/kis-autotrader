@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-06-08] 자동 구현 git_clean — docs 산출물 untracked 제외(교착 해소) (v0.9.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/harness/initializer.py: `_check_git_clean`이 docs/proposals·docs/reports의 untracked 파일을 위반에서 제외(`_is_ignorable_untracked`). `git status --porcelain`에 `--untracked-files=all` 추가로 디렉토리 축약(`?? docs/`) 비의존. src/ 코드 변경·tracked 수정은 그대로 FAIL.
+  - tests/test_harness/test_initializer.py: docs 예외 2종(proposals·reports PASS) + 안전 가드 4종(clean PASS / src untracked·modified tracked·mixed FAIL) TDD.
+- 배경: 2026-06-06 제안서(event-logs-error-integrity)가 자동 구현되지 않은 원인 분석. Initializer가 untracked 제안서/리포트까지 git_clean FAIL로 잡아, 코디네이터가 사이클을 비결정적으로 보류(6/3 통과·6/8 no-op). DB엔 06-06이 READY로 적재됐으나 `list_ready` 조회조차 없이 completed=0 종료(progress.json history 빈 채, diff 0).
+- 영향: 분석 파이프라인 산출물(제안서·리포트)이 커밋 전 untracked로 남아도 git_clean PASS → 다음 사이클이 정상 처리. src/ 코드 변경·tracked 수정 차단은 유지(안전). 매매 로직·DB 마이그레이션·신규 env 없음.
+- 검증 결과: pytest test_initializer **11 passed**(신규 6) | mypy harness 26 files ✅ | ruff 변경파일 ✅. 잔존 pipeline_cli 6건은 공유 DB 기존 실패로 무관(baseline stash 재현 확인).
+- 비고: 운영자 액션 불필요(자동 구현 파이프라인 Initializer만 영향, `com.kis.autotrader` 매매 서비스 무관). 다음 auto-implement 사이클(6/9 17:15)이 06-06 제안서를 자동 처리할 전망.
+
+---
+
 ## [2026-06-08] 장 마감 매매 진단 알림 — 결산 직후 "왜 매매했나/안했나" 가시화 (v0.9.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -55,18 +67,5 @@
 - 영향: 문자 포함 코드와 RISE/채권혼합/ETF 등 펀드형 상품이 스크리닝 후보·모니터링에서 차단. 매매 로직 불변(ETF 판별만 강화). DB 마이그레이션·신규 env 없음.
 - 검증 결과: pytest 전체 **1012 passed**(ETF 회귀 5건 포함) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 상태 기존 실패로 무관.
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 거래량 랭킹 소스 자체 개선(시총/유동성 결합)은 후속 과제.
-
----
-
-## [2026-06-01] 스크리닝 필터 실효화 — 엔진이 Worker 선정분만 모니터링 + buy-time 가격 하한 (v0.8.4)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: ① `_screen_stocks`가 `converted_to_trade=True`(Worker가 가격/등락률/ETF/위험 필터를 통과시켜 선정)인 종목만 모니터링에 편입(기존: 거래량 순위 원본 전체를 필터 무시하고 편입). ② `_execute_buy`에 하드 가격 안전 플로어 추가(`현재가<SCREENING_MIN_PRICE` 또는 ≤0이면 `BLOCK_PRICE_FLOOR`로 매수 차단).
-  - tests/test_engine_db_integration.py: `_screen_stocks` 테스트 3종을 새 동작(converted-only)으로 갱신.
-  - tests/test_engine_buy_funnel.py: 가격 하한 차단(BLOCK_PRICE_FLOOR) 테스트 추가.
-- 배경: 실전 첫날(6/1) 진단 — 5원·-28.57% 정리매매성 종목 230980이 가격(≥1000)·등락률(-3~+15%)·ETF·위험 필터를 전부 우회해 모니터링됨. 근본원인 ① 엔진 `_screen_stocks`가 screening_results(=Worker가 `_record_to_db(ranked,…)`로 기록한 필터 전 거래량 순위 원본)를 순위순으로 편입하며 Worker 필터를 의도적으로 무시 ② market_actions에 230980 있으나 위험플래그 전부 FALSE(KIS 종목마스터 사각).
-- 영향: Worker의 `SCREENING_*` 필터가 모니터링/매매 유니버스에 실제 반영(파라미터 튜닝이 비로소 유효). buy-time 가격 하한이 종목마스터 사각을 보완해 페니/정리매매 매수를 실시간 차단. 모니터링 종목은 필터 통과분으로 좁아짐(품질↑). DB 마이그레이션·신규 env 없음(기존 SCREENING_MIN_PRICE 재사용).
-- 검증 결과: pytest 전체 **1008 passed**(신규/수정 4건 포함) | mypy strict ✅ | ruff ✅. 잔존 7건(test_order 1·pipeline_cli 6)은 공유 DB 상태 기존 실패로 본 변경과 무관(신규 실패 0).
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 모니터링 종목 수가 줄 수 있으므로(필터 생존분만) 스크리닝 소스/파라미터 튜닝과 함께 운용 권장.
 
 ---
