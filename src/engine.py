@@ -19,6 +19,7 @@ from src.api.quote import CurrentPrice, QuoteAPI, VolumeRankItem
 from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
 from src.config import settings
+from src.db.analytics import build_daily_diagnostics
 from src.db.event_logger import log_trade, log_warning
 from src.db.models import BuyReason, OrderStatus, OrderType, SellReason, TradeType
 from src.db.repository import (
@@ -687,6 +688,16 @@ class TradingEngine:
                 realized_profit_loss=realized_pl,
                 realized_rate=realized_rate,
             )
+
+            # 매매 진단 알림 (결산 직후 별도 1건) — 집계 실패는 결산·매매에 영향 없음
+            try:
+                with get_session() as session:
+                    diag = build_daily_diagnostics(session, today)
+                diag["deposit"] = int(balance.deposit)
+                diag["holdings"] = sum(1 for h in balance.holdings if h.quantity > 0)
+                self._enqueue_telegram_diagnostics(diag)
+            except Exception:
+                logger.exception("매매 진단 집계/적재 실패 (결산·매매에 영향 없음)")
 
             self._client._limiter.log_daily_count()
             logger.info(
@@ -2258,6 +2269,16 @@ class TradingEngine:
             },
             priority=3,
             idempotency_key=f"telegram_summary_{today_str}",
+        )
+
+    def _enqueue_telegram_diagnostics(self, diag: dict[str, Any]) -> None:
+        """장 마감 매매 진단 알림을 Worker Queue에 적재한다(결산 직후 별도 1건)."""
+        today_str = date.today().isoformat()
+        self._task_queue.enqueue(
+            task_type="telegram_notify",
+            payload={"notify_type": "diagnostics", "message_data": {"diag": diag}},
+            priority=3,
+            idempotency_key=f"telegram_diag_{today_str}",
         )
 
     def _enqueue_daily_summary(self, today_str: str) -> None:

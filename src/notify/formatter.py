@@ -224,14 +224,16 @@ def format_system(message: str) -> str:
     return f"⚙️ <b>[시스템]</b> {message}"
 
 
-# 매수 거절 사유 → 한글 라벨 (없으면 원문 표시)
+# 매수 거절 사유 코드 → 한글 라벨 (engine._record_buy_reject reason 코드 기준, 없으면 원문 표시)
 _REJECT_LABELS: dict[str, str] = {
+    "LOW_CONFIDENCE": "저신뢰",
+    "POSITION_RATIO": "포지션비율",
+    "INSUFFICIENT_CASH": "예수금부족",
     "DAILY_TRADE_LIMIT": "일일한도",
     "DAILY_TRADE_LIMIT_PER_STOCK": "종목한도",
-    "LOW_CONFIDENCE": "저신뢰",
-    "INSUFFICIENT_BALANCE": "예수금부족",
-    "RISK": "위험",
-    "PRICE_FLOOR": "가격하한",
+    "MARKET_CLOSE_GUARD": "마감임박",
+    "MAX_CONSECUTIVE_LOSSES": "연패",
+    "MAX_DAILY_DRAWDOWN": "일중손실",
 }
 
 
