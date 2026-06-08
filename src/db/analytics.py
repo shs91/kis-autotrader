@@ -153,6 +153,140 @@ def get_daily_screening(session: Session, target_date: date) -> dict[str, Any]:
     }
 
 
+def build_daily_diagnostics(session: Session, target_date: date) -> dict[str, Any]:
+    """장 마감 매매 진단 알림용 당일 지표를 집계한다(읽기 전용).
+
+    system_metrics(EVAL_TARGETS·SIGNAL_SUMMARY·SIGNAL_SKIP·SCREENING_*·BUY_REJECT)와
+    trades를 모아 진단 dict를 만든다. signals 테이블은 사용하지 않는다.
+    """
+    start, end = _day_range(target_date)
+    metrics = (
+        session.execute(
+            select(SystemMetric)
+            .where(SystemMetric.recorded_at >= start, SystemMetric.recorded_at < end)
+            .order_by(SystemMetric.recorded_at)
+        )
+        .scalars()
+        .all()
+    )
+
+    by_type: dict[str, list[SystemMetric]] = {}
+    for m in metrics:
+        by_type.setdefault(m.metric_type, []).append(m)
+
+    # 모니터링 종목 (당일 마지막 EVAL_TARGETS)
+    targets: list[str] = []
+    monitored_counts: dict[str, int] = {"positions": 0, "watchlist": 0, "screening": 0}
+    eval_targets = by_type.get("EVAL_TARGETS")
+    if eval_targets:
+        last = eval_targets[-1].detail or {}
+        targets = list(last.get("targets", []))
+        monitored_counts = dict(last.get("counts", monitored_counts))
+
+    # 종목별 당일 max confidence (SIGNAL_SKIP detail)
+    per_stock_conf: dict[str, float] = {}
+    for m in by_type.get("SIGNAL_SKIP", []):
+        d = m.detail or {}
+        code = d.get("stock_code")
+        if code:
+            per_stock_conf[code] = max(
+                per_stock_conf.get(code, 0.0), float(d.get("confidence", 0.0))
+            )
+
+    names = _resolve_stock_names(session, targets)
+    monitored = [
+        {"code": c, "name": names.get(c, c), "max_conf": round(per_stock_conf.get(c, 0.0), 3)}
+        for c in targets
+    ]
+
+    # 스크리닝
+    sc = by_type.get("SCREENING_CANDIDATE", [])
+    ranked_total = max((int((m.detail or {}).get("ranked_total", 0)) for m in sc), default=0)
+    candidate_avg = (
+        sum(int((m.detail or {}).get("candidate_count", 0)) for m in sc) / len(sc) if sc else 0.0
+    )
+    risk_excluded = sorted(
+        {
+            c
+            for m in by_type.get("SCREENING_RISK_EXCLUDED", [])
+            for c in (m.detail or {}).get("codes", [])
+        }
+    )
+
+    # 매수 거절 사유별 카운트
+    buy_rejects: dict[str, int] = {}
+    for m in by_type.get("BUY_REJECT", []):
+        reason = str((m.detail or {}).get("reason", "UNKNOWN"))
+        buy_rejects[reason] = buy_rejects.get(reason, 0) + 1
+
+    # 체결
+    trades = get_daily_trades(session, target_date)
+    buy_count = sum(1 for t in trades if t["trade_type"] == "BUY")
+    sell_count = sum(1 for t in trades if t["trade_type"] == "SELL")
+
+    max_conf = max(
+        (
+            float((m.detail or {}).get("max_confidence", 0.0))
+            for m in by_type.get("SIGNAL_SUMMARY", [])
+        ),
+        default=0.0,
+    )
+
+    return {
+        "trade_date": target_date.isoformat(),
+        "trade_count": len(trades),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "monitored": monitored,
+        "monitored_counts": monitored_counts,
+        "screening": {
+            "ranked_total": ranked_total,
+            "candidate_avg": round(candidate_avg, 2),
+            "risk_excluded": risk_excluded,
+        },
+        "buy_rejects": buy_rejects,
+        "deposit": 0,  # engine이 balance에서 채움
+        "holdings": 0,  # engine이 balance에서 채움
+        "headline": _diagnostics_headline(
+            trade_count=len(trades),
+            monitored=monitored,
+            candidate_avg=candidate_avg,
+            max_conf=max_conf,
+        ),
+    }
+
+
+def _resolve_stock_names(session: Session, codes: list[str]) -> dict[str, str]:
+    """stocks 테이블에서 종목명을 조회한다(code→name). 없으면 호출부에서 코드로 폴백."""
+    if not codes:
+        return {}
+    from src.db.models import Stock
+
+    rows = session.execute(select(Stock.code, Stock.name).where(Stock.code.in_(codes))).all()
+    return {code: name for code, name in rows if name}
+
+
+def _diagnostics_headline(
+    *,
+    trade_count: int,
+    monitored: list[dict[str, Any]],
+    candidate_avg: float,
+    max_conf: float,
+) -> str:
+    """진단 한 줄 요약을 파생한다."""
+    if trade_count > 0:
+        return f"매매 {trade_count}건 — 정상"
+    parts: list[str] = []
+    if candidate_avg < 1.0:
+        parts.append("발굴 부족")
+    if monitored and all(m["max_conf"] == 0.0 for m in monitored):
+        parts.append("모니터링 전원 HOLD")
+    elif not monitored:
+        parts.append("모니터링 0종목")
+    reason = " + ".join(parts) if parts else f"max_conf {max_conf:.2f}"
+    return f"매매 0건 — {reason}"
+
+
 def get_daily_errors(session: Session, target_date: date) -> dict[str, Any]:
     """해당일 에러 집계를 반환한다.
 
