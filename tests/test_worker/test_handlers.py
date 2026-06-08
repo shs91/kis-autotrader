@@ -78,6 +78,21 @@ class TestTelegramNotifyHandler:
                 "message_data": {},
             })
 
+    @patch("src.notify.telegram.TelegramNotifier")
+    async def test_execute_routes_diagnostics(self, mock_notifier_cls):
+        """notify_type=diagnostics가 notify_diagnostics(diag=...)로 라우팅된다."""
+        mock_notifier = MagicMock()
+        mock_notifier.notify_diagnostics = AsyncMock()
+        mock_notifier_cls.return_value = mock_notifier
+
+        handler = TelegramNotifyHandler()
+        await handler.execute({
+            "notify_type": "diagnostics",
+            "message_data": {"diag": {"x": 1}},
+        })
+
+        mock_notifier.notify_diagnostics.assert_awaited_once_with(diag={"x": 1})
+
 
 @pytest.mark.asyncio()
 class TestDailySummaryHandler:

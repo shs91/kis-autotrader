@@ -294,3 +294,55 @@ def test_eval_profit_rate_no_holdings_is_zero() -> None:
 def test_eval_profit_rate_ignores_zero_qty() -> None:
     bal = _balance([_holding("035420", 0, 196_400.0, 0)], total_pl=0)
     assert eval_profit_rate(bal) == 0.0
+
+
+# ── 매매 진단 알림 (format_diagnostics) ──────────────────────
+
+
+def test_format_diagnostics_zero_trades() -> None:
+    from src.notify.formatter import format_diagnostics
+
+    diag = {
+        "trade_date": "2026-06-08",
+        "trade_count": 0,
+        "buy_count": 0,
+        "sell_count": 0,
+        "monitored": [
+            {"code": "027360", "name": "아주IB투자", "max_conf": 0.0},
+            {"code": "036170", "name": "에이치엠넥스", "max_conf": 0.0},
+        ],
+        "monitored_counts": {"positions": 0, "watchlist": 0, "screening": 2},
+        "screening": {"ranked_total": 30, "candidate_avg": 0.08, "risk_excluded": ["271830"]},
+        "buy_rejects": {},
+        "deposit": 449947,
+        "holdings": 0,
+        "headline": "매매 0건 — 발굴 부족 + 모니터링 전원 HOLD",
+    }
+    msg = format_diagnostics(diag)
+    assert "[매매 진단]" in msg
+    assert "2026-06-08" in msg
+    assert "매매 0건" in msg
+    assert "027360" in msg and "아주IB투자" in msg
+    assert "449,947" in msg
+    assert "271830" in msg
+
+
+def test_format_diagnostics_with_trades_and_rejects() -> None:
+    from src.notify.formatter import format_diagnostics
+
+    diag = {
+        "trade_date": "2026-06-08",
+        "trade_count": 2,
+        "buy_count": 1,
+        "sell_count": 1,
+        "monitored": [],
+        "monitored_counts": {"positions": 0, "watchlist": 0, "screening": 0},
+        "screening": {"ranked_total": 30, "candidate_avg": 1.5, "risk_excluded": []},
+        "buy_rejects": {"DAILY_TRADE_LIMIT": 3},
+        "deposit": 100000,
+        "holdings": 1,
+        "headline": "매매 2건 — 정상",
+    }
+    msg = format_diagnostics(diag)
+    assert "매매 2건" in msg
+    assert "DAILY_TRADE_LIMIT" in msg or "일일한도" in msg

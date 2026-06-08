@@ -79,6 +79,28 @@ class TestTelegramNotifier:
         assert "삼성전자" in msg
         assert "720,000" in msg
 
+    async def test_notify_diagnostics_calls_send(self) -> None:
+        """notify_diagnostics가 진단 메시지를 무음 전송한다."""
+        notifier = _make_notifier()
+        notifier.send = AsyncMock()  # type: ignore[method-assign]
+        diag = {
+            "trade_date": "2026-06-08",
+            "trade_count": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "monitored": [],
+            "monitored_counts": {"positions": 0, "watchlist": 0, "screening": 0},
+            "screening": {"ranked_total": 0, "candidate_avg": 0.0, "risk_excluded": []},
+            "buy_rejects": {},
+            "deposit": 0,
+            "holdings": 0,
+            "headline": "매매 0건 — 모니터링 0종목",
+        }
+        await notifier.notify_diagnostics(diag)
+        notifier.send.assert_called_once()
+        msg = notifier.send.call_args[0][0]
+        assert "[매매 진단]" in msg
+
     async def test_notify_buy_with_strategy(self) -> None:
         """notify_buy가 전략/시그널 정보를 포함한다."""
         notifier = _make_notifier()

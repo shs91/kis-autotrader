@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -16,6 +16,7 @@ from src.notify.formatter import (
     SellDetail,
     format_buy,
     format_daily_summary,
+    format_diagnostics,
     format_error,
     format_sell,
     format_system,
@@ -228,6 +229,10 @@ class TelegramNotifier:
     async def notify_system(self, message: str) -> None:
         """시스템 알림을 전송한다 (무음)."""
         await self.send(format_system(message))
+
+    async def notify_diagnostics(self, diag: dict[str, Any]) -> None:
+        """장 마감 매매 진단 알림을 전송한다 (무음)."""
+        await self.send(format_diagnostics(diag))
 
 
 def _safe_read_version() -> str | None:

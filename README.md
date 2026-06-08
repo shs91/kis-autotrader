@@ -12,7 +12,7 @@
 - **Worker 비동기 처리** — PostgreSQL Outbox 패턴으로 외부 I/O(Calendar, Telegram, DB 기록)를 별도 Worker에서 처리. 네트워크 장애 시 자동 재시도
 - **스케줄링** — 장 시작 전 토큰 갱신 → 장중 주기적 매매 → 장 마감 후 결산 자동 실행 (휴장일 자동 감지)
 - **Google Calendar 연동** — 일일 매매 결과를 캘린더 이벤트로 자동 등록 (Worker 경유, 재시도 지원)
-- **Telegram 알림** — 매매 체결(전략/손익 상세), 일일 결산(체결내역/계좌현황), 시스템 상태 알림 + Bot 명령어 16종 (Worker 경유)
+- **Telegram 알림** — 매매 체결(전략/손익 상세), 일일 결산(체결내역/계좌현황), 매매 진단(장 마감, 매매 사유/게이트 차단 가시화), 시스템 상태 알림 + Bot 명령어 16종 (Worker 경유)
 - **백테스트** — 과거 데이터 기반 전략 시뮬레이션, 성과 리포트 자동 생성
 - **헬스체크** — 경량 HTTP 서버로 프로세스/DB/스케줄러 상태 모니터링
 - **DB 영속성** — PostgreSQL + SQLAlchemy ORM + Alembic 마이그레이션 + 매매 분석 쿼리
@@ -573,7 +573,7 @@ DISCONNECTED → CONNECTING → CONNECTED → SUBSCRIBING → ACTIVE
 | 09:00~15:20 | `trading_job` | 시세 조회 → 전략 실행 → 주문 (종목 수 기반 간격 자동 계산) |
 | 12:30 | `healthcheck_morning_job` | 오전 매매 수치(사이클·시그널·주문·잔고) Telegram 전송, 0건이면 경고 |
 | 15:35 | `healthcheck_closing_job` | 장 마감 직후 종합 헬스체크 Telegram 전송 |
-| 15:40 | `post_market_job` | 일일 결산, DailyPerformance 저장, Calendar 이벤트 등록, Telegram 결산 알림 |
+| 15:40 | `post_market_job` | 일일 결산, DailyPerformance 저장, Calendar 이벤트 등록, Telegram 결산 알림 + 매매 진단 알림 |
 | 16:00 | `summarize_daily_job` | 일일 요약 집계 (trades, signals, screening_results → daily_summary UPSERT) |
 | 30분 간격 | `heartbeat` | 스케줄러 쓰레드 keepalive (macOS 장시간 sleep 방지) |
 

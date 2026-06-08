@@ -6,6 +6,21 @@
 
 ---
 
+## [2026-06-08] 장 마감 매매 진단 알림 — 결산 직후 "왜 매매했나/안했나" 가시화 (v0.8.9)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/db/analytics.py: `build_daily_diagnostics` 추가 — 당일 system_metrics(EVAL_TARGETS·SIGNAL_SUMMARY·SIGNAL_SKIP·SCREENING_CANDIDATE·SCREENING_RISK_EXCLUDED·BUY_REJECT)+trades 집계. `signals` 테이블 미사용(적재 공백 이슈와 독립). 보조 헬퍼 `_resolve_stock_names`(stocks.code→name), `_diagnostics_headline`.
+  - src/notify/formatter.py: `format_diagnostics` + `_REJECT_LABELS`(BUY_REJECT reason 코드→한글 라벨).
+  - src/notify/telegram.py: `notify_diagnostics` 메서드(worker 동적 디스패치 `notify_{type}`로 자동 연결).
+  - src/engine.py: `post_market` 결산 enqueue 직후 `_enqueue_telegram_diagnostics` 적재. 집계 실패는 try/except로 격리(결산·매매 무영향).
+  - tests/: test_analytics_diagnostics·test_engine_diagnostics 신규 + formatter·telegram·worker handlers 라우팅 테스트(신규 8건).
+- 배경: 매매 0건이 지속되나 텔레그램은 *체결*만 알려 "왜 안 사는지" 불가시(누적 체결 2건, 6/2 이후 신규 매수 0). 근본은 발굴 빈약(스크리닝 candidate≈0)+모니터링 종목 전원 HOLD+stale 잔류. 이를 매일 가시화해 "정상 보수화 vs 버그" 판별 + 향후 A(임계완화)·B(stale 만료) 튜닝 효과 측정 기준선 확보(옵션 C).
+- 영향: 결산 직후 `[매매 진단]` 무음 알림 1건 추가(모니터링/후보/max_conf/매수게이트 차단/잔고). 매매 로직 불변. DB 마이그레이션·신규 env 없음.
+- 검증 결과: pytest 전체 **1022 passed**(신규 8) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패로 무관(분기 이전 커밋 85e8fe7에서 동일 7건 재현 확인).
+- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영(장 마감 후 권장). 머지 후 `scripts/record_implementation.py` 실행으로 버전 bump(0.8.8→0.8.9)+DB 이력 기록 권장.
+
+---
+
 ## [2026-06-02] 일일 헬스체크 리포트 수정 — API 호출 0 버그 + 예수금 오해(보유평가 추가) (v0.8.7)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -55,18 +70,3 @@
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 모니터링 종목 수가 줄 수 있으므로(필터 생존분만) 스크리닝 소스/파라미터 튜닝과 함께 운용 권장.
 
 ---
-
-## [2026-06-01] 장중 매매 사이클 1초 폭주 수정 — 간격 하한 설정화 + 0종목 폴백 (v0.8.3)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/config.py: `TradingConfig.min_trading_interval_seconds`(기본 10.0, env `TRADING_MIN_INTERVAL_SECONDS`).
-  - src/scheduler/jobs.py: `_calculate_trading_interval`의 0종목 폴백 `return 1.0`→설정 하한, `max(interval, 10.0)`→`max(interval, min_interval)`(하드코딩 하한 2곳을 설정값으로 통일).
-  - tests/test_scheduler/test_jobs.py: 신규 5종(0/음수→하한, 소수종목 바닥, 대량 종목 산출값>하한, env 오버라이드).
-  - .env.example: `TRADING_MIN_INTERVAL_SECONDS` 문서화.
-- 배경: 실전 첫날(2026-06-01) 장중 모니터링에서 매매잡이 `interval[0:00:01]`(1초)로 폭주. 원인 — WATCHLIST 비움(스크리닝 의존)으로 셋업 시 `_stock_count`=0 → `_calculate_trading_interval(0)`이 `if stock_count<=0: return 1.0` 경로로 빠져 기존 "최소 10초" 하한을 우회. ~175 calls/분으로 일일 API 한도(5만)를 ~14시 소진 전망 + KIS `EGW00201`(초당한도) 간헐 거부(screener.get_volume_rank 3회 재시도 소진 traceback) + `max instances` WARNING 폭주.
-- 영향: 0종목/소수종목 모두 설정 하한(기본 10초)을 따름 → 일일 API ~57k→~5.7k(종일 커버), EGW00201 버스트·max-instances WARNING 해소. 매매 로직·신호·게이트 경로 불변(사이클 간격만 변경, 손절/익절 반응 1초→10초·본 전략엔 충분). DB 마이그레이션 없음, 신규 env 1종(선택, .env.example 문서화).
-- 검증 결과: pytest 스케줄러 간격 6건(기존 `test_zero_stocks`/`test_negative_stocks`를 새 하한 동작으로 갱신 + 설정가능성 테스트 1건 추가; 중복 신설 파일 제거) 통과, 전체 스위트 **1009 passed** | mypy ✅ strict | ruff ✅. 잔존 7건(test_order 1·pipeline_cli 6)은 공유 `kis_trader` DB 상태 의존 기존 실패로 본 변경과 무관. (jobs.py 기존 E501 2건도 범위 외)
-- 비고: 운영자 액션 — 반영하려면 `com.kis.autotrader` 재시작(코드는 순수 변경, 재시작은 별도 액션). 더 빠른 반응 원하면 `TRADING_MIN_INTERVAL_SECONDS=5`(여전히 안전, ~11.5k/일). 근본적으로는 장중 스크리닝 종목 수로 간격을 재계산하는 것이 정석이나 본 패치는 하한 보장으로 한정(MAX_SCREENED_STOCKS=5 기준 어차피 10초).
-
----
-
