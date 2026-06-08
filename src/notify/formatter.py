@@ -224,6 +224,60 @@ def format_system(message: str) -> str:
     return f"⚙️ <b>[시스템]</b> {message}"
 
 
+# 매수 거절 사유 → 한글 라벨 (없으면 원문 표시)
+_REJECT_LABELS: dict[str, str] = {
+    "DAILY_TRADE_LIMIT": "일일한도",
+    "DAILY_TRADE_LIMIT_PER_STOCK": "종목한도",
+    "LOW_CONFIDENCE": "저신뢰",
+    "INSUFFICIENT_BALANCE": "예수금부족",
+    "RISK": "위험",
+    "PRICE_FLOOR": "가격하한",
+}
+
+
+def format_diagnostics(diag: dict[str, Any]) -> str:
+    """장 마감 매매 진단 알림 메시지를 생성한다(무음).
+
+    Args:
+        diag: ``build_daily_diagnostics`` 결과 dict.
+    """
+    trade_count = diag["trade_count"]
+    emoji = "\U0001f4c8" if trade_count > 0 else "\U0001f6ab"
+    lines = [
+        f"\U0001f52d <b>[매매 진단]</b> {diag['trade_date']}",
+        f"{emoji} {diag['headline']}",
+        "",
+    ]
+
+    mc = diag["monitored_counts"]
+    lines.append(
+        f"\U0001f4e1 모니터링 {len(diag['monitored'])}종목 "
+        f"(보유{mc.get('positions', 0)}/관심{mc.get('watchlist', 0)}/발굴{mc.get('screening', 0)})"
+    )
+    for m in diag["monitored"][:10]:
+        lines.append(f"  • {m['code']} {m['name']} — {m['max_conf']:.2f}")
+
+    sc = diag["screening"]
+    lines.append("")
+    lines.append(
+        f"\U0001f50d 스크리닝 top{sc['ranked_total']} → 후보 avg {sc['candidate_avg']:.2f}/사이클"
+    )
+    if sc["risk_excluded"]:
+        excluded = ", ".join(sc["risk_excluded"][:5])
+        lines.append(f"  • 위험배제 {len(sc['risk_excluded'])}종목 ({excluded})")
+
+    lines.append("")
+    if diag["buy_rejects"]:
+        parts = [f"{_REJECT_LABELS.get(k, k)}{v}" for k, v in diag["buy_rejects"].items()]
+        lines.append("⛔ 매수게이트 차단: " + " · ".join(parts))
+    else:
+        lines.append("⛔ 매수게이트: 신호 0이라 도달 전 차단")
+
+    lines.append("")
+    lines.append(f"\U0001f4b0 예수금 {diag['deposit']:,}원 · 보유 {diag['holdings']}종목")
+    return "\n".join(lines)
+
+
 # ── 하네스 사이클 결산 (Phase 4) ────────────────────────────────
 
 _MAX_APPLIED = 5
