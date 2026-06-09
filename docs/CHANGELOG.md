@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-06-09] event_logs 적재 정합 — 종목 처리 ERROR를 event_logs에도 기록 (v0.9.2)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: `log_error` import 보강 + `_record_error(stock_code, error)` 헬퍼 신설(`system_metrics(ERROR)` enqueue + `event_logs(ERROR)` 양쪽 일관 적재, `log_error` 호출은 try/except로 방어해 매매 흐름 보호). 종목 처리 예외 블록을 인라인 `_record_metric("ERROR", {...})`에서 `self._record_error(stock_code)` 호출로 치환(기존 metric payload cycle/stock_code/error 보존).
+  - tests/test_engine_error_event.py: 신규 — `_record_error`가 metric+event_logs 양쪽 적재하는지(detail 필드 검증) + `log_error` 예외가 swallow되는지 TDD 2건.
+- 배경: W23 주말 리뷰에서 실전 DB(kis_trader_real) 직접 조회 결과, 종목 처리 ERROR가 `system_metrics`에만 적재되고 `event_logs` ERROR 행은 전 기간 0건인 관측성 결함 확인(06-05 ERROR 2건도 event_logs 누락). engine.py가 `log_error`를 import/호출하지 않아 일간 리포트 "에러/경고" 섹션과 공통규칙 룰C(에러 반복)가 event_logs 기준으로 항상 0건으로 보임.
+- 영향: 종목 처리 에러가 `event_logs`(ERROR)에도 적재되어 일간·주간 분석이 event_logs 기준으로도 에러 추적 가능. system_metrics ERROR와 event_logs ERROR 불일치 해소. 매매 동작/시그니처/수익률 불변(순수 관측성 보강). DB 마이그레이션·신규 env 없음.
+- 검증 결과: pytest test_engine_error_event **2 passed**(신규) | test_engine_db_integration 30 passed | test_engine_buy_gate_metric 10 passed | mypy src/engine.py ✅ | ruff ✅(변경 파일).
+- 비고: 06-01·06-02 event_logs의 팬텀 '테스트' 매매(고아체결 회수 경로 의심)는 매매/회수 경로를 건드려야 하므로 본 제안 범위 밖(별도 조사). 운영자 액션 — `com.kis.autotrader` 재시작 시 반영.
+
+---
+
 ## [2026-06-08] 자동 구현 git_clean — docs 산출물 untracked 제외(교착 해소) (v0.9.1)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -55,17 +67,5 @@
 - 영향: 관리종목/정리매매/투자위험/ETF/ETN/SPAC가 후보 풀에서 *소스* 차단 + 우선주 제외 → 230980·0162Z0류 원천 차단, 필터 생존율·품질 개선 기대. 단계1(랭킹은 거래량 유지); 단계2(거래금액순 `SCREENING_RANK_METRIC=3`)·단계3(진짜 시총)은 측정 후. 매매 로직 불변. DB 마이그레이션 없음, 신규 env 3종(기본값 안전).
 - 검증 결과: pytest 전체 **1013 passed**(신규 1) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패·무관.
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 하니스(screening_diag)로 적용 전후 후보수·converted 비교 권장. 모의/실전 TR(FHPST01710000) 동일 가정 — 첫 적용 시 파라미터 거부 여부 모니터.
-
----
-
-## [2026-06-01] ETF/ETN 필터 보강 — 문자 코드 + RISE·채권혼합 누수 차단 (v0.8.5)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/strategy/screener.py: `_is_etf_etn` ① `startswith("Q")` → `not stock_code.isdigit()`로 일반화(문자 포함 코드=ETN/ELW/구조화상품 0162Z0 등 제외) ② `_ETF_BRAND_KEYWORDS`에 RISE·PLUS·KOSEF·KINDEX·TIMEFOLIO·히어로즈·마이다스·ETF·채권혼합·혼합형 추가.
-  - tests/test_strategy/test_screener.py: ETF 회귀 테스트 5종(문자코드·RISE·채권혼합) + 미사용 import 정리.
-- 배경: 실전 첫날(6/1) 스크리닝 깔때기 진단에서, ETF/펀드형 상품 `0162Z0 RISE 삼성전자SK하이닉스채권혼합50`이 매매 후보(converted)로 통과. 원인 — 코드가 Q로 시작 안 함 + 브랜드 키워드에 RISE/채권혼합 미등록.
-- 영향: 문자 포함 코드와 RISE/채권혼합/ETF 등 펀드형 상품이 스크리닝 후보·모니터링에서 차단. 매매 로직 불변(ETF 판별만 강화). DB 마이그레이션·신규 env 없음.
-- 검증 결과: pytest 전체 **1012 passed**(ETF 회귀 5건 포함) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 상태 기존 실패로 무관.
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 거래량 랭킹 소스 자체 개선(시총/유동성 결합)은 후속 과제.
 
 ---

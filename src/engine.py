@@ -20,7 +20,7 @@ from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
 from src.config import settings
 from src.db.analytics import build_daily_diagnostics
-from src.db.event_logger import log_trade, log_warning
+from src.db.event_logger import log_error, log_trade, log_warning
 from src.db.models import BuyReason, OrderStatus, OrderType, SellReason, TradeType
 from src.db.repository import (
     DailyPerformanceRepository,
@@ -565,11 +565,7 @@ class TradingEngine:
                     return
                 except Exception:
                     logger.exception("종목 처리 중 에러: %s", stock_code)
-                    self._record_metric("ERROR", {
-                        "cycle": self._cycle_count,
-                        "stock_code": stock_code,
-                        "error": "종목 처리 실패",
-                    })
+                    self._record_error(stock_code)
 
             total_evaluated = (
                 self._cycle_buy_count + self._cycle_sell_count + self._cycle_hold_count
@@ -2092,6 +2088,28 @@ class TradingEngine:
                 stock_code,
                 reason,
             )
+
+    def _record_error(self, stock_code: str, error: str = "종목 처리 실패") -> None:
+        """종목 처리 예외를 관측 채널에 일관 적재한다.
+
+        proposal 2026-06-06: system_metrics(ERROR)와 event_logs(ERROR) 양쪽에
+        기록해, 일간·주간 분석이 event_logs 기준으로도 에러를 추적할 수 있게 한다.
+        기존에는 ``system_metrics``에만 적재돼 ``event_logs``의 ERROR 행이 0건이었다.
+        두 채널 모두 적재 실패는 swallow되어 매매 흐름에 영향을 주지 않는다.
+
+        Args:
+            stock_code: 예외가 발생한 종목코드.
+            error: 에러 요약 문자열(기본 "종목 처리 실패").
+        """
+        self._record_metric("ERROR", {
+            "cycle": self._cycle_count,
+            "stock_code": stock_code,
+            "error": error,
+        })
+        try:
+            log_error(f"{error}: {stock_code}", details=f"cycle={self._cycle_count}")
+        except Exception:
+            logger.debug("ERROR event_logs 적재 실패: %s", stock_code, exc_info=True)
 
     def _check_market_action_block(self, stock_code: str) -> list[str]:
         """매수 전 시장조치 차단 lookup.
