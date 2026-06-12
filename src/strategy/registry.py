@@ -75,6 +75,7 @@ class StrategyRegistry:
             EnsembleStrategy(
                 strategies=[ma, rsi, macd, bollinger],
                 method=settings.strategy.ensemble_method,
+                solo_buy_min_confidence=settings.strategy.solo_buy_min_confidence,
             ),
         )
         return registry

@@ -135,6 +135,69 @@ def test_weighted_sell_wins() -> None:
     assert result.confidence == pytest.approx(0.3375, abs=0.01)
 
 
+# --- solo BUY allowance tests ---
+
+
+def test_weighted_solo_buy_allowed_high_conf() -> None:
+    """단독 BUY(conf 1.0) + 나머지 HOLD, 임계 0.7 → BUY 허용."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 1.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+        solo_buy_min_confidence=0.7,
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+    assert result.confidence == pytest.approx(1.0, abs=0.01)
+
+
+def test_weighted_solo_buy_blocked_low_conf() -> None:
+    """단독 BUY(conf 0.5) < 임계 0.7 → HOLD."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 0.5),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+        solo_buy_min_confidence=0.7,
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+
+
+def test_weighted_solo_sell_still_blocked() -> None:
+    """단독 SELL은 완화 대상 아님 → HOLD (변경 없음)."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.SELL, 1.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+        solo_buy_min_confidence=0.7,
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+
+
+def test_weighted_solo_buy_default_suppressed() -> None:
+    """solo_buy_min_confidence 기본값(1.01) → 단독 BUY도 HOLD (억제 유지)."""
+    ensemble = EnsembleStrategy(
+        [
+            FixedStrategy(SignalType.BUY, 1.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+            FixedStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+
+
 # --- init validation tests ---
 
 

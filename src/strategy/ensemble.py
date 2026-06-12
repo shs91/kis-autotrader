@@ -22,6 +22,7 @@ class EnsembleStrategy(BaseStrategy):
         strategies: list[BaseStrategy],
         method: str = MAJORITY,
         strategy_weights: dict[str, float] | None = None,
+        solo_buy_min_confidence: float = 1.01,
     ) -> None:
         """앙상블 전략을 초기화한다.
 
@@ -41,6 +42,7 @@ class EnsembleStrategy(BaseStrategy):
         self._strategies = strategies
         self._method = method
         self._strategy_weights = strategy_weights or {}
+        self._solo_buy_min_confidence = solo_buy_min_confidence
 
     @property
     def name(self) -> str:
@@ -183,8 +185,22 @@ class EnsembleStrategy(BaseStrategy):
             winner_weight, loser_weight = sell_w, buy_w
             n_win = len(sell_sigs)
 
-        # 단독표 억제: 승자 방향 동의가 2개 미만이면 매매 전환하지 않음
+        # 단독표 억제: 승자 방향 동의가 2개 미만이면 매매 전환하지 않는다.
+        # 단, BUY는 종합 신뢰도가 임계 이상이면 단독이라도 진입 허용한다(신중 재개).
         if n_win < 2:
+            if winner_type == SignalType.BUY:
+                base = winner_weight / n_win
+                opp = winner_weight / (winner_weight + loser_weight)
+                solo_conf = min(base * opp, 1.0)
+                if solo_conf >= self._solo_buy_min_confidence:
+                    return Signal(
+                        signal_type=SignalType.BUY,
+                        confidence=solo_conf,
+                        reason=(
+                            f"앙상블 가중투표: 단독 BUY 허용 "
+                            f"(conf={solo_conf:.2f}, n_win=1)"
+                        ),
+                    )
             return Signal(
                 signal_type=SignalType.HOLD, confidence=0.0,
                 reason=f"앙상블 가중투표: 승자표 부족 (n_win={n_win}) → HOLD",

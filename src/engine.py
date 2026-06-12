@@ -874,8 +874,11 @@ class TradingEngine:
         # 4. 보유 종목 처리
         if is_held and holding_info is not None:
             will_act = signal.signal_type == SignalType.SELL and signal.confidence >= 0.1
-            if not will_act and signal.signal_type == SignalType.SELL:
-                skip_reason = "low_confidence_sell"
+            if not will_act:
+                if signal.signal_type == SignalType.SELL:
+                    skip_reason = "low_confidence_sell"
+                elif signal.signal_type == SignalType.BUY:
+                    skip_reason = "held_skip_buy"   # 보유 종목 추가매수 안 함(피라미딩 X)
             self._record_signal_to_db(
                 stock_code, current.stock_name, signal, action_taken=will_act,
                 skip_reason=skip_reason,
