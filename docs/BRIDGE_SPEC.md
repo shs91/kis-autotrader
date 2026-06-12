@@ -52,24 +52,26 @@ Claude Code는 제안서를 구현하기 전에 아래 규칙을 자동 검증�
 
 | 파라미터 | .env 키 | 현재값 | 자동 변경 허용 범위 |
 |----------|---------|--------|---------------------|
-| MAX_LOSS_RATE | MAX_LOSS_RATE | 0.03 | 0.01 ~ 0.05 |
-| MAX_POSITION_RATIO | MAX_POSITION_RATIO | 0.2 | 0.05 ~ 0.3 |
-| DAILY_TRADE_LIMIT | DAILY_TRADE_LIMIT | 200 | 50 ~ 500 |
+| MAX_LOSS_RATE | MAX_LOSS_RATE | 0.02 | 0.01 ~ 0.05 |
+| MAX_POSITION_RATIO | MAX_POSITION_RATIO | 0.1 | 0.05 ~ 0.3 |
+| DAILY_TRADE_LIMIT | DAILY_TRADE_LIMIT | 50 | 50 ~ 500 |
+| MAX_DAILY_TRADES_PER_STOCK | MAX_DAILY_TRADES_PER_STOCK | 1 | 1 ~ 5 |
 | TAKE_PROFIT_RATIO | TAKE_PROFIT_RATIO | 0.05 | 0.02 ~ 0.10 |
 | MA short_period | STRATEGY_MA_SHORT_PERIOD | 5 | 3 ~ 10 |
-| MA long_period | STRATEGY_MA_LONG_PERIOD | 20 | 15 ~ 60 |
-| MA max_divergence | STRATEGY_MA_MAX_DIVERGENCE | 0.05 | 0.01 ~ 0.15 |
-| RSI period | STRATEGY_RSI_PERIOD | 14 | 7 ~ 21 |
+| MA long_period | STRATEGY_MA_LONG_PERIOD | 15 | 15 ~ 60 |
+| MA max_divergence | STRATEGY_MA_MAX_DIVERGENCE | 0.10 | 0.01 ~ 0.15 |
+| RSI period | STRATEGY_RSI_PERIOD | 9 | 7 ~ 21 |
 | RSI oversold | STRATEGY_RSI_OVERSOLD | 30.0 | 20.0 ~ 40.0 |
-| RSI overbought | STRATEGY_RSI_OVERBOUGHT | 70.0 | 60.0 ~ 80.0 |
+| RSI overbought | STRATEGY_RSI_OVERBOUGHT | 78.0 | 60.0 ~ 80.0 |
 | MIN_CONFIDENCE | STRATEGY_MIN_CONFIDENCE | 0.1 | 0.05 ~ 0.5 |
-| MAX_DAILY_DRAWDOWN | MAX_DAILY_DRAWDOWN | 0.08 | 0.03 ~ 0.15 |
+| SOLO_BUY_MIN_CONFIDENCE | STRATEGY_SOLO_BUY_MIN_CONFIDENCE | 0.70 | 0.30 ~ 1.01 |
+| MAX_DAILY_DRAWDOWN | MAX_DAILY_DRAWDOWN | 0.04 | 0.03 ~ 0.15 |
 | MAX_CONSECUTIVE_LOSSES | MAX_CONSECUTIVE_LOSSES | 7 | 3 ~ 10 |
 | SCREENING_TOP_N | SCREENING_TOP_N | 30 | 5 ~ 50 |
 | SCREENING_INTERVAL_CYCLES | SCREENING_INTERVAL_CYCLES | 30 | 10 ~ 100 |
-| MAX_SCREENED_STOCKS | MAX_SCREENED_STOCKS | 10 | 3 ~ 30 |
+| MAX_SCREENED_STOCKS | MAX_SCREENED_STOCKS | 5 | 3 ~ 30 |
 | SCREENING_MIN_PRICE | SCREENING_MIN_PRICE | 1000 | 500 ~ 5000 |
-| SCREENING_MAX_PRICE | SCREENING_MAX_PRICE | 300000 | 100000 ~ 1000000 |
+| SCREENING_MAX_PRICE | SCREENING_MAX_PRICE | 20000 | 100000 ~ 1000000 |
 | SCREENING_CHANGE_RATE_MIN | SCREENING_CHANGE_RATE_MIN | -3.0 | -10.0 ~ 0.0 |
 | SCREENING_CHANGE_RATE_MAX | SCREENING_CHANGE_RATE_MAX | 15.0 | 5.0 ~ 30.0 |
 | SCREENING_MIN_VOLUME | SCREENING_MIN_VOLUME | 50000 | 10000 ~ 200000 |
@@ -80,6 +82,12 @@ Claude Code는 제안서를 구현하기 전에 아래 규칙을 자동 검증�
 
 **가중치 제약**: `WEIGHT_VOLUME_RANK + WEIGHT_CHANGE_RATE + WEIGHT_STRATEGY`의 합은 반드시 1.0이어야 한다.
 범위를 벗어나거나 가중치 합이 1.0이 아닌 제안서는 `skipped` 처리.
+
+**SOLO_BUY_MIN_CONFIDENCE 비고**: `1.01` = 단독 BUY 비활성(앙상블 `n_win≥2`만 매매). 값이 낮을수록 단일 전략 BUY 진입이 쉬워진다(v0.10.0 도입). 권장 운용 범위 0.30~1.01.
+
+**MAX_DAILY_TRADES_PER_STOCK 비고**: 동일 종목·동일 거래일 최대 진입(매수) 횟수. 매도(청산)에는 적용되지 않는다.
+
+**현재값 동기화(2026-06-12)**: 위 표 '현재값' 열은 `.env` 베이스라인 기준이다. 런타임 실효값은 `config_overrides.json`이 우선 적용될 수 있다(예: 전략 가중치·MIN_SCORE 등은 config_overrides가 오버라이드 중).
 
 ### 파라미터 변경 메커니즘
 
