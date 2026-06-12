@@ -6,6 +6,21 @@
 
 ---
 
+## [2026-06-12] 앙상블 단독 BUY 조건부 허용 + 보유중 BUY 관측 수정 (v0.10.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/strategy/ensemble.py: `_weighted_vote`의 단독표 억제(`n_win<2`→HOLD)를 **BUY 한정 완화** — 종합 신뢰도가 `solo_buy_min_confidence` 이상이면 단독(n_win=1) BUY 진입 허용. SELL/HOLD는 기존 억제 유지. `__init__`에 임계 인자 추가.
+  - src/config.py: `StrategyConfig.solo_buy_min_confidence`(기본 0.7, env `STRATEGY_SOLO_BUY_MIN_CONFIDENCE`, 1.01=비활성).
+  - src/strategy/registry.py: EnsembleStrategy 생성 시 임계 주입.
+  - src/engine.py: 보유 종목 BUY 차단을 `skip_reason="held_skip_buy"`로 기록(매매 무변경, 877행).
+  - tests/: test_ensemble 단독 BUY 4종 + test_engine_held_observability 2종(신규 6).
+- 배경: 이번주(6/8~) 0매매 병목을 `signals`+`system_metrics.SIGNAL_SKIP.vote_meta` **두 채널**로 정량 확정 — 개별 BUY표는 많으나(MACD 4,504·RSI 4,686·MA 2,250) 같은 종목·봉서 2개 겹친 사이클 0건(`n_buy=2`=0) → 앙상블 `n_win≥2` 단독표 억제로 BUY 0 → 매매 0. 강한 단독 BUY 084650(0.86)·093370(1.0)이 묵살됨. (한 채널만 보면 양쪽 오진 — 다회 정정 끝에 확정)
+- 영향: 강한 단독 BUY(conf≥0.7) 진입 허용 → 매수 재개 기대. 약한 단독(003280 0.23·027360 0.04)은 거름. 위험게이트·min_confidence·예수금·한도 모두 유지. config_overrides로 즉시 롤백(1.01). 보유중 BUY 차단 관측 투명화(skip_reason).
+- 검증 결과: pytest 전체 **1036 passed**(신규 6) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패로 무관.
+- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 효과 제한적 가능(일봉 +1.25%/+7.25%, 6/2 실거래 -3.67%) + forward 검증 일중가 부재 → **소액 관측**. `STRATEGY_SOLO_BUY_MIN_CONFIDENCE` 조정/롤백은 config_overrides.
+
+---
+
 ## [2026-06-09] event_logs 적재 정합 — 종목 처리 ERROR를 event_logs에도 기록 (v0.9.2)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -54,18 +69,5 @@
 - 영향: 리포트 표시만 변경(매매 로직·잔고 무관). API 호출수 정확 표기, 보유평가 동반 표시로 자산 흐름 명확. DB 마이그레이션·신규 env 없음.
 - 검증 결과: pytest 전체 **1014 passed**(헬스체크 테스트 갱신·추가) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건은 공유 DB 기존 실패·무관.
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영(리포트 전용이라 포지션 보유 중 장중 재시작은 불필요, 장 마감 후 권장).
-
----
-
-## [2026-06-01] 스크리닝 소스 필터 — 거래소 실시간 제외(관리/정리매매/ETF 등) + 보통주 [단계1] (v0.8.6)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/api/quote.py: `get_volume_rank`가 설정 기반 소스 필터 파라미터 전송 — `FID_TRGT_EXLS_CLS_CODE`(6→10자리 교정, 투자위험·관리·정리매매·불성실공시·거래정지·ETF·ETN·SPAC 제외) + `FID_DIV_CLS_CODE`(보통주) + `FID_BLNG_CLS_CODE`(랭킹기준 설정값).
-  - src/config.py: `ScreeningConfig`에 `rank_metric`(기본 "0" 거래량), `exclude_targets`(기본 "1111011101"), `common_stock_only`(기본 true) 추가.
-  - tests/test_api/test_quote.py: 소스 파라미터 전송 검증 테스트 추가.
-- 배경: 실전 첫날 스크리닝 깔때기 진단 — 거래량 top-30의 ~60%가 ETF/ETN + 정리매매·페니로 76런 중 72런(95%)이 0생존. KIS volume-rank 소스단 제외/구분 필터를 미사용(`FID_TRGT_EXLS="000000"` 6자리). 거래소 실시간 지정 기반 제외는 market_actions 일일 sync 사각(230980 all-false)보다 신뢰.
-- 영향: 관리종목/정리매매/투자위험/ETF/ETN/SPAC가 후보 풀에서 *소스* 차단 + 우선주 제외 → 230980·0162Z0류 원천 차단, 필터 생존율·품질 개선 기대. 단계1(랭킹은 거래량 유지); 단계2(거래금액순 `SCREENING_RANK_METRIC=3`)·단계3(진짜 시총)은 측정 후. 매매 로직 불변. DB 마이그레이션 없음, 신규 env 3종(기본값 안전).
-- 검증 결과: pytest 전체 **1013 passed**(신규 1) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패·무관.
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 하니스(screening_diag)로 적용 전후 후보수·converted 비교 권장. 모의/실전 TR(FHPST01710000) 동일 가정 — 첫 적용 시 파라미터 거부 여부 모니터.
 
 ---
