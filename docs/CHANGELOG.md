@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-12] 공격적 진입 전환 — 단독 BUY 임계↓ + 스크리너 정합 + 회전 가속 (v0.10.1)
+- 카테고리: param_tuning
+- 변경 파일:
+  - config_overrides.json: 진입 16개 파라미터 전체교체 — SOLO_BUY_MIN_CONFIDENCE 0.70→0.45, MIN_CONFIDENCE 0.20→0.05, MAX_POSITION_RATIO 0.1→0.3, 스크리너 전략중심(WEIGHT_STRATEGY 0.3→0.5·CHANGE_RATE 0.4→0.2), CHANGE_RATE_MIN/MAX -8~8, MAX_PRICE 20k→150k, TOP_N 30→50, MAX_SCREENED 5→20, INTERVAL_CYCLES 30→15, PER_STOCK 1→3, RSI_OVERSOLD 35→38. 청산 게이트(손절·MDD·트레일링) 불변.
+  - src/strategy/risk.py: `RiskManager.__init__`에 `min_confidence` 주입 파라미터 추가(기본 None=settings, 운영 동작 불변) — 다른 7개 리스크 파라미터와 동일 패턴, 테스트 격리용.
+  - tests/test_strategy/test_risk.py: `TestValidateOrder`가 `RiskManager(min_confidence=0.1)` 명시 주입하도록 격리(운영 MIN_CONFIDENCE=0.05 의존 제거).
+- 배경: 실전 2주(05-29~06-11) 부진 원인이 리스크 게이트 차단이 아니라 "살 종목 부재"로 정량 확정 — 스크리너 등락률 편중(급등주)→평균회귀 전략 SELL 판정→후보 60% 미보유 SELL 폐기, 2주 BUY 종목 대한해운 1개뿐. 청산 게이트 거의 미발동(손절 1회).
+- 영향: 진입 3축(단독 BUY 임계↓·스크리너 전략정합·후보/회전/사이즈↑) 완화로 BUY 전환·회전율 상승 기대, SELL-only 낭비 감소. 청산 안전장치(손절 2%·MDD 4%·트레일링 +5%/-5%) 전부 불변. 거래비용·승률↓·변동성↑ 가능 → 소액 forward 관측 권장. config_overrides로 즉시 롤백(SOLO_BUY 1.01).
+- 검증 결과: pytest **1035 passed / 8 failed** | mypy strict ✅(95 files) | ruff ✅(변경 파일). 잔존 8건(test_order·pipeline_cli 6·test_rsi)은 real 환경 사전존재로 제안서 무관(baseline stash 재현) — test_rsi는 수반 .env RSI_PERIOD 14→9 반영, 제안서 유발 신규 회귀 0.
+- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. .env 진입 민감도 변수(MA_LONG 15·RSI_PERIOD 9·MA_MAX_DIVERGENCE 0.10·RSI_OVERBOUGHT 78·DAILY_TRADE_LIMIT 50·MAX_CONSECUTIVE_LOSSES 7)는 운영자 수동 선적용. MAX_POSITION_RATIO 0.3은 고위험 항목으로 운영자 승인.
+
+---
+
 ## [2026-06-12] 앙상블 단독 BUY 조건부 허용 + 보유중 BUY 관측 수정 (v0.10.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -57,17 +70,5 @@
 - 영향: 결산 직후 `[매매 진단]` 무음 알림 1건 추가(모니터링/후보/max_conf/매수게이트 차단/잔고). 매매 로직 불변. DB 마이그레이션·신규 env 없음.
 - 검증 결과: pytest 전체 **1022 passed**(신규 8) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패로 무관(분기 이전 커밋 85e8fe7에서 동일 7건 재현 확인).
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영(장 마감 후 권장). 머지 후 `scripts/record_implementation.py` 실행으로 버전 bump(0.8.8→0.9.0, enhancement=minor)+DB 이력 기록.
-
----
-
-## [2026-06-02] 일일 헬스체크 리포트 수정 — API 호출 0 버그 + 예수금 오해(보유평가 추가) (v0.8.7)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/scheduler/healthcheck.py: ① `api_calls`를 존재하지 않는 `engine._daily_api_calls`(항상 0) 대신 rate limiter `engine._client._limiter.daily_count`에서 읽도록 수정. ② `HealthcheckResult.eval_amount`(보유 평가금액) 추가 + 리포트에 "보유평가" 표기.
-  - tests/test_scheduler/test_healthcheck.py: api_calls 출처·보유평가 표기 테스트 갱신/추가.
-- 배경: 실전 첫 매매(대한해운 005880) 후 일일 헬스체크 알림에서 "API 호출 0"(실제 8,091)·"예수금 500,000 불변"(매수 49,920원에도)이 데이터 누락처럼 보임. ①은 카운터 미연결 버그, ②는 D예수금(DNCA_TOT_AMT)이 T+2 정산 전 불변인 정상값이나 가용현금 오해 유발.
-- 영향: 리포트 표시만 변경(매매 로직·잔고 무관). API 호출수 정확 표기, 보유평가 동반 표시로 자산 흐름 명확. DB 마이그레이션·신규 env 없음.
-- 검증 결과: pytest 전체 **1014 passed**(헬스체크 테스트 갱신·추가) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건은 공유 DB 기존 실패·무관.
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영(리포트 전용이라 포지션 보유 중 장중 재시작은 불필요, 장 마감 후 권장).
 
 ---

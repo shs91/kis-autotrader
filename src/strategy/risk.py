@@ -31,6 +31,7 @@ class RiskManager:
         trailing_activation_ratio: float | None = None,
         trailing_drawdown_ratio: float | None = None,
         min_profitable_close: float | None = None,
+        min_confidence: float | None = None,
     ) -> None:
         """리스크 관리자를 초기화한다.
 
@@ -42,6 +43,7 @@ class RiskManager:
             trailing_activation_ratio: 트레일링 무장 임계 (기본 5%)
             trailing_drawdown_ratio: 트레일링 매도폭 (기본 5%)
             min_profitable_close: 마감 청산 수익률 임계 (기본 1.5%)
+            min_confidence: 최소 신뢰도 임계 (None이면 설정값 사용, 기본 10%)
         """
         self._max_loss_rate = (
             max_loss_rate
@@ -78,7 +80,11 @@ class RiskManager:
             if min_profitable_close is not None
             else settings.strategy.min_profitable_close
         )
-        self._min_confidence = settings.strategy.min_confidence
+        self._min_confidence = (
+            min_confidence
+            if min_confidence is not None
+            else settings.strategy.min_confidence
+        )
 
         # 포트폴리오 리스크 추적
         self._max_daily_drawdown = settings.trading.max_daily_drawdown

@@ -173,7 +173,7 @@ class TestValidateOrder:
 
     def setup_method(self) -> None:
         """테스트 설정 — 시간 의존성 격리(MARKET_CLOSE_GUARD 기본 False)."""
-        self.rm = RiskManager()
+        self.rm = RiskManager(min_confidence=0.1)
         self.rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
 
     def test_hold_signal_returns_false(self) -> None:
