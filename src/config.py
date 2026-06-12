@@ -334,6 +334,11 @@ class StrategyConfig:
         default_factory=lambda: _env_float("STRATEGY_MIN_CONFIDENCE", 0.1)
     )
 
+    # 단독 BUY 허용 최소 신뢰도 (앙상블 n_win=1이라도 이 이상이면 BUY 전환). 1.01=비활성
+    solo_buy_min_confidence: float = field(
+        default_factory=lambda: _env_float("STRATEGY_SOLO_BUY_MIN_CONFIDENCE", 0.7)
+    )
+
     # 트레일링 스톱: 활성화 여부 (off면 기존 take_profit_ratio 고정 익절 폴백)
     trailing_stop_enabled: bool = field(
         default_factory=lambda: _env("TRAILING_STOP_ENABLED", "true").lower() == "true"
