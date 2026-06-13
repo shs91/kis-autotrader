@@ -35,6 +35,8 @@ def db_session(monkeypatch, tmp_path):
     Base.metadata.create_all(bind=engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("KIS_ENV", "virtual")  # DATABASE_URL_REAL 우선 방지
+    monkeypatch.delenv("DATABASE_URL_REAL", raising=False)  # real DB 누수 차단
     # Pipeline CLI는 src.db.session.get_engine을 호출하므로 모듈 reset 필요
     from src.db import session as session_mod
     session_mod.reset_engine()
