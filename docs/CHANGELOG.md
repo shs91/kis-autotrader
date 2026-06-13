@@ -6,6 +6,30 @@
 
 ---
 
+## [2026-06-13] 테스트 환경 격리 — real .env 누수로 깨지던 pytest 8건 수정 (v0.11.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - tests/conftest.py: pytest 전역 격리 신규. `KIS_ENV=virtual` 강제(실전 TR ID·DATABASE_URL_REAL 차단) + `STRATEGY_RSI_PERIOD`를 코드 기본값 "14"로 SET. 제안서 초안의 무차별 pop 방식은 config.py `load_dotenv(override=False)`가 .env 부재 키를 재주입 + `settings`가 import-시점 1회 빌드 싱글톤이라 9가 박혀 무효 → SET-to-default로 보정.
+  - tests/test_harness/test_pipeline_cli.py: db_session fixture에 subprocess 이중 방어 2줄(`KIS_ENV=virtual` setenv + `DATABASE_URL_REAL` delenv)로 real DB 누수 차단.
+- 배경: KIS_ENV=real 운영 환경에서 `pytest tests/`가 제안서·코드 무관 8건 실패(test_pipeline_cli 6·test_order 1·test_rsi 1). tests/conftest.py 부재로 운영 .env(KIS_ENV/DATABASE_URL_REAL/STRATEGY_*)가 테스트 프로세스에 누수. baseline stash로 사전존재 확정.
+- 영향: real env `pytest tests/` **8 failed → 0 failed (1048 passed)**. BRIDGE_SPEC "pytest 전체 그린" 게이트 복구(real 환경 자동 구현 검증 정상화). pipeline_cli subprocess의 kis_trader_real 연결·오염 위험 제거. 테스트 결정론화(운영 튜닝 변동 비의존). 운영 코드(src/)·매매 동작 불변(테스트 전용).
+- 검증 결과: pytest real env **1048 passed / 0 failed**(8건 fix, 신규 회귀 0) | verifier diff-scope 15 passed | mypy strict ✅(96 files) | ruff ✅(변경 파일).
+- 비고: 운영자 액션 불필요(테스트 전용, 매매 서비스 무관). 미해결 후속: config_overrides.json 파일 누수(STRATEGY_MIN_CONFIDENCE 등)는 개별 명시 주입 표준화 별도 과제.
+
+---
+
+## [2026-06-13] 수급 섀도우 필터 — flow_filter 순수 스코어러 추가 (v0.11.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/strategy/flow_filter.py: 신규. 수급 텍스트(투자자별 매매·공매도 잔고) 파서 `FlowFeatures`+`parse_flow_text()` + `[-1.0, 1.0]` 범위 `flow_score()` 순수 함수. 점수=(기관합계+외국인 순매수)/(|기관|+|외국인|+|개인|), 양수=기관·외국인 매수우위(강세). 공매도는 피처만 노출(점수 미반영).
+  - tests/test_strategy/test_flow_filter.py: 신규 5건(파싱 정확성·부호·외국인vs기타외국인 구분·flow_score 경계·빈/무관 텍스트 0.0 안전반환).
+- 배경: 실전 news_chunks의 수급 데이터가 chunk_text에 자유 텍스트로만 존재 → 매매 보조신호로 쓰려면 숫자 파싱·점수화 선행 필요. 전체 활용(수집·배선)은 worker/db/rag 인프라라 안전게이트 밖(수동 계획 docs/plans/2026-06-12_news-flow-data-utilization.md). 본 건은 순수(무 I/O) 파서+스코어러만 안전 도입.
+- 영향: 수급 점수화 로직+회귀 테스트가 검증된 상태로 확보 → 수동 계획 Phase 3에서 엔진 read-only 배선 즉시 가능. 매매 동작 **무변경**(순수 함수, 미배선)이라 실거래 리스크 0. DB/스키마/config_overrides 불변.
+- 검증 결과: pytest test_flow_filter **5 passed** | mypy strict ✅(flow_filter.py) | ruff ✅. 전략 모듈 경계(데이터 인자 수신, api/ 직접호출 없음) 준수.
+- 비고: 운영자 액션 불필요(미배선). 호출부 배선은 수동 계획 Phase 3 별도 과제.
+
+---
+
 ## [2026-06-12] 공격적 진입 전환 — 단독 BUY 임계↓ + 스크리너 정합 + 회전 가속 (v0.10.1)
 - 카테고리: param_tuning
 - 변경 파일:
@@ -43,32 +67,5 @@
 - 영향: 종목 처리 에러가 `event_logs`(ERROR)에도 적재되어 일간·주간 분석이 event_logs 기준으로도 에러 추적 가능. system_metrics ERROR와 event_logs ERROR 불일치 해소. 매매 동작/시그니처/수익률 불변(순수 관측성 보강). DB 마이그레이션·신규 env 없음.
 - 검증 결과: pytest test_engine_error_event **2 passed**(신규) | test_engine_db_integration 30 passed | test_engine_buy_gate_metric 10 passed | mypy src/engine.py ✅ | ruff ✅(변경 파일).
 - 비고: 06-01·06-02 event_logs의 팬텀 '테스트' 매매(고아체결 회수 경로 의심)는 매매/회수 경로를 건드려야 하므로 본 제안 범위 밖(별도 조사). 운영자 액션 — `com.kis.autotrader` 재시작 시 반영.
-
----
-
-## [2026-06-08] 자동 구현 git_clean — docs 산출물 untracked 제외(교착 해소) (v0.9.1)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/harness/initializer.py: `_check_git_clean`이 docs/proposals·docs/reports의 untracked 파일을 위반에서 제외(`_is_ignorable_untracked`). `git status --porcelain`에 `--untracked-files=all` 추가로 디렉토리 축약(`?? docs/`) 비의존. src/ 코드 변경·tracked 수정은 그대로 FAIL.
-  - tests/test_harness/test_initializer.py: docs 예외 2종(proposals·reports PASS) + 안전 가드 4종(clean PASS / src untracked·modified tracked·mixed FAIL) TDD.
-- 배경: 2026-06-06 제안서(event-logs-error-integrity)가 자동 구현되지 않은 원인 분석. Initializer가 untracked 제안서/리포트까지 git_clean FAIL로 잡아, 코디네이터가 사이클을 비결정적으로 보류(6/3 통과·6/8 no-op). DB엔 06-06이 READY로 적재됐으나 `list_ready` 조회조차 없이 completed=0 종료(progress.json history 빈 채, diff 0).
-- 영향: 분석 파이프라인 산출물(제안서·리포트)이 커밋 전 untracked로 남아도 git_clean PASS → 다음 사이클이 정상 처리. src/ 코드 변경·tracked 수정 차단은 유지(안전). 매매 로직·DB 마이그레이션·신규 env 없음.
-- 검증 결과: pytest test_initializer **11 passed**(신규 6) | mypy harness 26 files ✅ | ruff 변경파일 ✅. 잔존 pipeline_cli 6건은 공유 DB 기존 실패로 무관(baseline stash 재현 확인).
-- 비고: 운영자 액션 불필요(자동 구현 파이프라인 Initializer만 영향, `com.kis.autotrader` 매매 서비스 무관). 다음 auto-implement 사이클(6/9 17:15)이 06-06 제안서를 자동 처리할 전망.
-
----
-
-## [2026-06-08] 장 마감 매매 진단 알림 — 결산 직후 "왜 매매했나/안했나" 가시화 (v0.9.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/db/analytics.py: `build_daily_diagnostics` 추가 — 당일 system_metrics(EVAL_TARGETS·SIGNAL_SUMMARY·SIGNAL_SKIP·SCREENING_CANDIDATE·SCREENING_RISK_EXCLUDED·BUY_REJECT)+trades 집계. `signals` 테이블 미사용(적재 공백 이슈와 독립). 보조 헬퍼 `_resolve_stock_names`(stocks.code→name), `_diagnostics_headline`.
-  - src/notify/formatter.py: `format_diagnostics` + `_REJECT_LABELS`(BUY_REJECT reason 코드→한글 라벨).
-  - src/notify/telegram.py: `notify_diagnostics` 메서드(worker 동적 디스패치 `notify_{type}`로 자동 연결).
-  - src/engine.py: `post_market` 결산 enqueue 직후 `_enqueue_telegram_diagnostics` 적재. 집계 실패는 try/except로 격리(결산·매매 무영향).
-  - tests/: test_analytics_diagnostics·test_engine_diagnostics 신규 + formatter·telegram·worker handlers 라우팅 테스트(신규 8건).
-- 배경: 매매 0건이 지속되나 텔레그램은 *체결*만 알려 "왜 안 사는지" 불가시(누적 체결 2건, 6/2 이후 신규 매수 0). 근본은 발굴 빈약(스크리닝 candidate≈0)+모니터링 종목 전원 HOLD+stale 잔류. 이를 매일 가시화해 "정상 보수화 vs 버그" 판별 + 향후 A(임계완화)·B(stale 만료) 튜닝 효과 측정 기준선 확보(옵션 C).
-- 영향: 결산 직후 `[매매 진단]` 무음 알림 1건 추가(모니터링/후보/max_conf/매수게이트 차단/잔고). 매매 로직 불변. DB 마이그레이션·신규 env 없음.
-- 검증 결과: pytest 전체 **1022 passed**(신규 8) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패로 무관(분기 이전 커밋 85e8fe7에서 동일 7건 재현 확인).
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영(장 마감 후 권장). 머지 후 `scripts/record_implementation.py` 실행으로 버전 bump(0.8.8→0.9.0, enhancement=minor)+DB 이력 기록.
 
 ---
