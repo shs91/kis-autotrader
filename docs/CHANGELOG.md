@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-06-15] 스크리너 다중 순위 병합 + 체결강도/호가잔량 스코어 (증분1, default-off) (v0.13.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/api/quote.py: RankItem + get_change_rate_rank(FHPST01700000)·get_volume_power_rank(FHPST01680000)·get_quote_balance_rank(FHPST01720000). 모의 미지원/에러→빈 리스트 방어, 엔드포인트별 코드키(stck_shrn_iscd/mksc_shrn_iscd) 흡수.
+  - src/strategy/screener.py: MergedCandidate·merge_rankings(union/dedup·market_cap best-effort)·score_merged(5축)·prelim_score(예산 가드 사전컷)·rank-decay. ScoredCandidate에 volume_power_score/quote_balance_score 추가. 필터 market_cap None 통과(breadth).
+  - src/config.py: weight_volume_power/quote_balance(0.0)·multisource_enabled(false)·max_analysis_pool(40).
+  - src/worker/screener.py: 마스터스위치 분기 — OFF=현행 단일소스(불변)·ON=4소스 fetch→merge→필터→prelim cap→분석→score→DB + SCREENING_MULTISOURCE 관측 메트릭.
+  - docs/BRIDGE_SPEC.md: 가중치 제약 3→5축, 신규 파라미터·마스터스위치 명시.
+  - tests/: test_quote(순위 3종 파싱·방어 6건)·test_screener(병합·rank-decay·default-off·prelim 8건).
+- 배경: 스크리너 거래량 단일소스 → candidate 구조적 빈약(메모리: 약세장 0매매 주원인). KIS 순위 3종(등락률·체결강도·호가잔량)은 env=real에서 동작 → 후보 폭 확대 + 신호 스코어링.
+- 영향: 후보 폭 확대로 매매 활성화 기대. **마스터스위치 default false → 출시 시 매매 동작 현행과 완전 동일**, 운영자 2단계 opt-in(스위치 ON→가중치 상향). 예산 가드(MAX_ANALYSIS_POOL=40)로 daily-price 폭증 방지. 다운스트림 게이트(앙상블·리스크) 불변.
+- 검증 결과: pytest 전체 **1068 passed**(신규 13) | mypy strict ✅(96 files) | ruff ✅(변경분).
+- 비고: 실효는 운영자가 config_overrides로 `SCREENING_MULTISOURCE_ENABLED=true` 설정 시. 설계 docs/superpowers/specs/2026-06-15-screener-multisource-design.md. 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(스위치 OFF면 동작 무변경).
+
+---
+
 ## [2026-06-14] flow_filter 구조화 수급 소스 — 투자자매매동향·공매도 API (shadow) (v0.12.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -54,20 +70,5 @@
 - 영향: 진입 3축(단독 BUY 임계↓·스크리너 전략정합·후보/회전/사이즈↑) 완화로 BUY 전환·회전율 상승 기대, SELL-only 낭비 감소. 청산 안전장치(손절 2%·MDD 4%·트레일링 +5%/-5%) 전부 불변. 거래비용·승률↓·변동성↑ 가능 → 소액 forward 관측 권장. config_overrides로 즉시 롤백(SOLO_BUY 1.01).
 - 검증 결과: pytest **1035 passed / 8 failed** | mypy strict ✅(95 files) | ruff ✅(변경 파일). 잔존 8건(test_order·pipeline_cli 6·test_rsi)은 real 환경 사전존재로 제안서 무관(baseline stash 재현) — test_rsi는 수반 .env RSI_PERIOD 14→9 반영, 제안서 유발 신규 회귀 0.
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. .env 진입 민감도 변수(MA_LONG 15·RSI_PERIOD 9·MA_MAX_DIVERGENCE 0.10·RSI_OVERBOUGHT 78·DAILY_TRADE_LIMIT 50·MAX_CONSECUTIVE_LOSSES 7)는 운영자 수동 선적용. MAX_POSITION_RATIO 0.3은 고위험 항목으로 운영자 승인.
-
----
-
-## [2026-06-12] 앙상블 단독 BUY 조건부 허용 + 보유중 BUY 관측 수정 (v0.10.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/strategy/ensemble.py: `_weighted_vote`의 단독표 억제(`n_win<2`→HOLD)를 **BUY 한정 완화** — 종합 신뢰도가 `solo_buy_min_confidence` 이상이면 단독(n_win=1) BUY 진입 허용. SELL/HOLD는 기존 억제 유지. `__init__`에 임계 인자 추가.
-  - src/config.py: `StrategyConfig.solo_buy_min_confidence`(기본 0.7, env `STRATEGY_SOLO_BUY_MIN_CONFIDENCE`, 1.01=비활성).
-  - src/strategy/registry.py: EnsembleStrategy 생성 시 임계 주입.
-  - src/engine.py: 보유 종목 BUY 차단을 `skip_reason="held_skip_buy"`로 기록(매매 무변경, 877행).
-  - tests/: test_ensemble 단독 BUY 4종 + test_engine_held_observability 2종(신규 6).
-- 배경: 이번주(6/8~) 0매매 병목을 `signals`+`system_metrics.SIGNAL_SKIP.vote_meta` **두 채널**로 정량 확정 — 개별 BUY표는 많으나(MACD 4,504·RSI 4,686·MA 2,250) 같은 종목·봉서 2개 겹친 사이클 0건(`n_buy=2`=0) → 앙상블 `n_win≥2` 단독표 억제로 BUY 0 → 매매 0. 강한 단독 BUY 084650(0.86)·093370(1.0)이 묵살됨. (한 채널만 보면 양쪽 오진 — 다회 정정 끝에 확정)
-- 영향: 강한 단독 BUY(conf≥0.7) 진입 허용 → 매수 재개 기대. 약한 단독(003280 0.23·027360 0.04)은 거름. 위험게이트·min_confidence·예수금·한도 모두 유지. config_overrides로 즉시 롤백(1.01). 보유중 BUY 차단 관측 투명화(skip_reason).
-- 검증 결과: pytest 전체 **1036 passed**(신규 6) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패로 무관.
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 효과 제한적 가능(일봉 +1.25%/+7.25%, 6/2 실거래 -3.67%) + forward 검증 일중가 부재 → **소액 관측**. `STRATEGY_SOLO_BUY_MIN_CONFIDENCE` 조정/롤백은 config_overrides.
 
 ---
