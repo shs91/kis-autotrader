@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-06-14] flow_filter 구조화 수급 소스 — 투자자매매동향·공매도 API (shadow) (v0.12.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/api/quote.py: QuoteAPI에 get_investor_trend_daily(FHPTJ04160001)·get_short_sale_daily(FHPST04830000) + DTO InvestorTrendDaily/ShortSaleDaily 추가. 둘 다 모의 미지원(실전 전용) → try/except KISAutoTraderError + rt_cd 체크로 None 방어(현 virtual 무동작). 공매도 비중(ssts_vol_rlim) 신규 노출.
+  - src/strategy/flow_filter.py: features_from_structured() 순수 매퍼 추가 — 구조화 API 필드→FlowFeatures(텍스트 파싱 대체 경로). flow_score 무변경(비율이라 단위 불변), parse_flow_text 유지(하위호환).
+  - tests/test_api/test_quote.py: 신규 5건(파싱·음수·rt_cd≠0/빈 output2/HTTP에러 None 방어).
+  - tests/test_strategy/test_flow_filter.py: 신규 2건(매퍼-텍스트 flow_score 동등성·부분입력 안전).
+- 배경: flow_filter(v0.11.0 shadow)의 수급 입력이 news_chunks 자유텍스트 정규식 파싱 의존 → 라벨/레이아웃 변경에 취약(생존편향)·수집 종목 한정. KIS 구조화 API(FHPTJ04160001·FHPST04830000)가 동일 피처(기관/외국인/개인 순매수·공매도 체결수량/비중)를 JSON으로 제공.
+- 영향: 텍스트→구조화 소스 전환의 첫 단계(shadow, 미배선). 엔진/스크리너 배선은 범위 밖(수동 Phase 3). 매매 동작 무변경 → 실거래 리스크 0. DB/스키마/config_overrides/외부패키지 불변.
+- 검증 결과: pytest 전체 **1055 passed**(신규 7) | mypy strict ✅(96 files) | ruff ✅(변경 4파일). 사전존재 ruff 13건은 미변경 파일 베이스라인으로 무관.
+- 비고: 두 API는 실전 전용(모의 미지원)이라 현 virtual에선 None(무동작), 실효는 실전 전환 시. 호출부 배선은 수동 Phase 3. 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(shadow라 동작 변화 없음).
+
+---
+
 ## [2026-06-13] 테스트 환경 격리 — real .env 누수로 깨지던 pytest 8건 수정 (v0.11.1)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -55,17 +69,5 @@
 - 영향: 강한 단독 BUY(conf≥0.7) 진입 허용 → 매수 재개 기대. 약한 단독(003280 0.23·027360 0.04)은 거름. 위험게이트·min_confidence·예수금·한도 모두 유지. config_overrides로 즉시 롤백(1.01). 보유중 BUY 차단 관측 투명화(skip_reason).
 - 검증 결과: pytest 전체 **1036 passed**(신규 6) | mypy strict ✅ | ruff ✅(변경 파일). 잔존 7건(test_order·pipeline_cli)은 공유 DB 기존 실패로 무관.
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. 효과 제한적 가능(일봉 +1.25%/+7.25%, 6/2 실거래 -3.67%) + forward 검증 일중가 부재 → **소액 관측**. `STRATEGY_SOLO_BUY_MIN_CONFIDENCE` 조정/롤백은 config_overrides.
-
----
-
-## [2026-06-09] event_logs 적재 정합 — 종목 처리 ERROR를 event_logs에도 기록 (v0.9.2)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: `log_error` import 보강 + `_record_error(stock_code, error)` 헬퍼 신설(`system_metrics(ERROR)` enqueue + `event_logs(ERROR)` 양쪽 일관 적재, `log_error` 호출은 try/except로 방어해 매매 흐름 보호). 종목 처리 예외 블록을 인라인 `_record_metric("ERROR", {...})`에서 `self._record_error(stock_code)` 호출로 치환(기존 metric payload cycle/stock_code/error 보존).
-  - tests/test_engine_error_event.py: 신규 — `_record_error`가 metric+event_logs 양쪽 적재하는지(detail 필드 검증) + `log_error` 예외가 swallow되는지 TDD 2건.
-- 배경: W23 주말 리뷰에서 실전 DB(kis_trader_real) 직접 조회 결과, 종목 처리 ERROR가 `system_metrics`에만 적재되고 `event_logs` ERROR 행은 전 기간 0건인 관측성 결함 확인(06-05 ERROR 2건도 event_logs 누락). engine.py가 `log_error`를 import/호출하지 않아 일간 리포트 "에러/경고" 섹션과 공통규칙 룰C(에러 반복)가 event_logs 기준으로 항상 0건으로 보임.
-- 영향: 종목 처리 에러가 `event_logs`(ERROR)에도 적재되어 일간·주간 분석이 event_logs 기준으로도 에러 추적 가능. system_metrics ERROR와 event_logs ERROR 불일치 해소. 매매 동작/시그니처/수익률 불변(순수 관측성 보강). DB 마이그레이션·신규 env 없음.
-- 검증 결과: pytest test_engine_error_event **2 passed**(신규) | test_engine_db_integration 30 passed | test_engine_buy_gate_metric 10 passed | mypy src/engine.py ✅ | ruff ✅(변경 파일).
-- 비고: 06-01·06-02 event_logs의 팬텀 '테스트' 매매(고아체결 회수 경로 의심)는 매매/회수 경로를 건드려야 하므로 본 제안 범위 밖(별도 조사). 운영자 액션 — `com.kis.autotrader` 재시작 시 반영.
 
 ---

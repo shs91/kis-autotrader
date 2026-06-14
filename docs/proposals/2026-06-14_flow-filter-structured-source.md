@@ -3,7 +3,7 @@
 ## 메타데이터
 - 작성: Claude Code (사용자 요청)
 - 일자: 2026-06-14
-- 상태: ready
+- 상태: implemented
 - 우선순위: medium
 - 카테고리: new_strategy
 - 관련파일: `src/api/quote.py`, `src/strategy/flow_filter.py`, `tests/test_api/test_quote.py`, `tests/test_strategy/test_flow_filter.py`
