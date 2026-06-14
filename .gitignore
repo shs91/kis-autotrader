@@ -30,6 +30,9 @@ logs/
 backups/
 docs/reports/daily/
 
+# KIS API 스펙 참고용 Excel (대용량 바이너리, 이력 제외)
+docs/KIS_openAPI_*.xlsx
+
 .coverage
 htmlcov/
 .pytest_cache/
