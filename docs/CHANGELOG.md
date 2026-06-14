@@ -6,6 +6,21 @@
 
 ---
 
+## [2026-06-15] 수급 flow_score 스크리너 배선 — 멀티소스 가산 신호 (증분2, default-off) (v0.14.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/config.py: flow_enabled(false)·weight_flow(0.0). weight_flow는 5축 합(=1.0)과 별개의 signed 가산항.
+  - src/strategy/screener.py: score_merged/score_merged_candidate에 flow_score 인자(total += weight_flow×flow_score), ScoredCandidate.flow_score 필드.
+  - src/worker/screener.py: 멀티소스 분석 풀에 한해 get_investor_trend_daily 1콜(일일 캐시)로 flow_score 산출 → score_merged 전달. flow_score가 공매도 미사용이라 short_sale 미조회(예산 절감). flow_enabled=false면 0.0(무동작).
+  - docs/BRIDGE_SPEC.md: SCREENING_WEIGHT_FLOW(0~0.3)·flow 가산항(합 제약 별개)·flow 스위치 명시.
+  - tests/test_strategy/test_screener.py: 신규 2건(flow 부호 가산·default-off 미반영).
+- 배경: v0.12.0 flow_filter shadow(순수 스코어러)의 Phase 3 배선. 구조화 수급(기관·외국인 순매수, FHPTJ04160001)을 스크리너 스코어에 read-only 반영해 smart-money 방향을 후보 랭킹에 보강.
+- 영향: 기관·외국인 순매도 종목 demote 가능(가산 음수→min_score 컷). default-off라 운영자 opt-in 전 무동작. per-stock 예산은 분석풀(≤MAX_ANALYSIS_POOL)·일일 캐시·investor_trend 1콜로 한정. 멀티소스 ON 위에서만 동작.
+- 검증 결과: pytest 전체 **1070 passed**(신규 2) | mypy strict ✅(96 files) | ruff ✅(변경분).
+- 비고: 활성화는 config_overrides로 `SCREENING_FLOW_ENABLED=true` + `SCREENING_WEIGHT_FLOW` 상향(멀티소스도 ON 필요). 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(OFF면 동작 무변경).
+
+---
+
 ## [2026-06-15] 스크리너 다중 순위 병합 + 체결강도/호가잔량 스코어 (증분1, default-off) (v0.13.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -57,18 +72,5 @@
 - 영향: 수급 점수화 로직+회귀 테스트가 검증된 상태로 확보 → 수동 계획 Phase 3에서 엔진 read-only 배선 즉시 가능. 매매 동작 **무변경**(순수 함수, 미배선)이라 실거래 리스크 0. DB/스키마/config_overrides 불변.
 - 검증 결과: pytest test_flow_filter **5 passed** | mypy strict ✅(flow_filter.py) | ruff ✅. 전략 모듈 경계(데이터 인자 수신, api/ 직접호출 없음) 준수.
 - 비고: 운영자 액션 불필요(미배선). 호출부 배선은 수동 계획 Phase 3 별도 과제.
-
----
-
-## [2026-06-12] 공격적 진입 전환 — 단독 BUY 임계↓ + 스크리너 정합 + 회전 가속 (v0.10.1)
-- 카테고리: param_tuning
-- 변경 파일:
-  - config_overrides.json: 진입 16개 파라미터 전체교체 — SOLO_BUY_MIN_CONFIDENCE 0.70→0.45, MIN_CONFIDENCE 0.20→0.05, MAX_POSITION_RATIO 0.1→0.3, 스크리너 전략중심(WEIGHT_STRATEGY 0.3→0.5·CHANGE_RATE 0.4→0.2), CHANGE_RATE_MIN/MAX -8~8, MAX_PRICE 20k→150k, TOP_N 30→50, MAX_SCREENED 5→20, INTERVAL_CYCLES 30→15, PER_STOCK 1→3, RSI_OVERSOLD 35→38. 청산 게이트(손절·MDD·트레일링) 불변.
-  - src/strategy/risk.py: `RiskManager.__init__`에 `min_confidence` 주입 파라미터 추가(기본 None=settings, 운영 동작 불변) — 다른 7개 리스크 파라미터와 동일 패턴, 테스트 격리용.
-  - tests/test_strategy/test_risk.py: `TestValidateOrder`가 `RiskManager(min_confidence=0.1)` 명시 주입하도록 격리(운영 MIN_CONFIDENCE=0.05 의존 제거).
-- 배경: 실전 2주(05-29~06-11) 부진 원인이 리스크 게이트 차단이 아니라 "살 종목 부재"로 정량 확정 — 스크리너 등락률 편중(급등주)→평균회귀 전략 SELL 판정→후보 60% 미보유 SELL 폐기, 2주 BUY 종목 대한해운 1개뿐. 청산 게이트 거의 미발동(손절 1회).
-- 영향: 진입 3축(단독 BUY 임계↓·스크리너 전략정합·후보/회전/사이즈↑) 완화로 BUY 전환·회전율 상승 기대, SELL-only 낭비 감소. 청산 안전장치(손절 2%·MDD 4%·트레일링 +5%/-5%) 전부 불변. 거래비용·승률↓·변동성↑ 가능 → 소액 forward 관측 권장. config_overrides로 즉시 롤백(SOLO_BUY 1.01).
-- 검증 결과: pytest **1035 passed / 8 failed** | mypy strict ✅(95 files) | ruff ✅(변경 파일). 잔존 8건(test_order·pipeline_cli 6·test_rsi)은 real 환경 사전존재로 제안서 무관(baseline stash 재현) — test_rsi는 수반 .env RSI_PERIOD 14→9 반영, 제안서 유발 신규 회귀 0.
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. .env 진입 민감도 변수(MA_LONG 15·RSI_PERIOD 9·MA_MAX_DIVERGENCE 0.10·RSI_OVERBOUGHT 78·DAILY_TRADE_LIMIT 50·MAX_CONSECUTIVE_LOSSES 7)는 운영자 수동 선적용. MAX_POSITION_RATIO 0.3은 고위험 항목으로 운영자 승인.
 
 ---
