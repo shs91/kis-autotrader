@@ -1,8 +1,9 @@
 {
   "_meta": {
-    "updated_at": "2026-06-12",
-    "updated_by": "proposal:2026-06-12_aggressive-entry-tuning"
+    "updated_at": "2026-06-15",
+    "updated_by": "manual:multisource-stage1-enable"
   },
+  "SCREENING_MULTISOURCE_ENABLED": true,
   "STRATEGY_SOLO_BUY_MIN_CONFIDENCE": 0.45,
   "STRATEGY_MIN_CONFIDENCE": 0.05,
   "SCREENING_WEIGHT_VOLUME_RANK": 0.3,
