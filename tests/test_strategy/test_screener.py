@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from src.api.quote import VolumeRankItem
+from src.api.quote import RankItem, VolumeRankItem
 from src.config import ScreeningConfig
 from src.strategy.base import Signal, SignalType
 from src.strategy.screener import (
+    MergedCandidate,
     ScreeningFilter,
     ScreeningScorer,
     StockScreener,
+    _rank_decay,
 )
 
 # ── 테스트 데이터 팩토리 ──────────────────────────
@@ -60,6 +62,133 @@ def _config(**overrides: object) -> ScreeningConfig:
     }
     defaults.update(overrides)
     return ScreeningConfig(**defaults)  # type: ignore[arg-type]
+
+
+def _rank(
+    code: str,
+    rank: int,
+    *,
+    name: str = "종목",
+    price: int = 10000,
+    change_rate: float = 3.0,
+    volume: int = 1_000_000,
+    market_cap: int | None = None,
+    metric: float | None = None,
+) -> RankItem:
+    return RankItem(
+        stock_code=code,
+        stock_name=name,
+        current_price=price,
+        change_rate=change_rate,
+        volume=volume,
+        source_rank=rank,
+        market_cap=market_cap,
+        metric=metric,
+    )
+
+
+# ── 멀티소스 병합·스코어 (증분1) ──────────────────
+
+
+class TestMultiSourceScreener:
+    """멀티소스 병합·rank-decay·default-off 동등성."""
+
+    def test_merge_union_dedup_and_ranks(self) -> None:
+        scr = StockScreener(_config())
+        sources = {
+            "volume": [
+                _rank("005930", 1, market_cap=500_000_000),
+                _rank("000660", 2, market_cap=300_000_000),
+            ],
+            "volume_power": [
+                _rank("005930", 3, metric=145.0),
+                _rank("035720", 1, metric=130.0),
+            ],
+        }
+        by_code = {m.stock_code: m for m in scr.merge_rankings(sources)}
+        assert set(by_code) == {"005930", "000660", "035720"}
+        assert by_code["005930"].ranks == {"volume": 1, "volume_power": 3}
+        assert by_code["005930"].market_cap == 500_000_000
+        assert by_code["035720"].market_cap is None
+        assert by_code["005930"].metrics.get("volume_power") == 145.0
+
+    def test_merge_market_cap_propagates_when_volume_later(self) -> None:
+        scr = StockScreener(_config())
+        sources = {
+            "volume_power": [_rank("005930", 1, metric=120.0)],
+            "volume": [_rank("005930", 5, market_cap=500_000_000)],
+        }
+        m = {x.stock_code: x for x in scr.merge_rankings(sources)}["005930"]
+        assert m.market_cap == 500_000_000
+        assert m.ranks == {"volume_power": 1, "volume": 5}
+
+    def test_filter_allows_unknown_market_cap(self) -> None:
+        flt = ScreeningFilter(_config(min_market_cap=100_000_000))
+        cand = MergedCandidate(
+            stock_code="035720", stock_name="카카오", current_price=50000,
+            change_rate=3.0, volume=1_000_000, market_cap=None,
+            ranks={"volume_power": 1}, metrics={},
+        )
+        assert len(flt.apply([cand], set())) == 1
+
+    def test_filter_blocks_known_low_market_cap(self) -> None:
+        flt = ScreeningFilter(_config(min_market_cap=100_000_000))
+        cand = MergedCandidate(
+            stock_code="005930", stock_name="삼성전자", current_price=50000,
+            change_rate=3.0, volume=1_000_000, market_cap=1_000_000,
+            ranks={"volume": 1}, metrics={},
+        )
+        assert flt.apply([cand], set()) == []
+
+    def test_rank_decay_bounds(self) -> None:
+        assert _rank_decay(1, 20) == 1.0
+        assert _rank_decay(None, 20) == 0.0
+        assert _rank_decay(21, 20) == 0.0
+        assert 0.0 < _rank_decay(11, 20) < 1.0
+
+    def test_score_merged_default_off_no_new_contribution(self) -> None:
+        scr = StockScreener(_config())  # vp=qb 가중치 0.0 (default)
+        cand = MergedCandidate(
+            stock_code="005930", stock_name="삼성전자", current_price=70000,
+            change_rate=3.0, volume=1_000_000, market_cap=500_000_000,
+            ranks={"volume": 1, "volume_power": 1, "quote_balance": 1}, metrics={},
+        )
+        scored = scr.score_merged_candidate(cand, _signal(SignalType.BUY, 0.7))
+        # 신규 컴포넌트는 계산되지만(1.0) 가중치 0이라 total 미반영
+        assert scored.volume_power_score == 1.0
+        assert scored.quote_balance_score == 1.0
+        # 0.3*1 + 0.3*0.3 + 0.4*0.7
+        assert scored.total_score == pytest.approx(0.67)
+
+    def test_score_merged_new_signals_when_weighted(self) -> None:
+        cfg = _config(
+            weight_volume_rank=0.2, weight_change_rate=0.2, weight_strategy=0.4,
+            weight_volume_power=0.1, weight_quote_balance=0.1,
+        )
+        scr = StockScreener(cfg)
+        cand = MergedCandidate(
+            stock_code="005930", stock_name="삼성전자", current_price=70000,
+            change_rate=3.0, volume=1_000_000, market_cap=500_000_000,
+            ranks={"volume": 1, "volume_power": 1, "quote_balance": 1}, metrics={},
+        )
+        scored = scr.score_merged_candidate(cand, _signal(SignalType.BUY, 0.7))
+        # 0.2*1 + 0.2*0.3 + 0.4*0.7 + 0.1*1 + 0.1*1
+        assert scored.total_score == pytest.approx(0.74)
+
+    def test_prelim_score_excludes_strategy(self) -> None:
+        cfg = _config(
+            weight_volume_rank=0.5, weight_change_rate=0.5, weight_strategy=0.0,
+        )
+        scr = StockScreener(cfg)
+        top = MergedCandidate(
+            stock_code="A", stock_name="A", current_price=10000, change_rate=10.0,
+            volume=1, market_cap=None, ranks={"volume": 1}, metrics={},
+        )
+        low = MergedCandidate(
+            stock_code="B", stock_name="B", current_price=10000, change_rate=0.0,
+            volume=1, market_cap=None, ranks={"volume": 20}, metrics={},
+        )
+        assert scr.prelim_score(top) > scr.prelim_score(low)
 
 
 # ── ScreeningFilter 테스트 ────────────────────────

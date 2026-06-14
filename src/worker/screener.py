@@ -25,6 +25,7 @@ Redis Rate Limiter를 통해 API 호출 할당량을 관리한다.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import cast
 from zoneinfo import ZoneInfo
@@ -33,9 +34,9 @@ import pandas as pd
 
 from src.api.auth import KISAuth
 from src.api.client import KISClient
-from src.api.quote import QuoteAPI, VolumeRankItem
+from src.api.quote import QuoteAPI, RankItem, VolumeRankItem
 from src.api.rate_limiter import HybridRateLimiter, RateLimiter
-from src.config import settings
+from src.config import ScreeningConfig, settings
 from src.db.repository import (
     MarketActionRepository,
     NewsChunkRepository,
@@ -46,7 +47,12 @@ from src.db.session import get_session
 from src.scheduler.holidays import is_market_closed
 from src.strategy.disclosure_risk import match_critical_disclosure
 from src.strategy.registry import StrategyRegistry
-from src.strategy.screener import ScoredCandidate, ScreeningFilter, StockScreener
+from src.strategy.screener import (
+    MergedCandidate,
+    ScoredCandidate,
+    ScreeningFilter,
+    StockScreener,
+)
 from src.strategy.selector import StrategySelector
 from src.utils.logger import setup_logger
 
@@ -138,6 +144,10 @@ class ScreeningWorker:
         self._cycle_count += 1
         scfg = settings.screening
 
+        if scfg.multisource_enabled:
+            await self._run_screening_multisource(scfg)
+            return
+
         # 1단계: 거래량 순위 조회 (KIS API)
         try:
             ranked = await self._quote.get_volume_rank(top_n=scfg.top_n)
@@ -218,6 +228,140 @@ class ScreeningWorker:
             len(new_codes),
         )
 
+    async def _run_screening_multisource(self, scfg: ScreeningConfig) -> None:
+        """멀티소스 스크리닝 1회 (마스터 스위치 ON).
+
+        4 순위 조회 → 병합 → 위험종목 배제 → 필터 → 사전컷(예산 가드) →
+        daily-price 분석 → 5축 스코어 → DB 기록 + 관측 메트릭.
+        """
+        sources = await self._fetch_rank_sources(scfg)
+        if not any(sources.values()):
+            logger.warning("멀티소스 순위 조회 전부 실패 — 스킵")
+            return
+
+        merged = self._screener.merge_rankings(sources)
+
+        exclude_codes: set[str] = set()
+        try:
+            exclude_codes = self._load_existing_screened_codes()
+        except Exception:
+            logger.debug("기존 스크리닝 코드 로드 실패")
+
+        risk_blocked = self._load_risk_blocked_codes({m.stock_code for m in merged})
+        if risk_blocked:
+            exclude_codes |= set(risk_blocked)
+            self._record_risk_excluded_metric(risk_blocked)
+
+        filtered = self._screener.filter_candidates(merged, exclude_codes)
+        # 예산 가드: 사전점수 상위 max_analysis_pool개만 daily-price 분석 대상으로 컷
+        filtered.sort(key=self._screener.prelim_score, reverse=True)
+        analysis_pool = filtered[: scfg.max_analysis_pool]
+
+        scored: list[ScoredCandidate] = []
+        for cand in analysis_pool:
+            try:
+                daily_prices = await self._quote.get_daily_price(cand.stock_code)
+                if len(daily_prices) < 36:
+                    continue
+                df = pd.DataFrame(
+                    [
+                        {"close": p.close_price, "date": p.date}
+                        for p in reversed(daily_prices)
+                    ]
+                )
+                strategy = self._selector.get_strategy(cand.stock_code)
+                signal = strategy.analyze(df)
+                scored.append(self._screener.score_merged_candidate(cand, signal))
+            except Exception:
+                logger.debug("스크리닝 분석 실패: %s", cand.stock_code)
+
+        top_candidates = self._screener.rank_candidates(scored)
+
+        new_codes: list[str] = []
+        remaining_slots = scfg.max_screened - len(exclude_codes)
+        for candidate in top_candidates[: max(remaining_slots, 0)]:
+            new_codes.append(candidate.stock_code)
+
+        self._record_to_db(analysis_pool, new_codes)
+        self._record_multisource_metric(
+            sources, len(merged), len(filtered), len(analysis_pool), new_codes
+        )
+
+        logger.info(
+            "=== 멀티소스 스크리닝 완료 (#%d): 소스 %s, 병합 %d, 필터 %d, 분석 %d, 발굴 %d ===",
+            self._cycle_count,
+            {k: len(v) for k, v in sources.items()},
+            len(merged),
+            len(filtered),
+            len(analysis_pool),
+            len(new_codes),
+        )
+
+    async def _fetch_rank_sources(
+        self, scfg: ScreeningConfig
+    ) -> dict[str, list[RankItem]]:
+        """4개 순위 소스를 {source: list[RankItem]}로 조회한다.
+
+        거래량순위는 VolumeRankItem → RankItem 변환(source_rank=조회 순번, market_cap
+        보존). 각 소스 실패는 빈 리스트로 격리한다(한 소스 실패가 나머지를 막지 않음).
+        """
+        sources: dict[str, list[RankItem]] = {}
+        try:
+            vol = await self._quote.get_volume_rank(top_n=scfg.top_n)
+            sources["volume"] = [
+                RankItem(
+                    stock_code=v.stock_code,
+                    stock_name=v.stock_name,
+                    current_price=v.current_price,
+                    change_rate=v.change_rate,
+                    volume=v.volume,
+                    source_rank=idx,
+                    market_cap=v.market_cap,
+                )
+                for idx, v in enumerate(vol, start=1)
+            ]
+        except Exception:
+            logger.exception("거래량 순위 조회 실패")
+            sources["volume"] = []
+
+        rank_fetchers = (
+            ("change_rate", self._quote.get_change_rate_rank),
+            ("volume_power", self._quote.get_volume_power_rank),
+            ("quote_balance", self._quote.get_quote_balance_rank),
+        )
+        for key, fetch in rank_fetchers:
+            try:
+                sources[key] = await fetch(top_n=scfg.top_n)
+            except Exception:
+                logger.exception("%s 순위 조회 실패", key)
+                sources[key] = []
+        return sources
+
+    def _record_multisource_metric(
+        self,
+        sources: dict[str, list[RankItem]],
+        merged_count: int,
+        filtered_count: int,
+        analyzed_count: int,
+        new_codes: list[str],
+    ) -> None:
+        """멀티소스 깔때기를 SCREENING_MULTISOURCE 메트릭으로 기록(관측용)."""
+        try:
+            with get_session() as session:
+                SystemMetricRepository(session).record_metric(
+                    metric_type="SCREENING_MULTISOURCE",
+                    detail={
+                        "cycle": self._cycle_count,
+                        "sources": {k: len(v) for k, v in sources.items()},
+                        "merged": merged_count,
+                        "filtered": filtered_count,
+                        "analyzed": analyzed_count,
+                        "candidates": len(new_codes),
+                    },
+                )
+        except Exception:
+            logger.debug("SCREENING_MULTISOURCE 메트릭 기록 실패")
+
     def _load_existing_screened_codes(self) -> set[str]:
         """오늘 이미 스크리닝된 종목코드를 DB에서 조회한다."""
         with get_session() as session:
@@ -275,10 +419,10 @@ class ScreeningWorker:
 
     def _record_to_db(
         self,
-        ranked: list[VolumeRankItem],
+        ranked: Sequence[VolumeRankItem | MergedCandidate],
         new_candidates: list[str],
     ) -> None:
-        """스크리닝 결과를 screening_results 테이블에 배치 기록한다."""
+        """스크리닝 결과를 screening_results 테이블에 배치 기록한다(단일·멀티소스 공통)."""
         try:
             candidate_set = set(new_candidates)
             etf_blocked = 0

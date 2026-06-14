@@ -424,6 +424,13 @@ class ScreeningConfig:
     weight_strategy: float = field(
         default_factory=lambda: _env_float("SCREENING_WEIGHT_STRATEGY", 0.4)
     )
+    # 멀티소스 신규 신호 가중치 (증분1, 기본 0.0 = OFF). 5개 가중치 합=1.0 유지.
+    weight_volume_power: float = field(
+        default_factory=lambda: _env_float("SCREENING_WEIGHT_VOLUME_POWER", 0.0)
+    )
+    weight_quote_balance: float = field(
+        default_factory=lambda: _env_float("SCREENING_WEIGHT_QUOTE_BALANCE", 0.0)
+    )
 
     # 최소 종합 점수 (0.0~1.0, 이하 컷)
     min_score: float = field(
@@ -446,6 +453,15 @@ class ScreeningConfig:
     common_stock_only: bool = field(
         default_factory=lambda: _env("SCREENING_COMMON_STOCK_ONLY", "true").lower()
         == "true"
+    )
+    # 멀티소스 스크리너(증분1) 마스터 스위치 — false면 거래량 단일소스(현행 경로).
+    multisource_enabled: bool = field(
+        default_factory=lambda: _env("SCREENING_MULTISOURCE_ENABLED", "false").lower()
+        == "true"
+    )
+    # daily-price 분석 대상 상위 컷(예산 가드). 병합 후보가 많아도 이 수만 분석.
+    max_analysis_pool: int = field(
+        default_factory=lambda: _env_int("MAX_ANALYSIS_POOL", 40)
     )
 
 

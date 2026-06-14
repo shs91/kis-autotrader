@@ -37,6 +37,14 @@ SHORT_SALE_PATH: str = "/uapi/domestic-stock/v1/quotations/daily-short-sale"
 TR_ID_INVESTOR_TREND: str = "FHPTJ04160001"
 TR_ID_SHORT_SALE: str = "FHPST04830000"
 
+# 순위 분석 — 멀티소스 스크리너(증분1). 모두 모의 미지원(실전 전용), output 배열.
+CHANGE_RATE_RANK_PATH: str = "/uapi/domestic-stock/v1/ranking/fluctuation"
+VOLUME_POWER_RANK_PATH: str = "/uapi/domestic-stock/v1/ranking/volume-power"
+QUOTE_BALANCE_RANK_PATH: str = "/uapi/domestic-stock/v1/ranking/quote-balance"
+TR_ID_CHANGE_RATE_RANK: str = "FHPST01700000"
+TR_ID_VOLUME_POWER_RANK: str = "FHPST01680000"
+TR_ID_QUOTE_BALANCE_RANK: str = "FHPST01720000"
+
 
 def _get(data: dict[str, Any], key: str, default: str = "") -> str:
     """대소문자를 구분하지 않고 딕셔너리에서 값을 가져온다.
@@ -127,6 +135,20 @@ class ShortSaleDaily:
     date: str
     short_volume_qty: int  # ssts_cntg_qty 공매도 체결 수량(주)
     short_volume_ratio: float  # ssts_vol_rlim 공매도 거래량 비중(%)
+
+
+@dataclass
+class RankItem:
+    """순위 분석 API 공통 항목 (멀티소스 스크리닝)."""
+
+    stock_code: str
+    stock_name: str
+    current_price: int
+    change_rate: float
+    volume: int
+    source_rank: int  # data_rank (1-based)
+    market_cap: int | None = None  # 거래량순위만 채움(신규 3종 미반환)
+    metric: float | None = None  # 소스별 지표(tday_rltv, shnu_rsqn_rate 등)
 
 
 class QuoteAPI:
@@ -477,4 +499,122 @@ class QuoteAPI:
             date=_get(item, "STCK_BSOP_DATE"),
             short_volume_qty=int(_get(item, "SSTS_CNTG_QTY", "0") or "0"),
             short_volume_ratio=float(_get(item, "SSTS_VOL_RLIM", "0") or "0"),
+        )
+
+    async def _fetch_rank(
+        self,
+        *,
+        path: str,
+        tr_id: str,
+        params: dict[str, str],
+        code_key: str,
+        metric_key: str,
+        top_n: int,
+    ) -> list[RankItem]:
+        """순위 분석 엔드포인트 공통 조회·파싱.
+
+        엔드포인트별 코드 키(stck_shrn_iscd/mksc_shrn_iscd)와 지표 키만 다르고
+        나머지 응답 필드(현재가/등락률/거래량/data_rank)는 공통이다. 모의 미지원/
+        에러/빈 응답에서는 빈 리스트를 반환해 스크리닝을 막지 않는다.
+        """
+        try:
+            response = await self._client.get(path, params=params, tr_id=tr_id)
+        except KISAutoTraderError:
+            logger.debug("[순위 조회] 실패/미지원 — tr_id=%s", tr_id)
+            return []
+
+        if str(response.get("rt_cd", "0")) != "0":
+            return []
+        output_list = response.get("output") or []
+        results: list[RankItem] = []
+        for idx, item in enumerate(output_list[:top_n], start=1):
+            code = _get(item, code_key)
+            if not code:
+                continue
+            results.append(
+                RankItem(
+                    stock_code=code,
+                    stock_name=_get(item, "HTS_KOR_ISNM"),
+                    current_price=int(_get(item, "STCK_PRPR", "0") or "0"),
+                    change_rate=float(_get(item, "PRDY_CTRT", "0") or "0"),
+                    volume=int(_get(item, "ACML_VOL", "0") or "0"),
+                    source_rank=int(_get(item, "DATA_RANK", "0") or str(idx)),
+                    metric=float(_get(item, metric_key, "0") or "0"),
+                )
+            )
+        return results
+
+    async def get_change_rate_rank(self, top_n: int | None = None) -> list[RankItem]:
+        """등락률(상승률) 상위 종목 (FHPST01700000). 모의 미지원/실패 시 빈 리스트."""
+        n = top_n if top_n is not None else settings.screening.top_n
+        params = {
+            "fid_cond_mrkt_div_code": "J",
+            "fid_cond_scr_div_code": "20170",
+            "fid_input_iscd": "0000",
+            "fid_rank_sort_cls_code": "0",  # 0=상승률순
+            "fid_input_cnt_1": "0",
+            "fid_prc_cls_code": "0",
+            "fid_input_price_1": "",
+            "fid_input_price_2": "",
+            "fid_vol_cnt": "",
+            "fid_trgt_cls_code": "0",
+            "fid_trgt_exls_cls_code": "0",
+            "fid_div_cls_code": "0",
+            "fid_rsfl_rate1": "",
+            "fid_rsfl_rate2": "",
+        }
+        return await self._fetch_rank(
+            path=CHANGE_RATE_RANK_PATH,
+            tr_id=TR_ID_CHANGE_RATE_RANK,
+            params=params,
+            code_key="stck_shrn_iscd",
+            metric_key="prdy_ctrt",
+            top_n=n,
+        )
+
+    async def get_volume_power_rank(self, top_n: int | None = None) -> list[RankItem]:
+        """체결강도 상위 종목 (FHPST01680000). 모의 미지원/실패 시 빈 리스트."""
+        n = top_n if top_n is not None else settings.screening.top_n
+        params = {
+            "fid_cond_mrkt_div_code": "J",
+            "fid_cond_scr_div_code": "20168",
+            "fid_input_iscd": "0000",
+            "fid_div_cls_code": "0",
+            "fid_input_price_1": "",
+            "fid_input_price_2": "",
+            "fid_vol_cnt": "",
+            "fid_trgt_cls_code": "0",
+            "fid_trgt_exls_cls_code": "0",
+        }
+        return await self._fetch_rank(
+            path=VOLUME_POWER_RANK_PATH,
+            tr_id=TR_ID_VOLUME_POWER_RANK,
+            params=params,
+            code_key="stck_shrn_iscd",
+            metric_key="tday_rltv",
+            top_n=n,
+        )
+
+    async def get_quote_balance_rank(self, top_n: int | None = None) -> list[RankItem]:
+        """호가잔량(매수잔량) 상위 종목 (FHPST01720000). 모의 미지원/실패 시 빈 리스트."""
+        n = top_n if top_n is not None else settings.screening.top_n
+        params = {
+            "fid_cond_mrkt_div_code": "J",
+            "fid_cond_scr_div_code": "20172",
+            "fid_input_iscd": "0000",
+            "fid_rank_sort_cls_code": "0",
+            "fid_div_cls_code": "0",
+            "fid_trgt_cls_code": "0",
+            "fid_trgt_exls_cls_code": "0",
+            "fid_input_price_1": "",
+            "fid_input_price_2": "",
+            "fid_vol_cnt": "",
+        }
+        return await self._fetch_rank(
+            path=QUOTE_BALANCE_RANK_PATH,
+            tr_id=TR_ID_QUOTE_BALANCE_RANK,
+            params=params,
+            code_key="mksc_shrn_iscd",
+            metric_key="shnu_rsqn_rate",
+            top_n=n,
         )

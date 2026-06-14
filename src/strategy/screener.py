@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
-from src.api.quote import VolumeRankItem
+from src.api.quote import RankItem, VolumeRankItem
 from src.config import ScreeningConfig, settings
 from src.strategy.base import Signal, SignalType
 from src.utils.logger import setup_logger
@@ -28,6 +29,33 @@ class ScoredCandidate:
     volume: int
     change_rate: float
     current_price: int
+    volume_power_score: float = 0.0  # 0.0~1.0 (체결강도 rank-decay)
+    quote_balance_score: float = 0.0  # 0.0~1.0 (호가 매수잔량 rank-decay)
+
+
+@dataclass
+class MergedCandidate:
+    """복수 순위 소스를 병합한 후보 (멀티소스 스크리닝)."""
+
+    stock_code: str
+    stock_name: str
+    current_price: int
+    change_rate: float
+    volume: int
+    market_cap: int | None  # 거래량순위 출처에서만 채워짐(신규 3종 미반환)
+    ranks: dict[str, int]  # {source: source_rank}
+    metrics: dict[str, float]  # {source: metric}
+
+
+# 필터는 단일소스(VolumeRankItem)·멀티소스(MergedCandidate) 양쪽에 동작.
+_ScreenT = TypeVar("_ScreenT", VolumeRankItem, MergedCandidate)
+
+
+def _rank_decay(rank: int | None, top_n: int) -> float:
+    """순위 → [0.0, 1.0] 점수. 1위=1.0, top_n위≈0.0, 미등장(None)=0.0."""
+    if rank is None or rank < 1 or top_n < 1:
+        return 0.0
+    return max(0.0, 1.0 - (rank - 1) / top_n)
 
 
 class ScreeningFilter:
@@ -42,20 +70,20 @@ class ScreeningFilter:
 
     def apply(
         self,
-        items: list[VolumeRankItem],
+        items: list[_ScreenT],
         exclude_codes: set[str],
-    ) -> list[VolumeRankItem]:
-        """필터 조건을 적용하여 후보를 반환한다.
+    ) -> list[_ScreenT]:
+        """필터 조건을 적용하여 후보를 반환한다(단일·멀티소스 공통).
 
         Args:
-            items: 거래량 순위 종목 목록
+            items: 순위 종목 목록 (VolumeRankItem 또는 MergedCandidate)
             exclude_codes: 제외할 종목코드 (관심종목 + 기발굴)
 
         Returns:
-            필터를 통과한 종목 목록
+            필터를 통과한 종목 목록 (입력과 동일 타입)
         """
         cfg = self._config
-        passed: list[VolumeRankItem] = []
+        passed: list[_ScreenT] = []
         etf_count = 0
 
         for item in items:
@@ -75,13 +103,19 @@ class ScreeningFilter:
         return passed
 
     @staticmethod
-    def _pass_filter(item: VolumeRankItem, cfg: ScreeningConfig) -> bool:
-        """단일 종목의 필터 통과 여부를 판정한다."""
+    def _pass_filter(
+        item: VolumeRankItem | MergedCandidate, cfg: ScreeningConfig
+    ) -> bool:
+        """단일 종목의 필터 통과 여부를 판정한다.
+
+        멀티소스 후보는 거래량순위 외 출처면 ``market_cap``이 None일 수 있다.
+        이때 시총 필터는 **건너뛴다**(breadth 보존). 나머지 필터는 동일 적용.
+        """
         if ScreeningFilter._is_etf_etn(item.stock_code, item.stock_name):
             return False
         if item.current_price < cfg.min_price or item.current_price > cfg.max_price:
             return False
-        if item.market_cap < cfg.min_market_cap:
+        if item.market_cap is not None and item.market_cap < cfg.min_market_cap:
             return False
         if item.change_rate < cfg.change_rate_min or item.change_rate > cfg.change_rate_max:
             return False
@@ -190,6 +224,43 @@ class ScreeningScorer:
             current_price=item.current_price,
         )
 
+    def score_merged(self, candidate: MergedCandidate, signal: Signal) -> ScoredCandidate:
+        """멀티소스 병합 후보를 5축으로 스코어링한다.
+
+        per-source rank를 rank-decay로 환산(미등장=0). 신규 가중치 기본 0.0이면
+        체결강도/호가잔량은 total_score에 기여하지 않는다(현행 3축과 동치).
+        """
+        cfg = self._config
+        top_n = cfg.top_n
+        volume_rank_score = _rank_decay(candidate.ranks.get("volume"), top_n)
+        change_rate_score = self._score_change_rate(candidate.change_rate)
+        volume_power_score = _rank_decay(candidate.ranks.get("volume_power"), top_n)
+        quote_balance_score = _rank_decay(candidate.ranks.get("quote_balance"), top_n)
+        strategy_score = (
+            signal.confidence if signal.signal_type == SignalType.BUY else 0.0
+        )
+        total_score = (
+            cfg.weight_volume_rank * volume_rank_score
+            + cfg.weight_change_rate * change_rate_score
+            + cfg.weight_volume_power * volume_power_score
+            + cfg.weight_quote_balance * quote_balance_score
+            + cfg.weight_strategy * strategy_score
+        )
+        return ScoredCandidate(
+            stock_code=candidate.stock_code,
+            stock_name=candidate.stock_name,
+            volume_rank_score=round(volume_rank_score, 4),
+            change_rate_score=round(change_rate_score, 4),
+            strategy_score=round(strategy_score, 4),
+            total_score=round(total_score, 4),
+            signal=signal,
+            volume=candidate.volume,
+            change_rate=candidate.change_rate,
+            current_price=candidate.current_price,
+            volume_power_score=round(volume_power_score, 4),
+            quote_balance_score=round(quote_balance_score, 4),
+        )
+
     @staticmethod
     def _score_change_rate(rate: float) -> float:
         """등락률을 0.0~1.0 점수로 변환한다.
@@ -227,10 +298,10 @@ class StockScreener:
 
     def filter_candidates(
         self,
-        items: list[VolumeRankItem],
+        items: list[_ScreenT],
         exclude_codes: set[str],
-    ) -> list[VolumeRankItem]:
-        """사전 필터를 적용한다."""
+    ) -> list[_ScreenT]:
+        """사전 필터를 적용한다(단일·멀티소스 공통)."""
         return self._filter.apply(items, exclude_codes)
 
     def score_candidate(
@@ -258,3 +329,58 @@ class StockScreener:
             )
 
         return passed
+
+    def merge_rankings(
+        self, sources: dict[str, list[RankItem]]
+    ) -> list[MergedCandidate]:
+        """복수 순위 소스를 code로 union+dedup. per-source rank/metric 보존.
+
+        market_cap은 'volume' 소스에서만 propagate(신규 3종 미반환). 가격/이름/거래량은
+        먼저 등장한 소스 값을 쓰되 빈 값(0/공백)은 후속 소스로 보강한다.
+        """
+        merged: dict[str, MergedCandidate] = {}
+        for source, items in sources.items():
+            for it in items:
+                existing = merged.get(it.stock_code)
+                if existing is None:
+                    merged[it.stock_code] = MergedCandidate(
+                        stock_code=it.stock_code,
+                        stock_name=it.stock_name,
+                        current_price=it.current_price,
+                        change_rate=it.change_rate,
+                        volume=it.volume,
+                        market_cap=it.market_cap if source == "volume" else None,
+                        ranks={source: it.source_rank},
+                        metrics=({source: it.metric} if it.metric is not None else {}),
+                    )
+                    continue
+                existing.ranks[source] = it.source_rank
+                if it.metric is not None:
+                    existing.metrics[source] = it.metric
+                if source == "volume" and it.market_cap is not None:
+                    existing.market_cap = it.market_cap
+                if not existing.stock_name:
+                    existing.stock_name = it.stock_name
+                if existing.current_price == 0:
+                    existing.current_price = it.current_price
+        return list(merged.values())
+
+    def prelim_score(self, candidate: MergedCandidate) -> float:
+        """daily-price 분석 전 사전 점수(전략 제외 4축). 예산 가드 상위 컷용."""
+        cfg = self._config
+        top_n = cfg.top_n
+        return (
+            cfg.weight_volume_rank * _rank_decay(candidate.ranks.get("volume"), top_n)
+            + cfg.weight_change_rate
+            * ScreeningScorer._score_change_rate(candidate.change_rate)
+            + cfg.weight_volume_power
+            * _rank_decay(candidate.ranks.get("volume_power"), top_n)
+            + cfg.weight_quote_balance
+            * _rank_decay(candidate.ranks.get("quote_balance"), top_n)
+        )
+
+    def score_merged_candidate(
+        self, candidate: MergedCandidate, signal: Signal
+    ) -> ScoredCandidate:
+        """멀티소스 병합 후보를 스코어링한다(ScreeningScorer.score_merged 위임)."""
+        return self._scorer.score_merged(candidate, signal)

@@ -384,3 +384,106 @@ class TestQuoteAPI:
         mock_client.get.side_effect = KISAutoTraderError("boom")
         api = QuoteAPI(client=mock_client)
         assert await api.get_short_sale_daily("005930") is None
+
+    async def test_get_change_rate_rank_success(self) -> None:
+        """등락률 순위 — stck_shrn_iscd 코드키·data_rank·prdy_ctrt 파싱."""
+        response = {
+            "rt_cd": "0",
+            "output": [
+                {
+                    "stck_shrn_iscd": "005930",
+                    "data_rank": "1",
+                    "hts_kor_isnm": "삼성전자",
+                    "stck_prpr": "72000",
+                    "prdy_ctrt": "5.2",
+                    "acml_vol": "1000000",
+                },
+                {
+                    "stck_shrn_iscd": "000660",
+                    "data_rank": "2",
+                    "hts_kor_isnm": "SK하이닉스",
+                    "stck_prpr": "130000",
+                    "prdy_ctrt": "3.1",
+                    "acml_vol": "500000",
+                },
+            ],
+        }
+        api = self._make_quote_api(response)
+        result = await api.get_change_rate_rank(top_n=10)
+        assert len(result) == 2
+        assert result[0].stock_code == "005930"
+        assert result[0].source_rank == 1
+        assert result[0].change_rate == 5.2
+        assert result[0].metric == 5.2
+        assert result[0].market_cap is None
+
+    async def test_get_volume_power_rank_success(self) -> None:
+        """체결강도 순위 — tday_rltv를 metric으로 파싱."""
+        response = {
+            "rt_cd": "0",
+            "output": [
+                {
+                    "stck_shrn_iscd": "005930",
+                    "data_rank": "1",
+                    "hts_kor_isnm": "삼성전자",
+                    "stck_prpr": "72000",
+                    "prdy_ctrt": "1.0",
+                    "acml_vol": "1000000",
+                    "tday_rltv": "145.3",
+                }
+            ],
+        }
+        api = self._make_quote_api(response)
+        result = await api.get_volume_power_rank(top_n=10)
+        assert result[0].metric == 145.3
+        assert result[0].source_rank == 1
+
+    async def test_get_quote_balance_rank_success(self) -> None:
+        """호가잔량 순위 — mksc_shrn_iscd 코드키·shnu_rsqn_rate metric."""
+        response = {
+            "rt_cd": "0",
+            "output": [
+                {
+                    "mksc_shrn_iscd": "005930",
+                    "data_rank": "1",
+                    "hts_kor_isnm": "삼성전자",
+                    "stck_prpr": "72000",
+                    "prdy_ctrt": "1.0",
+                    "acml_vol": "1000000",
+                    "shnu_rsqn_rate": "62.5",
+                }
+            ],
+        }
+        api = self._make_quote_api(response)
+        result = await api.get_quote_balance_rank(top_n=10)
+        assert result[0].stock_code == "005930"
+        assert result[0].metric == 62.5
+
+    async def test_rank_returns_empty_on_error_and_bad_rtcd(self) -> None:
+        """모의 미지원(HTTP 에러)·rt_cd!=0이면 빈 리스트."""
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = KISAutoTraderError("미지원")
+        api = QuoteAPI(client=mock_client)
+        assert await api.get_change_rate_rank() == []
+        api2 = self._make_quote_api({"rt_cd": "7", "msg1": "모의투자 미지원"})
+        assert await api2.get_volume_power_rank() == []
+
+    async def test_rank_respects_top_n(self) -> None:
+        """top_n으로 결과 개수를 제한한다."""
+        response = {
+            "rt_cd": "0",
+            "output": [
+                {
+                    "stck_shrn_iscd": f"{i:06d}",
+                    "data_rank": str(i),
+                    "hts_kor_isnm": f"종목{i}",
+                    "stck_prpr": "10000",
+                    "prdy_ctrt": "1.0",
+                    "acml_vol": "100000",
+                }
+                for i in range(1, 11)
+            ],
+        }
+        api = self._make_quote_api(response)
+        result = await api.get_change_rate_rank(top_n=3)
+        assert len(result) == 3
