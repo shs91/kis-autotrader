@@ -46,6 +46,7 @@ from src.db.repository import (
 from src.db.session import get_session
 from src.scheduler.holidays import is_market_closed
 from src.strategy.disclosure_risk import match_critical_disclosure
+from src.strategy.flow_filter import features_from_structured, flow_score
 from src.strategy.registry import StrategyRegistry
 from src.strategy.screener import (
     MergedCandidate,
@@ -99,6 +100,9 @@ class ScreeningWorker:
         self._interval = interval
         self._running = False
         self._cycle_count = 0
+        # 수급 flow 일일 캐시 (증분2) — 종목당 1회/일 조회로 per-stock 예산 절감
+        self._flow_cache: dict[str, float] = {}
+        self._flow_cache_date: date | None = None
 
         logger.info(
             "ScreeningWorker 초기화 (주기=%d초, role=screener)",
@@ -271,7 +275,14 @@ class ScreeningWorker:
                 )
                 strategy = self._selector.get_strategy(cand.stock_code)
                 signal = strategy.analyze(df)
-                scored.append(self._screener.score_merged_candidate(cand, signal))
+                fs = (
+                    await self._get_flow_score(cand.stock_code)
+                    if scfg.flow_enabled
+                    else 0.0
+                )
+                scored.append(
+                    self._screener.score_merged_candidate(cand, signal, flow_score=fs)
+                )
             except Exception:
                 logger.debug("스크리닝 분석 실패: %s", cand.stock_code)
 
@@ -361,6 +372,33 @@ class ScreeningWorker:
                 )
         except Exception:
             logger.debug("SCREENING_MULTISOURCE 메트릭 기록 실패")
+
+    async def _get_flow_score(self, stock_code: str) -> float:
+        """종목 수급 flow_score(-1~1)를 일일 캐시로 조회한다(증분2).
+
+        investor_trend(FHPTJ04160001) 1콜만 사용(flow_score는 공매도 미반영). 날짜
+        변경 시 캐시 리셋. None/에러는 0.0으로 캐시(당일 재호출 방지).
+        """
+        today = date.today()
+        if self._flow_cache_date != today:
+            self._flow_cache = {}
+            self._flow_cache_date = today
+        cached = self._flow_cache.get(stock_code)
+        if cached is not None:
+            return cached
+        trend = await self._quote.get_investor_trend_daily(stock_code)
+        if trend is None:
+            self._flow_cache[stock_code] = 0.0
+            return 0.0
+        features = features_from_structured(
+            institution_net=trend.institution_net_qty,
+            foreign_net=trend.foreign_net_qty,
+            individual_net=trend.individual_net_qty,
+            pension_net=trend.pension_net_qty,
+        )
+        score = flow_score(features)
+        self._flow_cache[stock_code] = score
+        return score
 
     def _load_existing_screened_codes(self) -> set[str]:
         """오늘 이미 스크리닝된 종목코드를 DB에서 조회한다."""

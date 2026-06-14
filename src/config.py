@@ -431,6 +431,14 @@ class ScreeningConfig:
     weight_quote_balance: float = field(
         default_factory=lambda: _env_float("SCREENING_WEIGHT_QUOTE_BALANCE", 0.0)
     )
+    # 수급 flow 가산항 (증분2, 기본 OFF) — 5축 합과 별개 signed 가산항(weight_flow*flow_score).
+    flow_enabled: bool = field(
+        default_factory=lambda: _env("SCREENING_FLOW_ENABLED", "false").lower()
+        == "true"
+    )
+    weight_flow: float = field(
+        default_factory=lambda: _env_float("SCREENING_WEIGHT_FLOW", 0.0)
+    )
 
     # 최소 종합 점수 (0.0~1.0, 이하 컷)
     min_score: float = field(

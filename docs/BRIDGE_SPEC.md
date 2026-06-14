@@ -81,12 +81,15 @@ Claude Code는 제안서를 구현하기 전에 아래 규칙을 자동 검증�
 | SCREENING_WEIGHT_VOLUME_POWER | SCREENING_WEIGHT_VOLUME_POWER | 0.0 | 0.0 ~ 0.5 |
 | SCREENING_WEIGHT_QUOTE_BALANCE | SCREENING_WEIGHT_QUOTE_BALANCE | 0.0 | 0.0 ~ 0.5 |
 | MAX_ANALYSIS_POOL | MAX_ANALYSIS_POOL | 40 | 20 ~ 80 |
+| SCREENING_WEIGHT_FLOW | SCREENING_WEIGHT_FLOW | 0.0 | 0.0 ~ 0.3 |
 | SCREENING_MIN_SCORE | SCREENING_MIN_SCORE | 0.25 | 0.1 ~ 0.8 |
 
 **가중치 제약**: `WEIGHT_VOLUME_RANK + WEIGHT_CHANGE_RATE + WEIGHT_STRATEGY + WEIGHT_VOLUME_POWER + WEIGHT_QUOTE_BALANCE`의 합은 반드시 1.0이어야 한다(멀티소스 증분1로 3→5축 확장, 신규 2축 기본 0.0).
 범위를 벗어나거나 가중치 합이 1.0이 아닌 제안서는 `skipped` 처리.
 
 **멀티소스 마스터 스위치**: `SCREENING_MULTISOURCE_ENABLED`(기본 `false`)는 boolean 토글이다. `false`면 거래량 단일소스(현행), `true`면 4개 순위(거래량+등락률+체결강도+호가잔량) 병합. `config_overrides.json`으로 제어하며, 활성화는 운영자 opt-in 2단계(스위치 ON → 신규 가중치 상향).
+
+**수급 flow 가산항 (증분2)**: `SCREENING_FLOW_ENABLED`(기본 `false`, boolean) + `SCREENING_WEIGHT_FLOW`(기본 0.0). `weight_flow`는 **5축 가중합(=1.0)과 별개의 signed 가산항**으로 `total += weight_flow × flow_score(-1~1)`이다(합 제약에 포함되지 않음). 멀티소스 경로에서만 동작하며 per-stock 조회는 분석 풀(≤`MAX_ANALYSIS_POOL`)·일일 캐시로 제한. `flow_enabled=false`면 무동작.
 
 **SOLO_BUY_MIN_CONFIDENCE 비고**: `1.01` = 단독 BUY 비활성(앙상블 `n_win≥2`만 매매). 값이 낮을수록 단일 전략 BUY 진입이 쉬워진다(v0.10.0 도입). 권장 운용 범위 0.30~1.01.
 

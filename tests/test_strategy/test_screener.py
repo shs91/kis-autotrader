@@ -190,6 +190,40 @@ class TestMultiSourceScreener:
         )
         assert scr.prelim_score(top) > scr.prelim_score(low)
 
+    def test_score_merged_flow_additive(self) -> None:
+        cfg = _config(
+            weight_volume_rank=0.3, weight_change_rate=0.3, weight_strategy=0.4,
+            weight_flow=0.2,
+        )
+        scr = StockScreener(cfg)
+        cand = MergedCandidate(
+            stock_code="005930", stock_name="삼성전자", current_price=70000,
+            change_rate=3.0, volume=1_000_000, market_cap=500_000_000,
+            ranks={"volume": 1}, metrics={},
+        )
+        sig = _signal(SignalType.BUY, 0.7)
+        base = scr.score_merged_candidate(cand, sig, flow_score=0.0)
+        pos = scr.score_merged_candidate(cand, sig, flow_score=1.0)
+        neg = scr.score_merged_candidate(cand, sig, flow_score=-1.0)
+        # weight_flow=0.2 → total ± 0.2 (signed 가산)
+        assert pos.total_score == pytest.approx(base.total_score + 0.2)
+        assert neg.total_score == pytest.approx(base.total_score - 0.2)
+        assert pos.flow_score == 1.0
+
+    def test_score_merged_flow_default_off(self) -> None:
+        scr = StockScreener(_config())  # weight_flow 0.0 (default)
+        cand = MergedCandidate(
+            stock_code="005930", stock_name="삼성전자", current_price=70000,
+            change_rate=3.0, volume=1_000_000, market_cap=500_000_000,
+            ranks={"volume": 1}, metrics={},
+        )
+        sig = _signal(SignalType.BUY, 0.7)
+        a = scr.score_merged_candidate(cand, sig, flow_score=0.0)
+        b = scr.score_merged_candidate(cand, sig, flow_score=-1.0)
+        # weight_flow=0 → flow_score가 total에 영향 없음(필드엔 기록)
+        assert a.total_score == b.total_score
+        assert b.flow_score == -1.0
+
 
 # ── ScreeningFilter 테스트 ────────────────────────
 

@@ -31,6 +31,7 @@ class ScoredCandidate:
     current_price: int
     volume_power_score: float = 0.0  # 0.0~1.0 (체결강도 rank-decay)
     quote_balance_score: float = 0.0  # 0.0~1.0 (호가 매수잔량 rank-decay)
+    flow_score: float = 0.0  # [-1,1] 수급(기관·외국인 순매수) 가산 신호
 
 
 @dataclass
@@ -224,11 +225,14 @@ class ScreeningScorer:
             current_price=item.current_price,
         )
 
-    def score_merged(self, candidate: MergedCandidate, signal: Signal) -> ScoredCandidate:
-        """멀티소스 병합 후보를 5축으로 스코어링한다.
+    def score_merged(
+        self, candidate: MergedCandidate, signal: Signal, flow_score: float = 0.0
+    ) -> ScoredCandidate:
+        """멀티소스 병합 후보를 5축 + 수급 가산항으로 스코어링한다.
 
         per-source rank를 rank-decay로 환산(미등장=0). 신규 가중치 기본 0.0이면
-        체결강도/호가잔량은 total_score에 기여하지 않는다(현행 3축과 동치).
+        체결강도/호가잔량은 total_score에 기여하지 않는다(현행 3축과 동치). 수급
+        flow_score(-1~1)는 5축 합과 **별개**의 signed 가산항(weight_flow, 기본 0.0).
         """
         cfg = self._config
         top_n = cfg.top_n
@@ -245,6 +249,7 @@ class ScreeningScorer:
             + cfg.weight_volume_power * volume_power_score
             + cfg.weight_quote_balance * quote_balance_score
             + cfg.weight_strategy * strategy_score
+            + cfg.weight_flow * flow_score
         )
         return ScoredCandidate(
             stock_code=candidate.stock_code,
@@ -259,6 +264,7 @@ class ScreeningScorer:
             current_price=candidate.current_price,
             volume_power_score=round(volume_power_score, 4),
             quote_balance_score=round(quote_balance_score, 4),
+            flow_score=round(flow_score, 4),
         )
 
     @staticmethod
@@ -380,7 +386,7 @@ class StockScreener:
         )
 
     def score_merged_candidate(
-        self, candidate: MergedCandidate, signal: Signal
+        self, candidate: MergedCandidate, signal: Signal, flow_score: float = 0.0
     ) -> ScoredCandidate:
         """멀티소스 병합 후보를 스코어링한다(ScreeningScorer.score_merged 위임)."""
-        return self._scorer.score_merged(candidate, signal)
+        return self._scorer.score_merged(candidate, signal, flow_score)
