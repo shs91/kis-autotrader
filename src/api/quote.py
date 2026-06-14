@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from src.api.client import KISClient
 from src.config import settings
+from src.utils.exceptions import KISAutoTraderError
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -29,6 +30,12 @@ TR_ID_CURRENT_PRICE: str = "FHKST01010100"
 TR_ID_DAILY_PRICE: str = "FHKST03010100"
 TR_ID_MINUTE_PRICE: str = "FHKST03010200"
 TR_ID_VOLUME_RANK: str = "FHPST01710000"
+
+# 수급(투자자매매동향·공매도) — 모두 모의투자 미지원(실전 전용)
+INVESTOR_TREND_PATH: str = "/uapi/domestic-stock/v1/quotations/investor-trade-by-stock-daily"
+SHORT_SALE_PATH: str = "/uapi/domestic-stock/v1/quotations/daily-short-sale"
+TR_ID_INVESTOR_TREND: str = "FHPTJ04160001"
+TR_ID_SHORT_SALE: str = "FHPST04830000"
 
 
 def _get(data: dict[str, Any], key: str, default: str = "") -> str:
@@ -98,6 +105,28 @@ class VolumeRankItem:
     change_rate: float
     volume: int
     market_cap: int
+
+
+@dataclass
+class InvestorTrendDaily:
+    """종목별 투자자매매동향(일별) 최신 1건 — 순매수 수량(단위: 주)."""
+
+    stock_code: str
+    date: str
+    institution_net_qty: int  # orgn_ntby_qty 기관계
+    foreign_net_qty: int  # frgn_ntby_qty 외국인
+    individual_net_qty: int  # prsn_ntby_qty 개인
+    pension_net_qty: int  # fund_ntby_qty 기금(연기금 proxy)
+
+
+@dataclass
+class ShortSaleDaily:
+    """국내주식 공매도 일별추이 최신 1건."""
+
+    stock_code: str
+    date: str
+    short_volume_qty: int  # ssts_cntg_qty 공매도 체결 수량(주)
+    short_volume_ratio: float  # ssts_vol_rlim 공매도 거래량 비중(%)
 
 
 class QuoteAPI:
@@ -346,3 +375,106 @@ class QuoteAPI:
 
         logger.info("거래량 상위 %d종목 조회 완료", len(results))
         return results
+
+    async def get_investor_trend_daily(
+        self,
+        stock_code: str,
+        market: str = "J",
+        query_date: str | None = None,
+    ) -> InvestorTrendDaily | None:
+        """종목별 투자자매매동향(일별) 최신 1건을 조회한다(FHPTJ04160001).
+
+        **모의투자 미지원(실전 전용)**. 모의 환경/에러/빈 응답에서는 None을
+        반환하여 호출부 무동작을 보장한다. 당일 데이터는 장 종료 후 확정된다.
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            market: 시장 구분 ("J": KRX, "NX": NXT, "UN": 통합)
+            query_date: 조회 일자(YYYYMMDD). 미지정 시 오늘.
+
+        Returns:
+            최신 1건 또는 None
+        """
+        logger.debug("[투자자매매동향 조회] 종목=%s", stock_code)
+
+        params = {
+            "FID_COND_MRKT_DIV_CODE": market,
+            "FID_INPUT_ISCD": stock_code,
+            "FID_INPUT_DATE_1": query_date or date.today().strftime("%Y%m%d"),
+            "FID_ORG_ADJ_PRC": "",
+            "FID_ETC_CLS_CODE": "1",
+        }
+        try:
+            response = await self._client.get(
+                INVESTOR_TREND_PATH,
+                headers={"custtype": "P"},
+                params=params,
+                tr_id=TR_ID_INVESTOR_TREND,
+            )
+        except KISAutoTraderError:
+            logger.debug("[투자자매매동향] 미지원/에러 — 종목=%s", stock_code)
+            return None
+
+        if str(response.get("rt_cd", "0")) != "0":
+            return None
+        output_list = response.get("output2") or []
+        if not output_list:
+            return None
+        item = output_list[0]  # 응답 선두 = 최신 일자
+        return InvestorTrendDaily(
+            stock_code=stock_code,
+            date=_get(item, "STCK_BSOP_DATE"),
+            institution_net_qty=int(_get(item, "ORGN_NTBY_QTY", "0") or "0"),
+            foreign_net_qty=int(_get(item, "FRGN_NTBY_QTY", "0") or "0"),
+            individual_net_qty=int(_get(item, "PRSN_NTBY_QTY", "0") or "0"),
+            pension_net_qty=int(_get(item, "FUND_NTBY_QTY", "0") or "0"),
+        )
+
+    async def get_short_sale_daily(
+        self,
+        stock_code: str,
+        market: str = "J",
+    ) -> ShortSaleDaily | None:
+        """국내주식 공매도 일별추이 최신 1건을 조회한다(FHPST04830000).
+
+        **모의투자 미지원(실전 전용)**. 모의 환경/에러/빈 응답에서는 None을
+        반환한다.
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            market: 시장 구분 ("J": 주식)
+
+        Returns:
+            최신 1건 또는 None
+        """
+        logger.debug("[공매도 일별추이 조회] 종목=%s", stock_code)
+
+        params = {
+            "FID_COND_MRKT_DIV_CODE": market,
+            "FID_INPUT_ISCD": stock_code,
+            "FID_INPUT_DATE_1": "",
+            "FID_INPUT_DATE_2": date.today().strftime("%Y%m%d"),
+        }
+        try:
+            response = await self._client.get(
+                SHORT_SALE_PATH,
+                headers={"custtype": "P"},
+                params=params,
+                tr_id=TR_ID_SHORT_SALE,
+            )
+        except KISAutoTraderError:
+            logger.debug("[공매도 일별추이] 미지원/에러 — 종목=%s", stock_code)
+            return None
+
+        if str(response.get("rt_cd", "0")) != "0":
+            return None
+        output_list = response.get("output2") or []
+        if not output_list:
+            return None
+        item = output_list[0]
+        return ShortSaleDaily(
+            stock_code=stock_code,
+            date=_get(item, "STCK_BSOP_DATE"),
+            short_volume_qty=int(_get(item, "SSTS_CNTG_QTY", "0") or "0"),
+            short_volume_ratio=float(_get(item, "SSTS_VOL_RLIM", "0") or "0"),
+        )

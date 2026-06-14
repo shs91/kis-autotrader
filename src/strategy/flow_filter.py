@@ -52,6 +52,29 @@ def parse_flow_text(chunk_text: str) -> FlowFeatures:
     )
 
 
+def features_from_structured(
+    *,
+    institution_net: int | None = None,
+    foreign_net: int | None = None,
+    individual_net: int | None = None,
+    pension_net: int | None = None,
+    short_volume_qty: int | None = None,
+) -> FlowFeatures:
+    """구조화 수급 API 필드로부터 FlowFeatures를 만든다(텍스트 파싱 대체 경로).
+
+    값 단위는 '주'(수량)이며 flow_score는 비율이라 단위에 불변하다. 텍스트
+    경로 parse_flow_text와 동일한 FlowFeatures를 생산해 flow_score를 그대로
+    재사용한다. 전략 모듈 경계 준수 — DB/API 객체가 아닌 원시 정수만 받는다.
+    """
+    return FlowFeatures(
+        institution_net=institution_net,
+        foreign_net=foreign_net,
+        individual_net=individual_net,
+        pension_net=pension_net,
+        short_volume_qty=short_volume_qty,
+    )
+
+
 def flow_score(features: FlowFeatures) -> float:
     """수급 점수 [-1.0, 1.0]. 기관+외국인 순매수 방향을 전체 활동 대비 비율로 반환.
 

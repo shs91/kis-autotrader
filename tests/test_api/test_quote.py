@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 from src.api.quote import DAILY_PRICE_PATH, TR_ID_DAILY_PRICE, QuoteAPI
+from src.utils.exceptions import KISAutoTraderError
 
 
 class TestQuoteAPI:
@@ -322,3 +323,64 @@ class TestQuoteAPI:
         )
         assert params["FID_BLNG_CLS_CODE"] == settings.screening.rank_metric
         assert result[0].stock_code == "005930"
+
+    async def test_get_investor_trend_daily_success(self) -> None:
+        """투자자매매동향 최신 1건을 파싱한다(output2 선두)."""
+        response = {
+            "rt_cd": "0",
+            "output2": [
+                {
+                    "STCK_BSOP_DATE": "20260612",
+                    "ORGN_NTBY_QTY": "107145",
+                    "FRGN_NTBY_QTY": "-1091127",
+                    "PRSN_NTBY_QTY": "861030",
+                    "FUND_NTBY_QTY": "66255",
+                }
+            ],
+        }
+        api = self._make_quote_api(response)
+        result = await api.get_investor_trend_daily("005880")
+        assert result is not None
+        assert result.institution_net_qty == 107145
+        assert result.foreign_net_qty == -1091127  # 음수(순매도) 처리
+        assert result.individual_net_qty == 861030
+        assert result.date == "20260612"
+
+    async def test_get_investor_trend_daily_none_on_mock_unsupported(self) -> None:
+        """모의 미지원(HTTP 에러)이면 None을 반환한다."""
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = KISAutoTraderError("API 에러 (status=500)")
+        api = QuoteAPI(client=mock_client)
+        assert await api.get_investor_trend_daily("005930") is None
+
+    async def test_get_investor_trend_daily_none_on_empty(self) -> None:
+        """빈 output2 또는 rt_cd!=0이면 None을 반환한다."""
+        api = self._make_quote_api({"rt_cd": "0", "output2": []})
+        assert await api.get_investor_trend_daily("005930") is None
+        api2 = self._make_quote_api({"rt_cd": "7", "msg1": "모의투자 미지원"})
+        assert await api2.get_investor_trend_daily("005930") is None
+
+    async def test_get_short_sale_daily_success(self) -> None:
+        """공매도 일별추이 최신 1건을 파싱한다(비중 포함)."""
+        response = {
+            "rt_cd": "0",
+            "output2": [
+                {
+                    "STCK_BSOP_DATE": "20260612",
+                    "SSTS_CNTG_QTY": "584958",
+                    "SSTS_VOL_RLIM": "12.34",
+                }
+            ],
+        }
+        api = self._make_quote_api(response)
+        result = await api.get_short_sale_daily("005880")
+        assert result is not None
+        assert result.short_volume_qty == 584958
+        assert result.short_volume_ratio == 12.34
+
+    async def test_get_short_sale_daily_none_on_error(self) -> None:
+        """HTTP 에러 시 None을 반환한다."""
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = KISAutoTraderError("boom")
+        api = QuoteAPI(client=mock_client)
+        assert await api.get_short_sale_daily("005930") is None

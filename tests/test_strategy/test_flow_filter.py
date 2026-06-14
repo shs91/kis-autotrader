@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from src.strategy.flow_filter import FlowFeatures, flow_score, parse_flow_text
+from src.strategy.flow_filter import (
+    FlowFeatures,
+    features_from_structured,
+    flow_score,
+    parse_flow_text,
+)
 
 _TRADE_TEXT = (
     "[투자자별 매매] 005880 — 2026-06-10\n"
@@ -59,3 +64,16 @@ def test_flow_score_positive() -> None:
 def test_flow_score_empty() -> None:
     assert flow_score(FlowFeatures()) == 0.0
     assert flow_score(parse_flow_text("관련 없는 텍스트")) == 0.0
+
+
+def test_features_from_structured_matches_text_path() -> None:
+    """구조화 매퍼가 텍스트 경로와 동일한 flow_score를 만든다."""
+    feat = features_from_structured(
+        institution_net=100, foreign_net=50, individual_net=-150
+    )
+    assert flow_score(feat) == 150 / 300  # test_flow_score_positive와 동일 값
+
+
+def test_features_from_structured_partial_is_safe() -> None:
+    """수급 항목이 없으면 flow_score 0.0(안전)."""
+    assert flow_score(features_from_structured(short_volume_qty=1000)) == 0.0
