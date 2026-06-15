@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-15] 매수 사이징 실주문가능액 캡 — rt_cd=7 폭주 차단 (증분4) (v0.14.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/api/account.py: get_buyable(TTTC8908R/inquire-psbl-order) + Buyable DTO. ord_psbl_cash(주문가능현금)·nrcvb_buy_qty(미수없는=현금만 매수수량)·max_buy_qty 반환.
+  - src/engine.py: 매수 직전 _get_buyable_qty로 nrcvb_buy_qty 캡(quantity=min(risk, buyable)). 부족/조회불가 시 INSUFFICIENT_BUYABLE로 매수 보류(주문 미시도).
+  - tests/test_api/test_account.py(신규 3)·tests/test_engine_buy_funnel.py(_get_buyable_qty 2).
+- 배경: 06-15 멀티소스 활성 후 매수 주문 실패 1,266건(HL만도 862·디앤디 247·대한항공 149). 엔진이 deposit(DNCA_TOT_AMT 예수금총액)으로 사이징 → KIS 실주문가능액(T+2 미결제·타포지션 점유) 초과 → rt_cd=7 거부. 실패는 성공매수로 안 잡혀 MAX_DAILY_TRADES_PER_STOCK에 안 걸리고 매 사이클 무한 재시도(+현재가 호출 인플레로 자가 일일캡 85% 견인). 멀티소스가 후보 폭을 넓혀 기존 결함 노출.
+- 영향: 매수가능조회로 현금 기준 수량 캡 → rt_cd=7 제거, 재시도·현재가 폭주 차단. 부족 시 주문 미시도 보류(보수적). 정상 매수는 영향 없음(현금 충분 시 캡≥risk_qty라 동일). DB/스키마/config 불변.
+- 검증 결과: pytest 전체 **1075 passed**(신규 5) | mypy strict ✅(96 files) | ruff ✅(변경분).
+- 비고: 멀티소스(v0.13/0.14)와 결합 시 rt_cd=7 없이 후보 확대 효과만 취득. KIS 일일 호출 제한 없음(초당만) — 자가 캡 API_DAILY_CALL_LIMIT 별도 검토. 운영자 액션 — `com.kis.autotrader` 재시작 시 반영.
+
+---
+
 ## [2026-06-15] 수급 flow_score 스크리너 배선 — 멀티소스 가산 신호 (증분2, default-off) (v0.14.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -33,7 +46,7 @@
 - 배경: 스크리너 거래량 단일소스 → candidate 구조적 빈약(메모리: 약세장 0매매 주원인). KIS 순위 3종(등락률·체결강도·호가잔량)은 env=real에서 동작 → 후보 폭 확대 + 신호 스코어링.
 - 영향: 후보 폭 확대로 매매 활성화 기대. **마스터스위치 default false → 출시 시 매매 동작 현행과 완전 동일**, 운영자 2단계 opt-in(스위치 ON→가중치 상향). 예산 가드(MAX_ANALYSIS_POOL=40)로 daily-price 폭증 방지. 다운스트림 게이트(앙상블·리스크) 불변.
 - 검증 결과: pytest 전체 **1068 passed**(신규 13) | mypy strict ✅(96 files) | ruff ✅(변경분).
-- 비고: 실효는 운영자가 config_overrides로 `SCREENING_MULTISOURCE_ENABLED=true` 설정 시. 설계 docs/superpowers/specs/2026-06-15-screener-multisource-design.md. 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(스위치 OFF면 동작 무변경).
+- 비고: 실효는 운영자가 config_overrides로 `SCREENING_MULTISOURCE_ENABLED=true` 설정 시(06-15 활성). 설계 docs/superpowers/specs/2026-06-15-screener-multisource-design.md. 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(스위치 OFF면 동작 무변경).
 
 ---
 
@@ -60,17 +73,5 @@
 - 영향: real env `pytest tests/` **8 failed → 0 failed (1048 passed)**. BRIDGE_SPEC "pytest 전체 그린" 게이트 복구(real 환경 자동 구현 검증 정상화). pipeline_cli subprocess의 kis_trader_real 연결·오염 위험 제거. 테스트 결정론화(운영 튜닝 변동 비의존). 운영 코드(src/)·매매 동작 불변(테스트 전용).
 - 검증 결과: pytest real env **1048 passed / 0 failed**(8건 fix, 신규 회귀 0) | verifier diff-scope 15 passed | mypy strict ✅(96 files) | ruff ✅(변경 파일).
 - 비고: 운영자 액션 불필요(테스트 전용, 매매 서비스 무관). 미해결 후속: config_overrides.json 파일 누수(STRATEGY_MIN_CONFIDENCE 등)는 개별 명시 주입 표준화 별도 과제.
-
----
-
-## [2026-06-13] 수급 섀도우 필터 — flow_filter 순수 스코어러 추가 (v0.11.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/strategy/flow_filter.py: 신규. 수급 텍스트(투자자별 매매·공매도 잔고) 파서 `FlowFeatures`+`parse_flow_text()` + `[-1.0, 1.0]` 범위 `flow_score()` 순수 함수. 점수=(기관합계+외국인 순매수)/(|기관|+|외국인|+|개인|), 양수=기관·외국인 매수우위(강세). 공매도는 피처만 노출(점수 미반영).
-  - tests/test_strategy/test_flow_filter.py: 신규 5건(파싱 정확성·부호·외국인vs기타외국인 구분·flow_score 경계·빈/무관 텍스트 0.0 안전반환).
-- 배경: 실전 news_chunks의 수급 데이터가 chunk_text에 자유 텍스트로만 존재 → 매매 보조신호로 쓰려면 숫자 파싱·점수화 선행 필요. 전체 활용(수집·배선)은 worker/db/rag 인프라라 안전게이트 밖(수동 계획 docs/plans/2026-06-12_news-flow-data-utilization.md). 본 건은 순수(무 I/O) 파서+스코어러만 안전 도입.
-- 영향: 수급 점수화 로직+회귀 테스트가 검증된 상태로 확보 → 수동 계획 Phase 3에서 엔진 read-only 배선 즉시 가능. 매매 동작 **무변경**(순수 함수, 미배선)이라 실거래 리스크 0. DB/스키마/config_overrides 불변.
-- 검증 결과: pytest test_flow_filter **5 passed** | mypy strict ✅(flow_filter.py) | ruff ✅. 전략 모듈 경계(데이터 인자 수신, api/ 직접호출 없음) 준수.
-- 비고: 운영자 액션 불필요(미배선). 호출부 배선은 수동 계획 Phase 3 별도 과제.
 
 ---
