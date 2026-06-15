@@ -220,6 +220,10 @@ class TradingConfig:
     max_daily_trades_per_stock: int = field(
         default_factory=lambda: _env_int("MAX_DAILY_TRADES_PER_STOCK", 2)
     )
+    # 재매수 쿨다운(분) — 동일 종목 매도 후 N분 내 재매수 차단(휩쏘 방지, 0=비활성).
+    buy_cooldown_after_sell_min: int = field(
+        default_factory=lambda: _env_int("BUY_COOLDOWN_AFTER_SELL_MIN", 120)
+    )
     # 공시 기반 매수 리스크 게이트 — 최근 N일 내 치명 공시(상장폐지/정리매매 등) 종목 매수 차단.
     # KIS 종목마스터(market_actions) sync 사각지대를 DART 공시로 보완(모델 미사용).
     news_risk_gate_enabled: bool = field(

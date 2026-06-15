@@ -157,6 +157,8 @@ class TradingEngine:
         self._pending_orders: dict[str, PendingOrder] = {}
         # 종목별 직전 BUY/SELL 신호 (단기 반전 관측용, BUY/SELL만 저장, 일자 단위 리셋)
         self._last_signal_by_stock: dict[str, tuple[SignalType, float, datetime]] = {}
+        # 재매수 쿨다운 — 종목별 마지막 매도 확정 시각(휩쏘 차단)
+        self._last_sell_at: dict[str, datetime] = {}
 
         # 장중 재시작 복구 — pre_market이 이번 프로세스에서 실행됐는지 추적.
         # 미실행 상태로 매매 사이클이 돌면(=장중 크래시 후 재기동) 오늘 체결로
@@ -403,6 +405,7 @@ class TradingEngine:
         self._peak_prices = self._load_peak_prices()
         self._pending_orders.clear()
         self._last_signal_by_stock.clear()
+        self._last_sell_at.clear()
 
         try:
             await self._client._auth.get_access_token()
@@ -953,6 +956,29 @@ class TradingEngine:
             )
             return
 
+        # BUY 시그널 — 재매수 쿨다운(휩쏘 차단). 동일 종목 매도 후 N분 내 재매수를 막아
+        # 익절/손절 직후 같은 종목 고가 재진입(2026-06-15 HL만도 +6.4%→재매수→−2.2%)을 방지.
+        cooldown_min = settings.trading.buy_cooldown_after_sell_min
+        last_sell = self._last_sell_at.get(stock_code)
+        if cooldown_min > 0 and last_sell is not None:
+            elapsed_min = (datetime.now(_KST) - last_sell).total_seconds() / 60.0
+            if elapsed_min < cooldown_min:
+                skip_reason = "rebuy_cooldown"
+                self._record_buy_reject(
+                    stock_code=stock_code,
+                    reason="REBUY_COOLDOWN",
+                    confidence=signal.confidence,
+                    context={
+                        "elapsed_min": round(elapsed_min, 1),
+                        "cooldown_min": cooldown_min,
+                    },
+                )
+                self._record_signal_to_db(
+                    stock_code, current.stock_name, signal, action_taken=False,
+                    skip_reason=skip_reason,
+                )
+                return
+
         # BUY 시그널 — 게이트 사유 진단 (저신뢰/잔고/리스크)
         gate_reason = self._risk.check_buy_gates(signal, float(deposit))
         if gate_reason is not None:
@@ -1475,6 +1501,8 @@ class TradingEngine:
             )
             # 청산 — 고점 추적 종료
             self._peak_prices.pop(stock_code, None)
+            # 재매수 쿨다운 — 매도 확정 시각 기록(같은 종목 N분 내 재진입 차단)
+            self._last_sell_at[stock_code] = datetime.now(_KST)
 
             # 매도 슬리피지 계측 — 실전 한정 당일체결조회로 실체결가 best-effort 조회.
             # 모의는 체결조회가 불가하므로 호출하지 않는다(불필요 API·신뢰불가 회피).
