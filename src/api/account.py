@@ -14,6 +14,7 @@ logger = setup_logger(__name__)
 # 계좌 조회 엔드포인트
 BALANCE_PATH: str = "/uapi/domestic-stock/v1/trading/inquire-balance"
 EXECUTIONS_PATH: str = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+PSBL_ORDER_PATH: str = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
 
 # tr_id 매핑
 TR_ID_BALANCE_MAP: dict[str, str] = {
@@ -24,6 +25,11 @@ TR_ID_BALANCE_MAP: dict[str, str] = {
 TR_ID_EXECUTIONS_MAP: dict[str, str] = {
     "virtual": "VTTC8001R",
     "real": "TTTC8001R",
+}
+
+TR_ID_PSBL_ORDER_MAP: dict[str, str] = {
+    "virtual": "VTTC8908R",
+    "real": "TTTC8908R",
 }
 
 
@@ -71,6 +77,16 @@ class Execution:
     price: int
     amount: int
     order_no: str
+
+
+@dataclass
+class Buyable:
+    """매수가능 정보 (TTTC8908R) — 예수금총액이 아닌 실제 주문가능 현금/수량."""
+
+    ord_psbl_cash: int  # 주문가능현금
+    nrcvb_buy_amt: int  # 미수 없는 매수금액(현금만)
+    nrcvb_buy_qty: int  # 미수 없는 매수수량(현금만)
+    max_buy_qty: int  # 최대 매수수량(미수·신용 포함)
 
 
 class AccountAPI:
@@ -151,6 +167,47 @@ class AccountAPI:
             total_profit_rate=float(_get(summary, "ASST_ICDC_ERNG_RT", "0")),
             holdings=holdings,
             raw_response=response,
+        )
+
+    async def get_buyable(
+        self, stock_code: str, price: int, order_type: str = "01"
+    ) -> Buyable:
+        """매수가능조회 (TTTC8908R / inquire-psbl-order).
+
+        deposit(DNCA_TOT_AMT 예수금총액)은 T+2 미결제·타 포지션 점유를 반영하지
+        않아 사이징 기준으로 부적합(rt_cd=7 '주문가능금액 초과' 유발). 본 API는 실제
+        주문가능 현금과 '미수 없는'(현금만) 매수수량을 반환한다. order_type은 매수
+        주문과 동일하게 기본 시장가('01').
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            price: 주문 참조 단가
+            order_type: 주문 구분 ("00": 지정가, "01": 시장가)
+
+        Returns:
+            매수가능 정보
+        """
+        logger.debug("[매수가능조회] 종목=%s, 단가=%d", stock_code, price)
+
+        tr_id = TR_ID_PSBL_ORDER_MAP.get(self._env, "VTTC8908R")
+        params = {
+            "CANO": self._account_no,
+            "ACNT_PRDT_CD": self._product_code,
+            "PDNO": stock_code,
+            "ORD_UNPR": str(price),
+            "ORD_DVSN": order_type,
+            "CMA_EVLU_AMT_ICLD_YN": "N",
+            "OVRS_ICLD_YN": "N",
+        }
+
+        response = await self._client.get(PSBL_ORDER_PATH, params=params, tr_id=tr_id)
+        output = response.get("output", {})
+
+        return Buyable(
+            ord_psbl_cash=int(_get(output, "ORD_PSBL_CASH", "0") or "0"),
+            nrcvb_buy_amt=int(_get(output, "NRCVB_BUY_AMT", "0") or "0"),
+            nrcvb_buy_qty=int(_get(output, "NRCVB_BUY_QTY", "0") or "0"),
+            max_buy_qty=int(_get(output, "MAX_BUY_QTY", "0") or "0"),
         )
 
     async def get_executions(self) -> list[Execution]:

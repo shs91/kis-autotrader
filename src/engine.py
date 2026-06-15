@@ -297,6 +297,19 @@ class TradingEngine:
         """잔고 캐시를 무효화한다 (주문 실행 후 호출)."""
         self._balance_cache = None
 
+    async def _get_buyable_qty(self, stock_code: str, price: float) -> int | None:
+        """매수가능조회(TTTC8908R)로 '미수 없는 매수수량'을 반환한다.
+
+        deposit(예수금총액)이 아닌 실제 주문가능 현금 기준 수량. 시장가 매수와
+        동일 ORD_DVSN(01)로 조회한다. 조회 실패 시 None(호출부는 보수적으로 보류).
+        """
+        try:
+            buyable = await self._account.get_buyable(stock_code, int(price))
+            return buyable.nrcvb_buy_qty
+        except Exception:
+            logger.debug("매수가능조회 실패: %s", stock_code)
+            return None
+
     async def _set_daily_limit_reached(self) -> None:
         """일일 한도 초과 상태를 설정하고 알림을 전송한다."""
         if not self._daily_limit_reached:
@@ -979,6 +992,35 @@ class TradingEngine:
                 skip_reason=skip_reason,
             )
             return
+
+        # 실주문가능액 캡 — deposit(DNCA_TOT_AMT 예수금총액)은 T+2 미결제·타 포지션
+        # 점유를 반영하지 않아 rt_cd=7(주문가능금액 초과)을 유발한다. 매수가능조회
+        # (TTTC8908R)의 '미수 없는 매수수량'으로 캡하고, 부족/조회불가 시 매수 보류한다.
+        buyable_qty = await self._get_buyable_qty(
+            stock_code, float(current.current_price)
+        )
+        if buyable_qty is None or buyable_qty <= 0:
+            logger.info(
+                "[%s] 주문가능액 부족/조회불가 — 매수 보류 (buyable=%s, risk_qty=%d)",
+                stock_code, buyable_qty, quantity,
+            )
+            self._record_buy_reject(
+                stock_code=stock_code,
+                reason="INSUFFICIENT_BUYABLE",
+                confidence=signal.confidence,
+                context={
+                    "buyable_qty": buyable_qty,
+                    "risk_qty": quantity,
+                    "price": float(current.current_price),
+                },
+            )
+            self._record_signal_to_db(
+                stock_code, current.stock_name, signal, action_taken=False,
+                skip_reason="insufficient_buyable",
+            )
+            return
+        quantity = min(quantity, buyable_qty)
+
         self._record_signal_to_db(
             stock_code, current.stock_name, signal, action_taken=True,
         )

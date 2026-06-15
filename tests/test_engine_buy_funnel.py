@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.api.account import Buyable
 from src.engine import TradingEngine
 from src.utils.exceptions import OrderError
 
@@ -51,6 +52,29 @@ def _buy_outcomes(engine: TradingEngine) -> list[str]:
             detail = call.args[1] if len(call.args) > 1 else {}
             out.append(detail.get("outcome"))
     return out
+
+
+@pytest.mark.asyncio
+async def test_get_buyable_qty_returns_nrcvb() -> None:
+    """_get_buyable_qty는 매수가능조회의 미수없는 매수수량(현금만)을 반환한다."""
+    engine = _make_engine()
+    engine._account.get_buyable = AsyncMock(  # type: ignore[method-assign]
+        return_value=Buyable(
+            ord_psbl_cash=300000, nrcvb_buy_amt=278000,
+            nrcvb_buy_qty=4, max_buy_qty=10,
+        )
+    )
+    assert await engine._get_buyable_qty("204320", 69900.0) == 4
+
+
+@pytest.mark.asyncio
+async def test_get_buyable_qty_none_on_error() -> None:
+    """조회 실패 시 None 반환(호출부는 보수적으로 매수 보류)."""
+    engine = _make_engine()
+    engine._account.get_buyable = AsyncMock(  # type: ignore[method-assign]
+        side_effect=Exception("boom")
+    )
+    assert await engine._get_buyable_qty("204320", 69900.0) is None
 
 
 # 1. 정상 체결 경로 → FILLED 1건
