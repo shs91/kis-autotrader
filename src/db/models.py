@@ -181,6 +181,12 @@ class Portfolio(Base):
         Integer, ForeignKey("stocks.id"), unique=True, nullable=False
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default="KRW"
+    )
     avg_price: Mapped[float] = mapped_column(Float, nullable=False)
     current_price: Mapped[float] = mapped_column(Float, nullable=False)
     peak_price: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -250,6 +256,12 @@ class Trade(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stock_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default="KRW"
+    )
     trade_type: Mapped[TradeType] = mapped_column(
         SAEnum(TradeType, name="trade_type_enum"), nullable=False
     )
@@ -320,6 +332,9 @@ class Signal(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stock_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
     signal_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     signal_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
@@ -348,6 +363,9 @@ class ScreeningResult(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stock_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
     screening_rank: Mapped[int] = mapped_column(Integer, nullable=False)
     volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
     price_change_pct: Mapped[float] = mapped_column(Float, nullable=False)
