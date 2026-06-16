@@ -141,3 +141,51 @@ class OverseasAccountProvider(Protocol):
     ) -> OverseasBuyable:
         """해외 매수가능금액을 조회한다."""
         ...
+
+
+@runtime_checkable
+class OverseasOrderProvider(Protocol):
+    """해외 주문(매수/매도/정정/취소) 인터페이스 (단가 Decimal)."""
+
+    async def buy(
+        self,
+        symbol: str,
+        exchange: str,
+        quantity: int,
+        price: Decimal,
+        order_type: str = "00",
+    ) -> OrderResult:
+        """해외 매수 주문."""
+        ...
+
+    async def sell(
+        self,
+        symbol: str,
+        exchange: str,
+        quantity: int,
+        price: Decimal,
+        order_type: str = "00",
+    ) -> OrderResult:
+        """해외 매도 주문."""
+        ...
+
+    async def modify(
+        self,
+        order_no: str,
+        symbol: str,
+        exchange: str,
+        quantity: int,
+        price: Decimal,
+    ) -> OrderResult:
+        """해외 주문 정정."""
+        ...
+
+    async def cancel(
+        self,
+        order_no: str,
+        symbol: str,
+        exchange: str,
+        quantity: int,
+    ) -> OrderResult:
+        """해외 주문 취소."""
+        ...
