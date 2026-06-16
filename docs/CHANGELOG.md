@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-06-16] 본전 스톱 + 정체 청산 — 이익 보호 & 횡보 슬롯 회수 (v0.16.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/config.py: StrategyConfig.breakeven_activation_ratio(env BREAKEVEN_ACTIVATION_RATIO, 기본 0.02, 0=비활성)·stagnation_hours(env STAGNATION_HOURS, 기본 3.0, 0=비활성).
+  - src/strategy/risk.py: should_breakeven_stop(고점이 +X%(기본 2%) 도달한 뒤 현재가가 평단 이하로 회귀 시 본전 청산) + should_stagnation_exit(보유 N시간(기본 3h) 초과 + 트레일링 미무장(고점<+5%) 시 정체 청산). __init__에 두 파라미터 추가(None→settings 폴백).
+  - src/engine.py: _held_since(종목별 최초 보유 KST 시각, tz-aware _KST) 추적 + _held_minutes 헬퍼. _process_held_stock 청산 사다리에 4순위 본전스톱·5순위 정체청산 삽입(손절>마감청산>트레일링/익절>본전스톱>정체청산>전략매도). pre_market·_execute_sell에서 리셋/pop. 골든 G01(engine naive datetime 금지) 준수.
+  - tests/test_strategy/test_risk.py: 신규 8건(본전스톱 4·정체청산 4).
+- 배경: 06-16 손절 2%→3% 완화 후에도 횡보 종목이 슬롯(MAX_POSITION_RATIO 0.3 → ~3개)을 장시간 점유해 회전율 병목. 트레일링은 +5% 무장 전엔 무방비라 +2~4% 갔다 본전 회귀하는 이익 되돌림을 못 막음(쿨다운·손절 모두 사각).
+- 영향: (1) 본전스톱 — 고점 +2% 찍은 종목이 평단까지 밀리면 손실 전환 전 청산해 이익 되돌림 방지. (2) 정체청산 — 3시간 보유에도 트레일링 못 켠 죽은 종목 정리 → 슬롯 회수로 회전 가속. 손절·마감·트레일링·익절이 모두 우선이라 정상 추세·이익 포지션엔 영향 없음. default-ON.
+- 검증 결과: pytest 전체 **1086 passed**(신규 8) | mypy strict ✅(96 files) | ruff ✅(변경분) | 골든 G01 통과.
+- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. `BREAKEVEN_ACTIVATION_RATIO=0`·`STAGNATION_HOURS=0`으로 개별 비활성, config_overrides로 튜닝. DB/스키마 불변.
+
+---
+
 ## [2026-06-15] 재매수 쿨다운 — 매도 후 동일종목 재매수 차단 (휩쏘 방지) (v0.15.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -60,19 +74,5 @@
 - 영향: 후보 폭 확대로 매매 활성화 기대. **마스터스위치 default false → 출시 시 매매 동작 현행과 완전 동일**, 운영자 2단계 opt-in(스위치 ON→가중치 상향). 예산 가드(MAX_ANALYSIS_POOL=40)로 daily-price 폭증 방지. 다운스트림 게이트(앙상블·리스크) 불변.
 - 검증 결과: pytest 전체 **1068 passed**(신규 13) | mypy strict ✅(96 files) | ruff ✅(변경분).
 - 비고: 06-15 운영자가 config_overrides로 `SCREENING_MULTISOURCE_ENABLED=true` 활성(스테이지1, 가중치 0). 설계 docs/superpowers/specs/2026-06-15-screener-multisource-design.md.
-
----
-
-## [2026-06-14] flow_filter 구조화 수급 소스 — 투자자매매동향·공매도 API (shadow) (v0.12.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/api/quote.py: QuoteAPI에 get_investor_trend_daily(FHPTJ04160001)·get_short_sale_daily(FHPST04830000) + DTO InvestorTrendDaily/ShortSaleDaily 추가. 둘 다 모의 미지원(실전 전용) → try/except KISAutoTraderError + rt_cd 체크로 None 방어(현 virtual 무동작). 공매도 비중(ssts_vol_rlim) 신규 노출.
-  - src/strategy/flow_filter.py: features_from_structured() 순수 매퍼 추가 — 구조화 API 필드→FlowFeatures(텍스트 파싱 대체 경로). flow_score 무변경(비율이라 단위 불변), parse_flow_text 유지(하위호환).
-  - tests/test_api/test_quote.py: 신규 5건(파싱·음수·rt_cd≠0/빈 output2/HTTP에러 None 방어).
-  - tests/test_strategy/test_flow_filter.py: 신규 2건(매퍼-텍스트 flow_score 동등성·부분입력 안전).
-- 배경: flow_filter(v0.11.0 shadow)의 수급 입력이 news_chunks 자유텍스트 정규식 파싱 의존 → 라벨/레이아웃 변경에 취약(생존편향)·수집 종목 한정. KIS 구조화 API(FHPTJ04160001·FHPST04830000)가 동일 피처(기관/외국인/개인 순매수·공매도 체결수량/비중)를 JSON으로 제공.
-- 영향: 텍스트→구조화 소스 전환의 첫 단계(shadow, 미배선). 엔진/스크리너 배선은 범위 밖(수동 Phase 3). 매매 동작 무변경 → 실거래 리스크 0. DB/스키마/config_overrides/외부패키지 불변.
-- 검증 결과: pytest 전체 **1055 passed**(신규 7) | mypy strict ✅(96 files) | ruff ✅(변경 4파일). 사전존재 ruff 13건은 미변경 파일 베이스라인으로 무관.
-- 비고: 두 API는 실전 전용(모의 미지원)이라 현 virtual에선 None(무동작), 실효는 실전 전환 시. 호출부 배선은 수동 Phase 3. 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(shadow라 동작 변화 없음).
 
 ---
