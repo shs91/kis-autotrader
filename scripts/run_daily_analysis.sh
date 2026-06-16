@@ -17,11 +17,45 @@ mkdir -p "$LOG_DIR"
 echo "=== Daily analysis started at $(date) ===" >> "$LOG_FILE"
 
 cd "$PROJECT_DIR"
-/Users/songhansu/.local/bin/claude -p "$(cat "$PROMPT_FILE")" \
-  --allowedTools "Bash,Read,Write,Edit,Glob,Grep,mcp__postgres__query" \
-  >> "$LOG_FILE" 2>&1
 
-echo "=== Daily analysis finished at $(date) ===" >> "$LOG_FILE"
+# claude -p 단발 호출은 API 일시 장애(401/429/529/5xx)에 그날 분석을 통째로 유실시켰다
+# (2026-06-04·05 401 인증, 06-15 529 과부하). set -e 우회(if-then-else) + 지수 백오프 재시도로
+# 일시 에러를 흡수하고, 전 시도 실패 시 Telegram으로 알려 조용한 유실을 막는다.
+PROMPT="$(cat "$PROMPT_FILE")"
+MAX_ATTEMPTS=4
+BACKOFFS=(30 60 120)   # 1·2·3차 실패 후 대기(초)
+CLAUDE_EXIT=0
+attempt=1
+while [[ "$attempt" -le "$MAX_ATTEMPTS" ]]; do
+  echo "--- claude attempt $attempt/$MAX_ATTEMPTS at $(date) ---" >> "$LOG_FILE"
+  if /Users/songhansu/.local/bin/claude -p "$PROMPT" \
+       --allowedTools "Bash,Read,Write,Edit,Glob,Grep,mcp__postgres__query" \
+       >> "$LOG_FILE" 2>&1; then
+    CLAUDE_EXIT=0
+    break
+  else
+    CLAUDE_EXIT=$?
+    echo "[retry] claude attempt $attempt 실패 (exit=$CLAUDE_EXIT) at $(date)" >> "$LOG_FILE"
+    if [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; then
+      sleep "${BACKOFFS[$((attempt-1))]}"
+    fi
+  fi
+  attempt=$((attempt+1))
+done
+
+echo "=== Daily analysis finished at $(date) — claude_exit=$CLAUDE_EXIT ===" >> "$LOG_FILE"
+
+# 전 시도 실패 시 Telegram 에러 알림(조용한 유실 방지). Telegram은 Anthropic API와 별개라 발송 가능.
+if [[ "$CLAUDE_EXIT" != "0" ]]; then
+  echo "[alert] 일일분석 ${MAX_ATTEMPTS}회 모두 실패 — Telegram 알림 발송 시도" >> "$LOG_FILE"
+  ERR_TAIL="$(tail -n 5 "$LOG_FILE" | tr '\n' ' ')"
+  PYTHONPATH="$PROJECT_DIR" "$PROJECT_DIR/.venv/bin/python" -c '
+import sys, asyncio
+from src.notify.telegram import TelegramNotifier
+asyncio.run(TelegramNotifier().notify_error(sys.argv[1], sys.argv[2]))
+' "일일분석 자동화" "claude -p ${MAX_ATTEMPTS}회 실패 (exit=${CLAUDE_EXIT}). 최근 로그: ${ERR_TAIL}" \
+    >> "$LOG_FILE" 2>&1 || true
+fi
 
 # 일간 리포트 영속화 (2026-05-22)
 # claude -p가 생성하는 docs/reports/<날짜>_daily.md 는 untracked 상태로 남는다.
