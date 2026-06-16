@@ -1,9 +1,10 @@
 {
   "_meta": {
     "updated_at": "2026-06-16",
-    "updated_by": "manual:stop-loss-3pct"
+    "updated_by": "manual:trailing-drawdown-3pct"
   },
   "MAX_LOSS_RATE": 0.03,
+  "TRAILING_DRAWDOWN_RATIO": 0.03,
   "SCREENING_MULTISOURCE_ENABLED": true,
   "STRATEGY_SOLO_BUY_MIN_CONFIDENCE": 0.45,
   "STRATEGY_MIN_CONFIDENCE": 0.05,
