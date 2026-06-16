@@ -13,6 +13,11 @@ from typing import Protocol, runtime_checkable
 
 from src.api.account import Balance, Execution
 from src.api.order import OrderResult
+from src.api.overseas_quote import (
+    OverseasCurrentPrice,
+    OverseasDailyPriceItem,
+    OverseasRankItem,
+)
 from src.api.quote import CurrentPrice, DailyPriceItem
 
 
@@ -89,4 +94,31 @@ class AccountProvider(Protocol):
 
     async def get_executions(self) -> list[Execution]:
         """당일 체결 내역을 조회한다."""
+        ...
+
+
+@runtime_checkable
+class OverseasQuoteProvider(Protocol):
+    """해외 시세 조회 인터페이스 (가격 Decimal, EXCD/SYMB 기반)."""
+
+    async def get_current_price(
+        self, symbol: str, exchange: str
+    ) -> OverseasCurrentPrice:
+        """해외 종목 현재가를 조회한다."""
+        ...
+
+    async def get_daily_price(
+        self,
+        symbol: str,
+        exchange: str,
+        period: str = "D",
+        lookback_days: int = 60,
+    ) -> list[OverseasDailyPriceItem]:
+        """해외 종목 일봉을 조회한다(최신→과거)."""
+        ...
+
+    async def get_ranking(
+        self, exchange: str, top_n: int = 20
+    ) -> list[OverseasRankItem]:
+        """거래소별 거래량순위를 조회한다."""
         ...
