@@ -168,6 +168,51 @@ class TestShouldTakeProfit:
         assert self.rm.should_take_profit(current_price=100.0, avg_price=0.0) is False
 
 
+class TestShouldBreakevenStop:
+    """RiskManager.should_breakeven_stop 테스트 (본전 스톱)."""
+
+    def setup_method(self) -> None:
+        self.rm = RiskManager(breakeven_activation_ratio=0.02)
+
+    def test_armed_and_returned_to_entry_sells(self) -> None:
+        # 고점 +3%(무장) 후 진입가 이하 회귀 → True
+        assert self.rm.should_breakeven_stop(9990.0, 10000.0, 10300.0) is True
+
+    def test_above_entry_no_sell(self) -> None:
+        # 아직 진입가 위 → False
+        assert self.rm.should_breakeven_stop(10100.0, 10000.0, 10300.0) is False
+
+    def test_never_armed_no_sell(self) -> None:
+        # 고점 +1.5%(무장<2%) → False
+        assert self.rm.should_breakeven_stop(9990.0, 10000.0, 10150.0) is False
+
+    def test_disabled(self) -> None:
+        rm = RiskManager(breakeven_activation_ratio=0.0)
+        assert rm.should_breakeven_stop(9990.0, 10000.0, 10300.0) is False
+
+
+class TestShouldStagnationExit:
+    """RiskManager.should_stagnation_exit 테스트 (정체 청산)."""
+
+    def setup_method(self) -> None:
+        self.rm = RiskManager(stagnation_hours=3.0, trailing_activation_ratio=0.05)
+
+    def test_long_held_no_progress_sells(self) -> None:
+        # 200분 보유 + 고점 +2%(무장<5%) → True
+        assert self.rm.should_stagnation_exit(10000.0, 10200.0, 200.0) is True
+
+    def test_not_long_enough_no_sell(self) -> None:
+        assert self.rm.should_stagnation_exit(10000.0, 10200.0, 60.0) is False
+
+    def test_armed_position_not_stagnant(self) -> None:
+        # 고점 +6%(무장)면 트레일링이 관리 → 정체 제외
+        assert self.rm.should_stagnation_exit(10000.0, 10600.0, 200.0) is False
+
+    def test_disabled(self) -> None:
+        rm = RiskManager(stagnation_hours=0.0, trailing_activation_ratio=0.05)
+        assert rm.should_stagnation_exit(10000.0, 10200.0, 999.0) is False
+
+
 class TestValidateOrder:
     """RiskManager.validate_order 테스트."""
 

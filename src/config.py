@@ -355,6 +355,14 @@ class StrategyConfig:
     trailing_drawdown_ratio: float = field(
         default_factory=lambda: _env_float("TRAILING_DRAWDOWN_RATIO", 0.05)
     )
+    # 본전 스톱: +X% 도달 후 진입가로 회귀 시 청산(이익 보호, 0=비활성)
+    breakeven_activation_ratio: float = field(
+        default_factory=lambda: _env_float("BREAKEVEN_ACTIVATION_RATIO", 0.02)
+    )
+    # 정체 청산: N시간 보유 + 트레일링 무장 실패(횡보)면 청산해 슬롯 회수(0=비활성)
+    stagnation_hours: float = field(
+        default_factory=lambda: _env_float("STAGNATION_HOURS", 3.0)
+    )
     # 마감 청산 게이트: 이 수익률 이상이면 마감 임박 시 강제 실현
     min_profitable_close: float = field(
         default_factory=lambda: _env_float("MIN_PROFITABLE_CLOSE", 0.015)

@@ -30,6 +30,8 @@ class RiskManager:
         take_profit_ratio: float | None = None,
         trailing_activation_ratio: float | None = None,
         trailing_drawdown_ratio: float | None = None,
+        breakeven_activation_ratio: float | None = None,
+        stagnation_hours: float | None = None,
         min_profitable_close: float | None = None,
         min_confidence: float | None = None,
     ) -> None:
@@ -74,6 +76,16 @@ class RiskManager:
             trailing_drawdown_ratio
             if trailing_drawdown_ratio is not None
             else settings.strategy.trailing_drawdown_ratio
+        )
+        self._breakeven_activation_ratio = (
+            breakeven_activation_ratio
+            if breakeven_activation_ratio is not None
+            else settings.strategy.breakeven_activation_ratio
+        )
+        self._stagnation_hours = (
+            stagnation_hours
+            if stagnation_hours is not None
+            else settings.strategy.stagnation_hours
         )
         self._min_profitable_close = (
             min_profitable_close
@@ -256,6 +268,37 @@ class RiskManager:
             return True
 
         return False
+
+    def should_breakeven_stop(
+        self, current_price: float, avg_price: float, peak_price: float
+    ) -> bool:
+        """본전 스톱: 고점 수익률이 무장 임계 이상이었는데 진입가 이하로 회귀 시 True.
+
+        +X%까지 올랐다 본전으로 되돌아온 포지션을 손실 전환 전에 청산(이익 보호).
+        트레일링 무장(+활성%) 미만 구간의 보호 공백을 메운다. 0이면 비활성.
+        """
+        if self._breakeven_activation_ratio <= 0 or avg_price <= 0:
+            return False
+        peak_gain = (peak_price - avg_price) / avg_price
+        return (
+            peak_gain >= self._breakeven_activation_ratio
+            and current_price <= avg_price
+        )
+
+    def should_stagnation_exit(
+        self, avg_price: float, peak_price: float, held_minutes: float
+    ) -> bool:
+        """정체 청산: N시간 이상 보유했는데 트레일링 무장(고점 +활성%)에도 못 미치면 True.
+
+        오래 횡보하며 슬롯만 점유하는 dead-money를 청산해 회전을 돕는다. 진행 중인
+        포지션(고점이 무장 임계 도달)은 트레일링이 관리하므로 제외. 0이면 비활성.
+        """
+        if self._stagnation_hours <= 0 or avg_price <= 0:
+            return False
+        if held_minutes < self._stagnation_hours * 60.0:
+            return False
+        peak_gain = (peak_price - avg_price) / avg_price
+        return peak_gain < self._trailing_activation_ratio
 
     def calculate_position_size(self, total_balance: float, price: float) -> int:
         """포지션 크기(매수 가능 수량)를 계산한다.

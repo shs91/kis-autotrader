@@ -159,6 +159,8 @@ class TradingEngine:
         self._last_signal_by_stock: dict[str, tuple[SignalType, float, datetime]] = {}
         # 재매수 쿨다운 — 종목별 마지막 매도 확정 시각(휩쏘 차단)
         self._last_sell_at: dict[str, datetime] = {}
+        # 보유 시작 시각(정체 청산용) — 종목별 최초 보유 관측 시각(KST)
+        self._held_since: dict[str, datetime] = {}
 
         # 장중 재시작 복구 — pre_market이 이번 프로세스에서 실행됐는지 추적.
         # 미실행 상태로 매매 사이클이 돌면(=장중 크래시 후 재기동) 오늘 체결로
@@ -312,6 +314,13 @@ class TradingEngine:
             logger.debug("매수가능조회 실패: %s", stock_code)
             return None
 
+    def _held_minutes(self, stock_code: str) -> float:
+        """종목의 현재 보유 경과(분). 보유 시작 기록이 없으면 0.0."""
+        since = self._held_since.get(stock_code)
+        if since is None:
+            return 0.0
+        return (datetime.now(_KST) - since).total_seconds() / 60.0
+
     async def _set_daily_limit_reached(self) -> None:
         """일일 한도 초과 상태를 설정하고 알림을 전송한다."""
         if not self._daily_limit_reached:
@@ -406,6 +415,7 @@ class TradingEngine:
         self._pending_orders.clear()
         self._last_signal_by_stock.clear()
         self._last_sell_at.clear()
+        self._held_since.clear()
 
         try:
             await self._client._auth.get_access_token()
@@ -1158,6 +1168,8 @@ class TradingEngine:
         seed = prev if prev is not None else max(avg_price, float(current_price))
         peak = max(seed, float(current_price))
         self._peak_prices[stock_code] = peak
+        # 보유 시작 시각 기록(정체 청산용) — 최초 보유 관측 시점
+        self._held_since.setdefault(stock_code, datetime.now(_KST))
 
         if self._risk.should_stop_loss(float(current_price), avg_price):
             logger.warning(
@@ -1205,6 +1217,31 @@ class TradingEngine:
                     reason="익절", avg_price=avg_price, stock_name=stock_name,
                 )
                 return
+
+        # 4순위: 본전 스톱 — +X% 도달 후 진입가로 회귀 시 손실 전환 전 청산(이익 보호)
+        if self._risk.should_breakeven_stop(float(current_price), avg_price, peak):
+            logger.info(
+                "[%s] 본전 스톱 매도 (현재가: %d, 고점: %.0f, 매입가: %.0f)",
+                stock_code, current_price, peak, avg_price,
+            )
+            await self._execute_sell(
+                stock_code, quantity, current_price,
+                reason="본전스톱", avg_price=avg_price, stock_name=stock_name,
+            )
+            return
+
+        # 5순위: 정체 청산 — 오래 횡보(트레일링 미무장)하며 슬롯 점유 시 회수
+        held_min = self._held_minutes(stock_code)
+        if self._risk.should_stagnation_exit(avg_price, peak, held_min):
+            logger.info(
+                "[%s] 정체 청산 매도 (보유 %.0f분, 고점: %.0f, 매입가: %.0f)",
+                stock_code, held_min, peak, avg_price,
+            )
+            await self._execute_sell(
+                stock_code, quantity, current_price,
+                reason="정체청산", avg_price=avg_price, stock_name=stock_name,
+            )
+            return
 
         if signal.signal_type == SignalType.SELL and signal.confidence >= 0.1:
             logger.info(
@@ -1501,6 +1538,7 @@ class TradingEngine:
             )
             # 청산 — 고점 추적 종료
             self._peak_prices.pop(stock_code, None)
+            self._held_since.pop(stock_code, None)
             # 재매수 쿨다운 — 매도 확정 시각 기록(같은 종목 N분 내 재진입 차단)
             self._last_sell_at[stock_code] = datetime.now(_KST)
 
