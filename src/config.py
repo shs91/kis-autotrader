@@ -11,6 +11,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from src.market.profile import active_market_profile
+
 load_dotenv()
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -127,17 +129,31 @@ def _env_float(key: str, default: float = 0.0) -> float:
     return float(_env(key, str(default)))
 
 
+def _market_cred(suffix: str, default: str = "") -> str:
+    """활성 시장의 자격증명 prefix로 환경변수를 읽는다(KRX→KIS_, US→KIS_US_)."""
+    prefix = active_market_profile().credentials_env_prefix
+    return _env(f"{prefix}_{suffix}", default)
+
+
+def _market_env() -> str:
+    """시장별 KIS_ENV. KIS_ENV 명시값 우선, 없으면 활성 시장 기본(KRX=virtual/US=real)."""
+    override = _env("KIS_ENV", "")
+    if override:
+        return override
+    return active_market_profile().kis_env
+
+
 @dataclass(frozen=True)
 class KISConfig:
     """한국투자증권 API 설정."""
 
-    app_key: str = field(default_factory=lambda: _env("KIS_APP_KEY"))
-    app_secret: str = field(default_factory=lambda: _env("KIS_APP_SECRET"))
-    account_no: str = field(default_factory=lambda: _env("KIS_ACCOUNT_NO"))
+    app_key: str = field(default_factory=lambda: _market_cred("APP_KEY"))
+    app_secret: str = field(default_factory=lambda: _market_cred("APP_SECRET"))
+    account_no: str = field(default_factory=lambda: _market_cred("ACCOUNT_NO"))
     account_product_code: str = field(
-        default_factory=lambda: _env("KIS_ACCOUNT_PRODUCT_CODE", "01")
+        default_factory=lambda: _market_cred("ACCOUNT_PRODUCT_CODE", "01")
     )
-    env: str = field(default_factory=lambda: _env("KIS_ENV", "virtual"))
+    env: str = field(default_factory=_market_env)
 
     @property
     def base_url(self) -> str:
@@ -190,7 +206,7 @@ class RateLimitConfig:
     per_second: int = field(
         default_factory=lambda: _env_int(
             "API_RATE_LIMIT_PER_SECOND",
-            20 if _env("KIS_ENV", "virtual") == "real" else 5,
+            20 if _market_env() == "real" else 5,
         )
     )
     daily_limit: int = field(
