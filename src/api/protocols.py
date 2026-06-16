@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
 from src.api.account import Balance, Execution
 from src.api.order import OrderResult
+from src.api.overseas_account import OverseasBalance, OverseasBuyable
 from src.api.overseas_quote import (
     OverseasCurrentPrice,
     OverseasDailyPriceItem,
@@ -121,4 +123,21 @@ class OverseasQuoteProvider(Protocol):
         self, exchange: str, top_n: int = 20
     ) -> list[OverseasRankItem]:
         """거래소별 거래량순위를 조회한다."""
+        ...
+
+
+@runtime_checkable
+class OverseasAccountProvider(Protocol):
+    """해외 잔고/매수가능금액 조회 인터페이스."""
+
+    async def get_balance(
+        self, exchange: str, currency: str = "USD"
+    ) -> OverseasBalance:
+        """해외 잔고를 조회한다."""
+        ...
+
+    async def get_buyable_amount(
+        self, symbol: str, exchange: str, price: Decimal
+    ) -> OverseasBuyable:
+        """해외 매수가능금액을 조회한다."""
         ...
