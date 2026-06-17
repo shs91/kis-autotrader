@@ -43,3 +43,6 @@ htmlcov/
 # Phase 2 Verifier 부산물 (pytest --junitxml)
 .verifier-junit.xml
 config/rss_feeds.json
+
+# KIS 토큰 캐시(런타임 — 커밋 금지)
+.kis_tokens/
