@@ -2187,8 +2187,8 @@ class TradingEngine:
         """매매 체결 내역을 Worker Queue에 적재한다.
 
         비즈니스 로직(buy_reason 판별, profit_loss 계산)은 엔진에서 처리하고,
-        DB INSERT만 Worker에게 위임한다. price는 시장별로 정규화한다(KRX int·US round).
-        profit_loss_amount는 int 유지(KRX 손익·RiskManager 입력 불변; US 정밀은 P3c-3).
+        DB INSERT만 Worker에게 위임한다. price/profit_loss_amount는 시장별로 정규화한다
+        (KRX int·US round). RiskManager 입력은 int 유지(연패/MDD 게이트 KRX 불변).
         """
         try:
             # DB/payload 경계 가격 정규화 — KRX는 int로 기존 저장 바이트 불변.
@@ -2196,7 +2196,7 @@ class TradingEngine:
             buy_reason: BuyReason | None = None
             sell_reason: SellReason | None = None
             profit_loss_pct: float | None = None
-            profit_loss_amount: int | None = None
+            profit_loss_amount: float | None = None
 
             if trade_type == TradeType.BUY and signal is not None:
                 buy_reason = self._detect_buy_reason(signal)
@@ -2207,8 +2207,9 @@ class TradingEngine:
                 if avg_price and avg_price > 0:
                     avg_price = float(avg_price)
                     profit_loss_pct = float(((price - avg_price) / avg_price) * 100)
-                    profit_loss_amount = int((price - avg_price) * quantity)
-                    self._risk.record_trade_result(profit_loss_amount)
+                    # DB(Numeric)엔 정규화값(KRX int·US 센트), RiskManager엔 int 유지.
+                    profit_loss_amount = self._norm_price((price - avg_price) * quantity)
+                    self._risk.record_trade_result(int(profit_loss_amount))
                     sell_reason = self._reconcile_sell_reason(
                         sell_reason, profit_loss_pct, stock_code,
                     )

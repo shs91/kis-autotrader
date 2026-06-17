@@ -633,15 +633,15 @@ class TradeRepository:
         stock_name: str,
         trade_type: TradeType,
         quantity: int,
-        price: int,
-        total_amount: int,
+        price: float,
+        total_amount: float,
         traded_at: datetime,
         cycle_number: int = 0,
         buy_reason: BuyReason | None = None,
         sell_reason: SellReason | None = None,
         signal_type: str | None = None,
         profit_loss_pct: float | None = None,
-        profit_loss_amount: int | None = None,
+        profit_loss_amount: float | None = None,
     ) -> Trade:
         """매매 체결 내역을 기록한다.
 
@@ -1038,7 +1038,9 @@ class DailySummaryRepository:
 
         summary.total_buy_count = buy_count
         summary.total_sell_count = sell_count
-        summary.total_profit_loss = total_pl
+        # DailySummary.total_profit_loss는 정수(KRX) 컬럼 — Numeric 전환 비범위(P3c-3).
+        # trades.profit_loss_amount가 float(Numeric)이 되어 total_pl이 float이므로 캐스트.
+        summary.total_profit_loss = int(total_pl)
         summary.win_rate = win_rate
         summary.stop_loss_count = stop_loss
         summary.take_profit_count = take_profit
