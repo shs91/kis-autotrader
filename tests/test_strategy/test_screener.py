@@ -492,3 +492,36 @@ class TestETFFilter:
         result = f.apply(items, exclude_codes=set())
         assert len(result) == 1
         assert result[0].stock_code == "005930"
+
+
+class TestOverseasFilter:
+    """US(해외) 시장 인지 필터 (P3c-5)."""
+
+    def test_us_alpha_symbol_not_treated_as_etf(self) -> None:
+        """US 알파벳 심볼(AAPL)은 ETF로 오분류되지 않는다 (KRX 디짓체크 무효화)."""
+        # KRX 필터는 비숫자코드를 ETF로 컷 → US 심볼 전부 탈락하는 블로커였음
+        assert ScreeningFilter._is_etf_etn("AAPL", "APPLE INC", is_overseas=True) is False
+        assert ScreeningFilter._is_etf_etn("AAPL", "APPLE INC") is True  # KRX 분기
+
+    def test_us_etf_symbol_blocked(self) -> None:
+        assert ScreeningFilter._is_etf_etn("SPY", "SPDR S&P 500", is_overseas=True) is True
+        assert ScreeningFilter._is_etf_etn("QQQ", "Invesco QQQ", is_overseas=True) is True
+
+    def test_us_etf_name_keyword_blocked(self) -> None:
+        assert ScreeningFilter._is_etf_etn(
+            "ZZZ", "Some Leveraged ETF", is_overseas=True
+        ) is True
+
+    def test_us_filter_applies_min_price_us(self) -> None:
+        cfg = _config()
+        f = ScreeningFilter(config=cfg, is_overseas=True)
+        items = [
+            _item(code="AAPL", name="APPLE INC", price=150),       # 통과
+            _item(code="PENNY", name="PENNY CO", price=0),         # min_price_us 미달
+            _item(code="SPY", name="SPDR S&P 500", price=400),     # ETF 차단
+        ]
+        result = f.apply(items, exclude_codes=set())
+        codes = {r.stock_code for r in result}
+        assert "AAPL" in codes
+        assert "PENNY" not in codes  # $0 < min_price_us($1)
+        assert "SPY" not in codes    # ETF
