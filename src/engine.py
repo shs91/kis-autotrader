@@ -46,7 +46,12 @@ from src.db.repository import (
     WatchlistRepository,
 )
 from src.db.session import db_healthcheck, get_session
-from src.market.profile import KRX_PROFILE, MarketProfile, get_market_profile
+from src.market.profile import (
+    KRX_PROFILE,
+    MarketProfile,
+    format_money,
+    get_market_profile,
+)
 from src.notify.telegram import TelegramNotifier
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.disclosure_risk import match_critical_disclosure
@@ -161,6 +166,9 @@ class TradingEngine:
         self._exchanges: dict[str, str] = {}
         if self._market.is_overseas:
             self._exchanges = dict(settings.trading.watchlist_us)
+        # 외화 고시환율(USD→KRW). present-balance 조회 성공 시 갱신, 실패 시 설정 폴백.
+        # 표시/원화 환산용(통합증거금 자동환전이라 사이징엔 미사용).
+        self._fx_rate: float = settings.trading.fx_usd_krw
 
         # 전략 셀렉터 초기화: selector > strategy > 설정 파일
         if selector is not None:
@@ -292,6 +300,14 @@ class TradingEngine:
         """
         return f"{int(value):,}" if float(value).is_integer() else f"{value:,.2f}"
 
+    def _money(self, amount: float) -> str:
+        """시장 통화로 금액을 포맷한다(KRW는 기존 로그와 바이트 동일, USD는 '$').
+
+        US 거래의 예수금/손익/체결가가 '원'으로 표기돼 운영자가 통화를 혼동하던
+        문제를 방지한다. KRX는 ``format_money``가 정수+'원'으로 동일 출력.
+        """
+        return format_money(amount, self._market.currency)
+
     def _norm_price(self, value: float) -> float:
         """DB/체결가 경계 가격 정규화. KRX(precision 0)는 int, US는 round(HALF_UP).
 
@@ -347,16 +363,18 @@ class TradingEngine:
         return [_Bar(it.date, float(it.close_price)) for it in items]
 
     async def _fetch_overseas_balance(self) -> Balance:
-        """해외 거래소별 잔고를 합산해 국내 Balance 형태로 정규화한다.
+        """해외 거래소별 잔고를 합산해 국내 Balance 형태로 정규화한다(외화 USD).
 
-        deposit은 us_cash_budget(설정 예산)로 둔다(실예수금 연동은 P4). 실제 주문
-        수량은 _get_buyable_qty(브로커 orderable_qty)가 캡한다. total_*는 0(결산은
-        KRX 주간 프로세스 소관). 보유종목 거래소는 self._exchanges에 시드한다.
+        보유종목은 거래소별 inquire-balance로, 예수금·총평가·총손익·고시환율은
+        present-balance(CTRP6504R)로 보강한다. present-balance 실패/무효 시 보수적
+        폴백(보유 평가 합산 + us_cash_budget)을 사용해 라이브 자금 오표기를 막는다.
+        보유 금액은 float로 보존(USD 센트). 보유종목 거래소는 self._exchanges에 시드.
         동일 symbol 중복(복수 거래소 응답)은 last-wins로 합쳐 이중계산을 막는다.
         """
+        cur = self._market.currency
         by_symbol: dict[str, StockHolding] = {}
         for exch in self._market.exchanges:
-            ob = await self._ovs_account.get_balance(exch, self._market.currency)
+            ob = await self._ovs_account.get_balance(exch, cur)
             for oh in ob.holdings:
                 self._exchanges[oh.symbol] = oh.exchange or exch
                 by_symbol[oh.symbol] = StockHolding(
@@ -364,18 +382,48 @@ class TradingEngine:
                     stock_name=oh.symbol,
                     quantity=oh.quantity,
                     avg_price=float(oh.avg_price),
-                    current_price=int(round(oh.current_price)),
-                    eval_amount=int(round(oh.eval_amount)),
-                    profit_loss=int(round(oh.profit_loss)),
+                    current_price=float(oh.current_price),
+                    eval_amount=float(oh.eval_amount),
+                    profit_loss=float(oh.profit_loss),
                     profit_rate=oh.profit_rate,
+                    currency=cur,
+                )
+        holdings = list(by_symbol.values())
+
+        # 폴백 기준: 보유 평가 합산 + 설정 예산. present-balance 성공 시 실값으로 대체.
+        deposit = float(settings.trading.us_cash_budget)
+        total_eval = sum(h.eval_amount for h in holdings)
+        total_pl = sum(h.profit_loss for h in holdings)
+        total_rate = 0.0
+        if settings.trading.us_present_balance_enabled:
+            try:
+                pb = await self._ovs_account.get_present_balance(cur)
+                if pb.valid:
+                    if pb.deposit > 0:
+                        deposit = float(pb.deposit)
+                    if pb.total_eval > 0:
+                        total_eval = float(pb.total_eval)
+                    total_pl = float(pb.total_profit_loss)
+                    total_rate = pb.profit_rate
+                    if pb.fx_rate > 0:
+                        self._fx_rate = float(pb.fx_rate)
+                else:
+                    logger.info(
+                        "해외 현재잔고 무효 — 보유 합산/예산값으로 폴백"
+                    )
+            except Exception:
+                logger.warning(
+                    "해외 현재잔고 조회 실패 — 보유 합산/예산값으로 폴백",
+                    exc_info=True,
                 )
         return Balance(
-            deposit=int(settings.trading.us_cash_budget),
-            total_eval_amount=0,
-            total_profit_loss=0,
-            total_profit_rate=0.0,
-            holdings=list(by_symbol.values()),
+            deposit=deposit,
+            total_eval_amount=total_eval,
+            total_profit_loss=total_pl,
+            total_profit_rate=total_rate,
+            holdings=holdings,
             raw_response={},
+            currency=cur,
         )
 
     async def _get_executions(self) -> list[Execution]:
@@ -689,10 +737,10 @@ class TradingEngine:
 
             balance = await self._get_balance(force=True)
             logger.info(
-                "잔고 확인 — 예수금: %s원, 보유종목: %d개, 평가손익: %s원",
-                f"{balance.deposit:,}",
+                "잔고 확인 — 예수금: %s, 보유종목: %d개, 평가손익: %s",
+                self._money(balance.deposit),
                 len(balance.holdings),
-                f"{balance.total_profit_loss:,}",
+                self._money(balance.total_profit_loss),
             )
 
             for h in balance.holdings:
@@ -945,16 +993,20 @@ class TradingEngine:
                 (realized_pl / sell_total * 100.0) if sell_total > 0 else 0.0
             )
 
+            # 통화 단위는 _money(시장 통화)로 표기. 단, realized_pl은 결산 trades가
+            # 아직 전 시장 합산(daily_summary/_performances market 컬럼 부재로 격리는
+            # 후속)이라 US에서는 합산값일 수 있다 — 평가손익(balance)은 present-balance
+            # 기준으로 통화 정확.
             logger.info(
                 "당일 체결 건수(DB): %d (매수 %d / 매도 %d), "
-                "실현손익: %s원 (%.2f%%) | "
-                "평가손익: %s원 (%.2f%%) | KIS API 체결=%d건",
+                "실현손익: %s (%.2f%%) | "
+                "평가손익: %s (%.2f%%) | KIS API 체결=%d건",
                 len(trades),
                 buy_count,
                 sell_count,
-                f"{realized_pl:,}",
+                self._money(realized_pl),
                 realized_rate,
-                f"{balance.total_profit_loss:,}",
+                self._money(balance.total_profit_loss),
                 balance.total_profit_rate,
                 len(kis_executions),
             )
@@ -1092,7 +1144,7 @@ class TradingEngine:
     async def _process_stock(
         self,
         stock_code: str,
-        deposit: int,
+        deposit: float,
         is_held: bool,
         holding_info: dict[str, float] | None,
     ) -> None:
@@ -1564,8 +1616,8 @@ class TradingEngine:
         )
         if price <= 0 or price < min_price:
             logger.warning(
-                "[매수 차단] %s(%s) — 가격 하한 미달(현재가=%d원 < %s원)",
-                stock_name, stock_code, price, min_price,
+                "[매수 차단] %s(%s) — 가격 하한 미달(현재가=%s < %s)",
+                stock_name, stock_code, self._money(price), self._money(min_price),
             )
             self._record_buy_outcome(stock_code, "BLOCK_PRICE_FLOOR")
             return
@@ -1695,7 +1747,9 @@ class TradingEngine:
                 "[매수 체결] %s(%s) %d주 @ %d, 주문번호=%s",
                 stock_name, stock_code, fill_qty, fill_price, result.order_no,
             )
-            log_trade(f"매수 {stock_name}({stock_code}) {fill_qty}주 @ {fill_price:,}원")
+            log_trade(
+                f"매수 {stock_name}({stock_code}) {fill_qty}주 @ {self._money(fill_price)}"
+            )
 
             self._record_trade_to_db(
                 stock_code, stock_name, TradeType.BUY, fill_qty, fill_price,
@@ -1811,7 +1865,8 @@ class TradingEngine:
                 stock_name, stock_code, fill_qty, fill_price, reason, result.order_no,
             )
             log_trade(
-                f"매도 {stock_name}({stock_code}) {fill_qty}주 @ {fill_price:,}원 ({reason})"
+                f"매도 {stock_name}({stock_code}) {fill_qty}주 "
+                f"@ {self._money(fill_price)} ({reason})"
             )
 
             self._record_trade_to_db(
@@ -2082,7 +2137,7 @@ class TradingEngine:
         )
         log_trade(
             f"지연체결 회수 {pending.side} {pending.stock_name}({stock_code}) "
-            f"{filled}주 @ {fill_price:,}원"
+            f"{filled}주 @ {self._money(fill_price)}"
         )
 
         if pending.side == "BUY":

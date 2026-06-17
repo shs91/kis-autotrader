@@ -147,6 +147,29 @@ def get_market_profile(market_code: str) -> MarketProfile:
         raise ValueError(f"지원하지 않는 시장: {market_code}") from None
 
 
+def format_money(amount: float, currency: str = "KRW") -> str:
+    """통화 인지 금액 포맷.
+
+    멀티마켓 로그/알림에서 통화 단위 혼동(USD를 '원'으로 표기)을 막는다.
+    **KRW는 기존 로그와 바이트 동일**(정수 콤마 + "원") — 정수 KRW라 ``int(round())``는
+    무손실이고 ``f"{x:,}원"``과 동일 출력. USD는 "$" 접두 + 소수 2자리(센트 보존),
+    음수는 부호를 통화기호 앞에 둔다("-$12.34").
+
+    Args:
+        amount: 금액(원/달러 등 해당 통화 단위).
+        currency: ISO 통화 코드("KRW"|"USD" 등).
+
+    Returns:
+        통화 단위가 표기된 포맷 문자열.
+    """
+    if currency == "KRW":
+        return f"{int(round(amount)):,}원"
+    if currency == "USD":
+        sign = "-" if amount < 0 else ""
+        return f"{sign}${abs(amount):,.2f}"
+    return f"{amount:,.2f} {currency}"
+
+
 def active_market_profile() -> MarketProfile:
     """``MARKET`` 환경변수로 활성 시장 프로파일을 반환한다(기본 "KRX").
 

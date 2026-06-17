@@ -11,8 +11,37 @@ from src.market.profile import (
     US_PROFILE,
     MarketProfile,
     active_market_profile,
+    format_money,
     get_market_profile,
 )
+
+
+class TestFormatMoney:
+    """통화 인지 금액 포맷 — KRW는 기존 로그와 바이트 동일, USD는 '$'."""
+
+    def test_krw_byte_invariant_with_legacy_int_format(self) -> None:
+        # 기존 로그는 정수 KRW에 f"{x:,}원" 사용 — format_money(KRW)가 동일해야 함.
+        for v in (0, 5, 1000, 70000, 1234567, -2800):
+            assert format_money(v, "KRW") == f"{v:,}원"
+
+    def test_krw_rounds_float_to_int(self) -> None:
+        # 부동소수 KRW도 정수로 표기(".0" 오염 방지).
+        assert format_money(70000.0, "KRW") == "70,000원"
+        assert format_money(70000.4, "KRW") == "70,000원"
+
+    def test_usd_two_decimals_with_symbol(self) -> None:
+        assert format_money(298.53, "USD") == "$298.53"
+        assert format_money(1000, "USD") == "$1,000.00"
+        assert format_money(0, "USD") == "$0.00"
+
+    def test_usd_negative_sign_before_symbol(self) -> None:
+        assert format_money(-12.34, "USD") == "-$12.34"
+
+    def test_unknown_currency_suffix(self) -> None:
+        assert format_money(12.5, "JPY") == "12.50 JPY"
+
+    def test_default_currency_is_krw(self) -> None:
+        assert format_money(1000) == "1,000원"
 
 
 def test_krx_profile_fields() -> None:

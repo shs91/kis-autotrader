@@ -6,6 +6,23 @@
 
 ---
 
+## [2026-06-18] US 통화 인지 — present-balance(외화예수금·총손익·환율) + 로그 통화 단위 (v0.17.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/market/profile.py: format_money(amount, currency) — KRW는 기존 로그와 바이트 동일(정수+"원"), USD는 "$"+2자리(센트 보존)·음수는 "-$".
+  - src/api/overseas_account.py: get_present_balance(CTRP6504R) + OverseasPresentBalance — 외화예수금·총평가·총손익·평가수익률·고시환율. 필드명 confidence=medium → _get_any 후보키 폴백 + valid 플래그.
+  - src/api/account.py: Balance/StockHolding 금액 필드 int→float(USD 센트 보존) + currency 필드(기본 KRW).
+  - src/api/protocols.py: OverseasAccountProvider에 get_present_balance 추가.
+  - src/engine.py: _fetch_overseas_balance가 present-balance로 deposit/total_eval/total_pl/환율 보강(실패·무효 시 보유 합산+us_cash_budget 폴백). _money() 통화 인지 포맷으로 잔고확인·결산·체결·매수차단 로그 라우팅. self._fx_rate.
+  - src/config.py: fx_usd_krw(폴백 환율)·us_present_balance_enabled(스위치). .env.example 반영.
+  - tests: format_money 7·present-balance 5·_fetch_overseas_balance 2(신규 13 등).
+- 배경: P3c-2 이후 US 잔고가 deposit=us_cash_budget 하드코딩·total_profit_loss=0 고정이라 실잔고·평가손익 추적 불가, 보유 USD를 int(round)로 절단(센트 손실), 환율 처리 전무, 로그가 USD를 전부 "원"으로 표기해 운영자 통화 혼동(High 1~3).
+- 영향: US는 체결기준현재잔고로 실예수금·총손익·고시환율을 반영하고 로그가 "$"로 표기. present-balance 실패 시 보수 폴백으로 라이브 오표기 방지. **KRX는 format_money(KRW)·currency 기본값으로 동작 불변**(바이트 불변, 전체 1212 통과). 통합증거금 자동환전이라 환율은 표시/환산용(주문 사이징 미사용). Telegram 포맷터 통화 인지화는 태스크큐 페이로드 plumbing 필요로 후속.
+- 검증 결과: pytest 전체 **1212 passed**(신규 13) | mypy strict ✅(102 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변. US_PRESENT_BALANCE_ENABLED=false로 비활성(보유합산 폴백), FX_USD_KRW로 폴백 환율 조정.
+
+---
+
 ## [2026-06-18] 읽기측 시장 격리 — US 리스크복구가 KRX 거래로 일일한도 채워 매매 차단되던 P0 (v0.16.3)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -59,17 +76,6 @@
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. `BREAKEVEN_ACTIVATION_RATIO=0`·`STAGNATION_HOURS=0`으로 개별 비활성, config_overrides로 튜닝. DB/스키마 불변.
 
 ---
-
-## [2026-06-15] 재매수 쿨다운 — 매도 후 동일종목 재매수 차단 (휩쏘 방지) (v0.15.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/config.py: TradingConfig.buy_cooldown_after_sell_min (env BUY_COOLDOWN_AFTER_SELL_MIN, 기본 120분, 0=비활성).
-  - src/engine.py: _last_sell_at(종목별 매도확정 KST 시각) 기록(_execute_sell 체결확정 시) + 매수 분기 쿨다운 게이트(REBUY_COOLDOWN 거절) + pre_market 리셋. tz-aware(_KST)로 골든 G01(engine naive datetime 금지) 준수.
-  - tests/test_engine_rebuy_cooldown.py: 신규 3건(차단·경과허용·타종목).
-- 배경: 06-15 멀티소스 활성 후 휩쏘 관측 — HL만도 69,700 익절(+6.4%) → 1.5h 뒤 73,600 고가 재매수 → 72,100 손절(−2.2%); 대한항공 동가 재매수. 매도해도 후보풀 잔류 + 전략 재BUY로 즉시 재진입(MAX_DAILY_TRADES_PER_STOCK는 매수횟수만 세 못 막음).
-- 영향: 매도 후 N분(기본 120) 동일종목 재매수 차단 → 익절 되돌림·동가 churn 방지. 정상 신규매수·매도·청산엔 영향 없음. config_overrides로 튜닝/비활성. DB/스키마 불변.
-- 검증 결과: pytest 전체 **1078 passed**(신규 3) | mypy strict ✅(96 files) | ruff ✅(변경분) | 골든 G01 통과.
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. `BUY_COOLDOWN_AFTER_SELL_MIN`으로 분 단위 조정(롤백=0).
 
 ---
 

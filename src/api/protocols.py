@@ -14,7 +14,11 @@ from typing import Protocol, runtime_checkable
 
 from src.api.account import Balance, Execution
 from src.api.order import OrderResult
-from src.api.overseas_account import OverseasBalance, OverseasBuyable
+from src.api.overseas_account import (
+    OverseasBalance,
+    OverseasBuyable,
+    OverseasPresentBalance,
+)
 from src.api.overseas_quote import (
     OverseasCurrentPrice,
     OverseasDailyPriceItem,
@@ -140,6 +144,12 @@ class OverseasAccountProvider(Protocol):
         self, symbol: str, exchange: str, price: Decimal
     ) -> OverseasBuyable:
         """해외 매수가능금액을 조회한다."""
+        ...
+
+    async def get_present_balance(
+        self, currency: str = "USD", country_code: str = "840"
+    ) -> OverseasPresentBalance:
+        """해외 체결기준 현재잔고(외화예수금·총손익·환율)를 조회한다."""
         ...
 
 

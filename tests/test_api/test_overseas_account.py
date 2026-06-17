@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 from src.api.overseas_account import (
     OVERSEAS_BALANCE_PATH,
+    OVERSEAS_PRESENT_BALANCE_PATH,
     OverseasAccountAPI,
     OverseasBalance,
     OverseasBuyable,
@@ -93,3 +94,76 @@ class TestGetBuyableAmount:
         result = await api.get_buyable_amount("AAPL", "NASD", Decimal("150.25"))
         assert result.orderable_cash == Decimal("5000.00")
         assert result.orderable_qty == 33
+
+
+class TestGetPresentBalance:
+    def _real_api(self, response: dict[str, object]) -> OverseasAccountAPI:
+        c = AsyncMock()
+        c.get.return_value = response
+        api = OverseasAccountAPI(client=c)
+        api._env = "real"  # CTRP6504R는 실전 전용
+        return api
+
+    async def test_parses_deposit_eval_pl_fx(self) -> None:
+        response = {
+            "output2": [
+                {
+                    "crcy_cd": "USD",
+                    "frcr_dncl_amt_2": "1000.50",
+                    "frst_bltn_exrt": "1385.20",
+                },
+            ],
+            "output3": {
+                "frcr_evlu_tota": "2502.50",
+                "tot_evlu_pfls_amt": "120.30",
+                "evlu_erng_rt": "5.04",
+            },
+        }
+        pb = await self._real_api(response).get_present_balance("USD")
+        assert pb.valid is True
+        assert pb.deposit == Decimal("1000.50")
+        assert pb.total_eval == Decimal("2502.50")
+        assert pb.total_profit_loss == Decimal("120.30")
+        assert pb.profit_rate == 5.04
+        assert pb.fx_rate == Decimal("1385.20")
+        assert pb.currency == "USD"
+
+    async def test_sends_present_balance_params(self) -> None:
+        c = AsyncMock()
+        c.get.return_value = {"output2": [], "output3": {}}
+        api = OverseasAccountAPI(client=c)
+        api._env = "real"
+        await api.get_present_balance("USD")
+        call = c.get.call_args
+        assert call.args[0] == OVERSEAS_PRESENT_BALANCE_PATH
+        params = call.kwargs.get("params")
+        assert params["WCRC_FRCR_DVSN_CD"] == "02"
+        assert params["NATN_CD"] == "840"
+
+    async def test_virtual_env_returns_invalid_without_call(self) -> None:
+        # 모의투자는 present-balance 미지원 → 호출 없이 무효 반환(폴백 유도).
+        c = AsyncMock()
+        api = OverseasAccountAPI(client=c)
+        api._env = "virtual"
+        pb = await api.get_present_balance("USD")
+        assert pb.valid is False
+        c.get.assert_not_called()
+
+    async def test_zero_values_marked_invalid(self) -> None:
+        response = {
+            "output2": [{"crcy_cd": "USD", "frcr_dncl_amt_2": "0"}],
+            "output3": {"frcr_evlu_tota": "0", "tot_evlu_pfls_amt": "0"},
+        }
+        pb = await self._real_api(response).get_present_balance("USD")
+        assert pb.valid is False
+
+    async def test_falls_back_to_alternate_field_names(self) -> None:
+        # 후보키 폴백: frcr_dncl_amt_2 부재 시 frcr_dncl_amt1 사용.
+        response = {
+            "output2": [{"crcy_cd": "USD", "frcr_dncl_amt1": "777.00"}],
+            "output3": {"evlu_amt_smtl_amt": "800.00"},
+        }
+        pb = await self._real_api(response).get_present_balance("USD")
+        assert pb.deposit == Decimal("777.00")
+        assert pb.total_eval == Decimal("800.00")
+        assert pb.valid is True
