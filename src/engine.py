@@ -1019,7 +1019,13 @@ class TradingEngine:
             today = date.today()
             with get_session() as session:
                 repo = ScreeningResultRepository(session)
-                results = repo.get_by_date(today)
+                # 공유 screening_results를 시장별로 격리 — US 엔진이 KRX 발굴
+                # 종목을 읽어 한국 종목코드를 처리하던 누수를 차단한다.
+                results = repo.get_by_date(
+                    today,
+                    market=self._market.market_code,
+                    tz=self._market.timezone,
+                )
 
             new_codes: list[str] = []
             name_map: dict[str, str] = {}
@@ -2553,15 +2559,19 @@ class TradingEngine:
     def _record_screening_match_metric(self, stock_code: str) -> None:
         """신규 BUY 직후 동일 stock_code의 screening_results 매칭 여부를 메트릭으로 기록한다.
 
-        proposal 2026-05-15: 룰 B(스크리닝→매매 전환율) 진단용. 당일 KST 범위의
-        screening_results에 해당 종목이 존재하면 SCREENING_HIT, 없으면
-        SCREENING_MISS로 기록한다. 매수 본 흐름과 분리(예외 시 swallow).
+        proposal 2026-05-15: 룰 B(스크리닝→매매 전환율) 진단용. 당일(시장 타임존)
+        범위의 동일 시장 screening_results에 해당 종목이 존재하면 SCREENING_HIT,
+        없으면 SCREENING_MISS로 기록한다. 매수 본 흐름과 분리(예외 시 swallow).
         """
         try:
             today = date.today()
             with get_session() as session:
                 repo = ScreeningResultRepository(session)
-                results = repo.get_by_date(today)
+                results = repo.get_by_date(
+                    today,
+                    market=self._market.market_code,
+                    tz=self._market.timezone,
+                )
                 matched = any(r.stock_code == stock_code for r in results)
             self._record_metric(
                 "SCREENING_HIT" if matched else "SCREENING_MISS",
