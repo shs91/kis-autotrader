@@ -266,6 +266,12 @@ class TradingEngine:
         exc = self._exchange_of(code)
         return self._market.quote_exchange_map.get(exc, exc)
 
+    def _board_label(self, krx_default: str) -> str:
+        """stocks.market(보드 구분) 값. KRX는 기존 리터럴 유지(market_stats의
+        KOSPI/KOSDAQ 필터 호환), US는 시장코드(US 종목이 KRX 통계에 혼입 방지).
+        """
+        return krx_default if not self._market.is_overseas else self._market.market_code
+
     def _fmt_price(self, value: float) -> str:
         """가격 로그 포맷. 정수값은 천단위(소수점 없음), 소수는 2자리.
 
@@ -2230,6 +2236,8 @@ class TradingEngine:
                     "signal_type": signal_type,
                     "profit_loss_pct": profit_loss_pct,
                     "profit_loss_amount": profit_loss_amount,
+                    "market": self._market.market_code,
+                    "currency": self._market.currency,
                 },
                 priority=10,
             )
@@ -2256,6 +2264,7 @@ class TradingEngine:
                         screened_at=datetime.now(UTC),
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
+                        market=self._market.market_code,
                     )
         except Exception:
             logger.exception("스크리닝 DB 적재 실패")
@@ -2342,6 +2351,7 @@ class TradingEngine:
                     },
                     "confidence": conf,
                     "action_taken": action_taken,
+                    "market": self._market.market_code,
                 },
                 priority=5,
             )
@@ -2685,9 +2695,16 @@ class TradingEngine:
             })
         self._task_queue.enqueue(
             task_type="sync_portfolio",
-            payload={"holdings": holdings},
+            payload={
+                "holdings": holdings,
+                "market": self._market.market_code,
+                "currency": self._market.currency,
+            },
             priority=1,
-            idempotency_key=f"sync_portfolio_{date.today().isoformat()}",
+            # 시장별 네임스페이스 — KRX/US 분리 프로세스가 같은 날 키 충돌하지 않도록.
+            idempotency_key=(
+                f"sync_portfolio_{self._market.market_code}_{date.today().isoformat()}"
+            ),
         )
 
     def _enqueue_daily_performance(
@@ -2928,7 +2945,7 @@ class TradingEngine:
                         continue
                     stock = stock_repo.get_by_code(code)
                     if stock is None:
-                        stock_repo.create(code, name, "UNKNOWN")
+                        stock_repo.create(code, name, self._board_label("UNKNOWN"))
                         registered += 1
                     elif stock.name == stock.code or not stock.name:
                         stock_repo.update_name(code, name)
@@ -2983,7 +3000,9 @@ class TradingEngine:
 
                 stock = stock_repo.get_by_code(stock_code)
                 if stock is None:
-                    stock = stock_repo.create(stock_code, stock_name or stock_code, "KOSPI")
+                    stock = stock_repo.create(
+                        stock_code, stock_name or stock_code, self._board_label("KOSPI")
+                    )
 
                 order = order_repo.create(stock.id, order_type, quantity, price)
                 order_repo.update_status(order.id, OrderStatus.SUBMITTED, order_no)
