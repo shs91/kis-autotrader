@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from src.db.models import TradeType
+from src.db.models import SellReason, TradeType
+from src.engine import TradingEngine
 from tests.test_engine_buy_gate_metric import _make_engine
 
 
@@ -87,3 +88,45 @@ class TestSellReasonReconciliation:
             payload = _extract_record_trade(mock_enqueue)
             assert payload["sell_reason"] == "TRAILING_STOP"
             assert _extract_metric(mock_enqueue, "SELL_REASON_CORRECTED") == []
+
+    def test_breakeven_recorded_as_breakeven(self) -> None:
+        """본전 스톱은 BREAKEVEN으로 기록 (v0.16.0 매핑 누락 → NULL 회귀 방지)."""
+        engine = _make_engine()
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_trade_to_db(
+                "005930", "삼성전자", TradeType.SELL,
+                quantity=10, price=70000, reason="본전스톱", avg_price=70000.0,
+            )
+            payload = _extract_record_trade(mock_enqueue)
+            assert payload["sell_reason"] == "BREAKEVEN"
+
+    def test_stagnation_recorded_as_stagnation(self) -> None:
+        """정체 청산은 STAGNATION으로 기록 (6/17 아주IB sell_reason=NULL 회귀 방지)."""
+        engine = _make_engine()
+        with patch.object(engine._task_queue, "enqueue") as mock_enqueue:
+            engine._record_trade_to_db(
+                "027360", "아주IB투자", TradeType.SELL,
+                quantity=19, price=6980, reason="정체청산", avg_price=6850.0,
+            )
+            payload = _extract_record_trade(mock_enqueue)
+            assert payload["sell_reason"] == "STAGNATION"
+
+
+class TestSellReasonMapCompleteness:
+    """청산 사유 → SellReason enum 매핑 완전성 (NULL 기록 회귀 방지)."""
+
+    def test_all_engine_sell_reasons_mapped(self) -> None:
+        """엔진 청산 사다리가 ``_execute_sell``에 넘기는 모든 사유가 매핑돼야 한다."""
+        # _process_held_stock 청산 사다리 + 전략 매도에서 쓰는 한글 사유
+        engine_reasons = {
+            "손절", "마감청산", "트레일링", "익절",
+            "본전스톱", "정체청산", "전략매도",
+        }
+        mapped = set(TradingEngine._SELL_REASON_MAP)
+        missing = engine_reasons - mapped
+        assert not missing, f"_SELL_REASON_MAP 매핑 누락: {missing}"
+
+    def test_mapped_values_are_sell_reason_members(self) -> None:
+        """매핑값은 모두 SellReason enum 멤버여야 한다."""
+        for reason, value in TradingEngine._SELL_REASON_MAP.items():
+            assert isinstance(value, SellReason), f"{reason} → {value!r} not SellReason"

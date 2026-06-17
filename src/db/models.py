@@ -66,6 +66,8 @@ class SellReason(enum.Enum):
     MANUAL = "MANUAL"
     TRAILING_STOP = "TRAILING_STOP"
     MARKET_CLOSE = "MARKET_CLOSE"
+    BREAKEVEN = "BREAKEVEN"  # 본전 스톱: 고점 +X% 도달 후 평단 회귀 시 청산 (v0.16.0)
+    STAGNATION = "STAGNATION"  # 정체 청산: 장기 횡보(트레일링 미무장) 슬롯 회수 (v0.16.0)
 
 
 class OrderType(enum.Enum):

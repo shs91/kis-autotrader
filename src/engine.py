@@ -1869,6 +1869,8 @@ class TradingEngine:
         "전략매도": SellReason.STRATEGY,
         "트레일링": SellReason.TRAILING_STOP,
         "마감청산": SellReason.MARKET_CLOSE,
+        "본전스톱": SellReason.BREAKEVEN,
+        "정체청산": SellReason.STAGNATION,
     }
 
     _BUY_REASON_MAP: dict[str, BuyReason] = {
