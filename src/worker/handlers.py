@@ -112,12 +112,18 @@ class SyncPortfolioHandler(TaskHandler):
         """잔고 정보를 DB 포트폴리오에 동기화한다.
 
         payload:
-            holdings: [{stock_code, stock_name, quantity, avg_price, current_price}].
+            holdings: [{stock_code, stock_name, quantity, avg_price, current_price}],
+            market (KRX/US), currency (KRW/USD).
         """
         from src.db.repository import PortfolioRepository, StockRepository
         from src.db.session import get_session
 
         holdings = payload["holdings"]
+        market = payload.get("market", "KRX")
+        currency = payload.get("currency", "KRW")
+        # stocks.market(보드)는 KRX는 기존대로 'UNKNOWN', US는 시장코드.
+        # (KRX 'KOSPI'/'KOSDAQ' 필터(market_stats)에 US가 섞이지 않게 한다.)
+        stock_market = "UNKNOWN" if market == "KRX" else market
 
         with get_session() as session:
             stock_repo = StockRepository(session)
@@ -129,7 +135,7 @@ class SyncPortfolioHandler(TaskHandler):
                     stock = stock_repo.create(
                         code=h["stock_code"],
                         name=h.get("stock_name", h["stock_code"]),
-                        market="UNKNOWN",
+                        market=stock_market,
                     )
                 portfolio_repo.upsert(
                     stock_id=stock.id,
@@ -137,6 +143,8 @@ class SyncPortfolioHandler(TaskHandler):
                     avg_price=h["avg_price"],
                     current_price=h["current_price"],
                     peak_price=h.get("peak_price"),
+                    market=market,
+                    currency=currency,
                 )
 
         logger.info("포트폴리오 동기화 완료: %d종목", len(holdings))
@@ -218,6 +226,8 @@ class RecordTradeHandler(TaskHandler):
                 signal_type=payload.get("signal_type"),
                 profit_loss_pct=payload.get("profit_loss_pct"),
                 profit_loss_amount=payload.get("profit_loss_amount"),
+                market=payload.get("market", "KRX"),
+                currency=payload.get("currency", "KRW"),
             )
         logger.info(
             "매매 기록 완료: %s %s %d주 @%d",
@@ -254,6 +264,7 @@ class RecordSignalHandler(TaskHandler):
                 signal_value=payload.get("signal_value"),
                 confidence=payload.get("confidence", 0.0),
                 action_taken=payload.get("action_taken", False),
+                market=payload.get("market", "KRX"),
             )
         logger.info(
             "시그널 기록 완료: %s %s (confidence=%.2f)",

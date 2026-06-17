@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import math
 from collections.abc import Coroutine
-from datetime import date, datetime, time
+from datetime import datetime, time
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from apscheduler.events import EVENT_JOB_MAX_INSTANCES, JobSubmissionEvent
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src.config import settings
+from src.market.profile import MarketProfile, active_market_profile
 from src.scheduler.holidays import is_market_closed
 from src.utils.logger import setup_logger
 
@@ -101,17 +103,27 @@ class TradingScheduler:
     TradingEngine을 주입받아 실제 매매 로직을 실행한다.
     """
 
-    def __init__(self, engine: TradingEngine | None = None) -> None:
+    def __init__(
+        self,
+        engine: TradingEngine | None = None,
+        market_profile: MarketProfile | None = None,
+    ) -> None:
         """스케줄러를 초기화한다.
 
         Args:
             engine: 매매 엔진 인스턴스
+            market_profile: 시장 프로파일 (None이면 MARKET env 기반 활성 시장)
         """
+        # 시장별 타임존에서 cron을 돌린다 — US는 ET에서 같은 날 세션(자정 교차 회피),
+        # KRX는 Asia/Seoul(KST 서버의 system-local과 동일 → 행동 불변).
+        self._market = market_profile or active_market_profile()
+        self._tz = ZoneInfo(self._market.timezone)
         self._scheduler = BackgroundScheduler(
+            timezone=self._tz,
             job_defaults={
                 "misfire_grace_time": MISFIRE_GRACE_TIME,
                 "max_instances": MAX_INSTANCES,
-            }
+            },
         )
         self._scheduler.add_listener(
             self._on_max_instances, EVENT_JOB_MAX_INSTANCES,
@@ -152,8 +164,8 @@ class TradingScheduler:
         logger.info("모니터링 종목 수 설정: %d개", count)
 
     def pre_market_job(self) -> None:
-        """장 시작 전 작업 (08:30)."""
-        if is_market_closed():
+        """장 시작 전 작업 (장 시작 전, 시장별 시각)."""
+        if is_market_closed(market_code=self._market.market_code):
             logger.info("휴장일이므로 장 시작 전 작업 스킵")
             return
         if self._engine is None:
@@ -169,8 +181,8 @@ class TradingScheduler:
         _run_async(self._engine.run_trading_cycle())
 
     def post_market_job(self) -> None:
-        """장 마감 후 작업 (15:40)."""
-        if is_market_closed():
+        """장 마감 후 작업 (장 마감 후, 시장별 시각)."""
+        if is_market_closed(market_code=self._market.market_code):
             logger.info("휴장일이므로 장 마감 후 작업 스킵")
             return
         if self._engine is None:
@@ -190,14 +202,13 @@ class TradingScheduler:
 
         _run_async(run_healthcheck(self._engine, slot=HealthcheckSlot.CLOSING))
 
-    @staticmethod
-    def summarize_daily_job() -> None:
-        """일일 요약 집계 작업 (16:00).
+    def summarize_daily_job(self) -> None:
+        """일일 요약 집계 작업 (장 마감 후, 시장별 시각).
 
         trades, signals, screening_results, system_metrics를 집계하여
         daily_summary 테이블에 UPSERT한다. 이미 존재하면 덮어쓴다.
         """
-        if is_market_closed():
+        if is_market_closed(market_code=self._market.market_code):
             logger.info("휴장일이므로 일일 요약 집계 스킵")
             return
 
@@ -205,7 +216,7 @@ class TradingScheduler:
             from src.db.repository import DailySummaryRepository
             from src.db.session import get_session
 
-            today = date.today()
+            today = datetime.now(self._tz).date()
             with get_session() as session:
                 repo = DailySummaryRepository(session)
                 summary = repo.upsert_daily_summary(today)
@@ -240,36 +251,42 @@ class TradingScheduler:
             replace_existing=True,
         )
 
-        # 장 시작 전 작업 (평일 08:30)
+        # 시장별 스케줄 시각(시,분) — KRX는 jobs.py 기존 상수와 동일(행동 불변).
+        th = self._market.trading_hours
+        mc = self._market.market_code
+        pre_h, pre_m = th.pre_market
+        reg_h, reg_m = th.register
+        open_h, open_m = th.market_open
+        close_h, close_m = th.market_close
+        post_h, post_m = th.post_market
+        sum_h, sum_m = th.summary
+
+        # 장 시작 전 작업 (평일)
         self._scheduler.add_job(
             func=self.pre_market_job,
             trigger="cron",
             day_of_week="mon-fri",
-            hour=PRE_MARKET_HOUR,
-            minute=PRE_MARKET_MINUTE,
+            hour=pre_h,
+            minute=pre_m,
             id="pre_market_job",
             name="장 시작 전 작업",
             replace_existing=True,
         )
-        logger.info(
-            "장 시작 전 작업 등록: 평일 %02d:%02d",
-            PRE_MARKET_HOUR,
-            PRE_MARKET_MINUTE,
-        )
+        logger.info("장 시작 전 작업 등록: 평일 %02d:%02d (%s)", pre_h, pre_m, mc)
 
-        # 장중 매매 작업 (평일 09:00~15:20, 종목 수에 따른 간격)
+        # 장중 매매 작업 (종목 수에 따른 간격)
         interval_seconds = _calculate_trading_interval(self._stock_count)
 
         # 매일 장 시작 시 trading_job을 재등록하는 래퍼 작업
         def _start_trading_job() -> None:
             """장 시작 시 당일 trading_job을 등록한다."""
-            today = date.today()
-            if is_market_closed(today):
+            today = datetime.now(self._tz).date()
+            if is_market_closed(today, mc):
                 logger.info("휴장일이므로 장중 매매 작업 스킵 (%s)", today)
                 return
 
-            start = datetime.combine(today, time(MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE))
-            end = datetime.combine(today, time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE))
+            start = datetime.combine(today, time(open_h, open_m))
+            end = datetime.combine(today, time(close_h, close_m))
 
             existing = self._scheduler.get_job("trading_job")
             if existing:
@@ -286,155 +303,159 @@ class TradingScheduler:
             )
             logger.info(
                 "장중 매매 작업 등록: %s %02d:%02d~%02d:%02d, 간격=%.1f초",
-                today,
-                MARKET_OPEN_HOUR,
-                MARKET_OPEN_MINUTE,
-                MARKET_CLOSE_HOUR,
-                MARKET_CLOSE_MINUTE,
-                interval_seconds,
+                today, open_h, open_m, close_h, close_m, interval_seconds,
             )
 
-        # 매일 08:55에 당일 trading_job을 등록
+        # 매일 장 시작 직전(register 시각)에 당일 trading_job을 등록
         self._scheduler.add_job(
             func=_start_trading_job,
             trigger="cron",
             day_of_week="mon-fri",
-            hour=8,
-            minute=55,
+            hour=reg_h,
+            minute=reg_m,
             id="register_trading_job",
             name="장중 매매 작업 등록",
             replace_existing=True,
         )
 
-        # 오늘이 평일이고 아직 장중 시간이면 즉시 등록
-        now = datetime.now()
-        market_close_today = datetime.combine(date.today(), time(MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE))
-        if not is_market_closed() and now < market_close_today:
+        # 오늘이 평일이고 아직 장중 시간이면 즉시 등록 (시장 타임존 기준)
+        now = datetime.now(self._tz)
+        market_close_today = datetime.combine(
+            now.date(), time(close_h, close_m), tzinfo=self._tz
+        )
+        if not is_market_closed(now.date(), mc) and now < market_close_today:
             _start_trading_job()
         else:
             logger.info(
-                "장중 매매 작업: 평일 %02d:%02d~%02d:%02d, 간격=%.1f초 (종목 %d개) — 다음 장 시작 시 활성화",
-                MARKET_OPEN_HOUR,
-                MARKET_OPEN_MINUTE,
-                MARKET_CLOSE_HOUR,
-                MARKET_CLOSE_MINUTE,
-                interval_seconds,
-                self._stock_count,
+                "장중 매매 작업: 평일 %02d:%02d~%02d:%02d, 간격=%.1f초 "
+                "(종목 %d개, %s) — 다음 장 시작 시 활성화",
+                open_h, open_m, close_h, close_m, interval_seconds,
+                self._stock_count, mc,
             )
 
-        # 장 마감 후 작업 (평일 15:40)
+        # 장 마감 후 작업 (평일)
         self._scheduler.add_job(
             func=self.post_market_job,
             trigger="cron",
             day_of_week="mon-fri",
-            hour=POST_MARKET_HOUR,
-            minute=POST_MARKET_MINUTE,
+            hour=post_h,
+            minute=post_m,
             id="post_market_job",
             name="장 마감 후 작업",
             replace_existing=True,
         )
-        logger.info(
-            "장 마감 후 작업 등록: 평일 %02d:%02d",
-            POST_MARKET_HOUR,
-            POST_MARKET_MINUTE,
-        )
+        logger.info("장 마감 후 작업 등록: 평일 %02d:%02d (%s)", post_h, post_m, mc)
 
-        # 일일 요약 집계 작업 (평일 16:00)
+        # 일일 요약 집계 작업 (평일)
         self._scheduler.add_job(
             func=self.summarize_daily_job,
             trigger="cron",
             day_of_week="mon-fri",
-            hour=SUMMARY_HOUR,
-            minute=SUMMARY_MINUTE,
+            hour=sum_h,
+            minute=sum_m,
             id="summarize_daily_job",
             name="일일 요약 집계",
             replace_existing=True,
         )
-        logger.info(
-            "일일 요약 집계 등록: 평일 %02d:%02d",
-            SUMMARY_HOUR,
-            SUMMARY_MINUTE,
-        )
+        logger.info("일일 요약 집계 등록: 평일 %02d:%02d (%s)", sum_h, sum_m, mc)
 
-        # API 할당량 시간대 전환 (Redis Rate Limiter)
+        # API 할당량 시간대 전환 (Redis Rate Limiter) — 메인/스크리너 분할은 KRX 전용.
+        # US는 스크리너 워커가 없으므로(P3c-5 보류) 메인 100% 단일 할당.
         total = settings.rate_limit.per_second
 
-        def _set_quota_pre_market() -> None:
-            """장 시작 전: 스크리닝 100%."""
-            _run_async(_update_quota({"main": 0, "screener": total}))
+        if self._market.is_overseas:
+            def _set_quota_us_main() -> None:
+                """US: 스크리너 없음 → 메인 100%."""
+                _run_async(_update_quota({"main": total, "screener": 0}))
 
-        def _set_quota_market_open() -> None:
-            """장 시작: 메인 80% + 스크리닝 20%."""
-            main_q = int(total * 0.8)
-            _run_async(_update_quota({"main": main_q, "screener": total - main_q}))
+            self._scheduler.add_job(
+                func=_set_quota_us_main,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=pre_h,
+                minute=pre_m,
+                id="quota_us_main",
+                name="API 할당량: 메인 전용(US)",
+                replace_existing=True,
+            )
+            logger.info("API 할당량(US): 메인 100%% — 평일 %02d:%02d 설정", pre_h, pre_m)
+        else:
+            def _set_quota_pre_market() -> None:
+                """장 시작 전: 스크리닝 100%."""
+                _run_async(_update_quota({"main": 0, "screener": total}))
 
-        def _set_quota_post_market() -> None:
-            """장 마감 후: 메인 100%."""
-            _run_async(_update_quota({"main": total, "screener": 0}))
+            def _set_quota_market_open() -> None:
+                """장 시작: 메인 80% + 스크리닝 20%."""
+                main_q = int(total * 0.8)
+                _run_async(_update_quota({"main": main_q, "screener": total - main_q}))
 
-        self._scheduler.add_job(
-            func=_set_quota_pre_market,
-            trigger="cron",
-            day_of_week="mon-fri",
-            hour=QUOTA_PRE_MARKET_HOUR,
-            minute=QUOTA_PRE_MARKET_MINUTE,
-            id="quota_pre_market",
-            name="API 할당량: 스크리닝 전용",
-            replace_existing=True,
-        )
-        self._scheduler.add_job(
-            func=_set_quota_market_open,
-            trigger="cron",
-            day_of_week="mon-fri",
-            hour=QUOTA_MARKET_OPEN_HOUR,
-            minute=QUOTA_MARKET_OPEN_MINUTE,
-            id="quota_market_open",
-            name="API 할당량: 장중 배분",
-            replace_existing=True,
-        )
-        self._scheduler.add_job(
-            func=_set_quota_post_market,
-            trigger="cron",
-            day_of_week="mon-fri",
-            hour=QUOTA_POST_MARKET_HOUR,
-            minute=QUOTA_POST_MARKET_MINUTE,
-            id="quota_post_market",
-            name="API 할당량: 메인 전용",
-            replace_existing=True,
-        )
-        logger.info(
-            "API 할당량 전환 등록: %02d:%02d(스크리닝), %02d:%02d(장중), %02d:%02d(마감후)",
-            QUOTA_PRE_MARKET_HOUR, QUOTA_PRE_MARKET_MINUTE,
-            QUOTA_MARKET_OPEN_HOUR, QUOTA_MARKET_OPEN_MINUTE,
-            QUOTA_POST_MARKET_HOUR, QUOTA_POST_MARKET_MINUTE,
-        )
+            def _set_quota_post_market() -> None:
+                """장 마감 후: 메인 100%."""
+                _run_async(_update_quota({"main": total, "screener": 0}))
 
-        # 일일 헬스체크 (평일 12:30, 15:35) — 매매 0건 감지 즉시 Telegram 경고
-        self._scheduler.add_job(
-            func=self.healthcheck_morning_job,
-            trigger="cron",
-            day_of_week="mon-fri",
-            hour=HEALTHCHECK_MORNING_HOUR,
-            minute=HEALTHCHECK_MORNING_MINUTE,
-            id="healthcheck_morning",
-            name="일일 헬스체크 (오전)",
-            replace_existing=True,
-        )
-        self._scheduler.add_job(
-            func=self.healthcheck_closing_job,
-            trigger="cron",
-            day_of_week="mon-fri",
-            hour=HEALTHCHECK_CLOSING_HOUR,
-            minute=HEALTHCHECK_CLOSING_MINUTE,
-            id="healthcheck_closing",
-            name="일일 헬스체크 (마감)",
-            replace_existing=True,
-        )
-        logger.info(
-            "일일 헬스체크 등록: 평일 %02d:%02d(오전), %02d:%02d(마감)",
-            HEALTHCHECK_MORNING_HOUR, HEALTHCHECK_MORNING_MINUTE,
-            HEALTHCHECK_CLOSING_HOUR, HEALTHCHECK_CLOSING_MINUTE,
-        )
+            self._scheduler.add_job(
+                func=_set_quota_pre_market,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=QUOTA_PRE_MARKET_HOUR,
+                minute=QUOTA_PRE_MARKET_MINUTE,
+                id="quota_pre_market",
+                name="API 할당량: 스크리닝 전용",
+                replace_existing=True,
+            )
+            self._scheduler.add_job(
+                func=_set_quota_market_open,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=QUOTA_MARKET_OPEN_HOUR,
+                minute=QUOTA_MARKET_OPEN_MINUTE,
+                id="quota_market_open",
+                name="API 할당량: 장중 배분",
+                replace_existing=True,
+            )
+            self._scheduler.add_job(
+                func=_set_quota_post_market,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=QUOTA_POST_MARKET_HOUR,
+                minute=QUOTA_POST_MARKET_MINUTE,
+                id="quota_post_market",
+                name="API 할당량: 메인 전용",
+                replace_existing=True,
+            )
+            logger.info(
+                "API 할당량 전환 등록: %02d:%02d(스크리닝), %02d:%02d(장중), %02d:%02d(마감후)",
+                QUOTA_PRE_MARKET_HOUR, QUOTA_PRE_MARKET_MINUTE,
+                QUOTA_MARKET_OPEN_HOUR, QUOTA_MARKET_OPEN_MINUTE,
+                QUOTA_POST_MARKET_HOUR, QUOTA_POST_MARKET_MINUTE,
+            )
+
+            # 일일 헬스체크 (평일 12:30, 15:35) — KRX 전용(매매 0건 감지 Telegram 경고).
+            self._scheduler.add_job(
+                func=self.healthcheck_morning_job,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=HEALTHCHECK_MORNING_HOUR,
+                minute=HEALTHCHECK_MORNING_MINUTE,
+                id="healthcheck_morning",
+                name="일일 헬스체크 (오전)",
+                replace_existing=True,
+            )
+            self._scheduler.add_job(
+                func=self.healthcheck_closing_job,
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=HEALTHCHECK_CLOSING_HOUR,
+                minute=HEALTHCHECK_CLOSING_MINUTE,
+                id="healthcheck_closing",
+                name="일일 헬스체크 (마감)",
+                replace_existing=True,
+            )
+            logger.info(
+                "일일 헬스체크 등록: 평일 %02d:%02d(오전), %02d:%02d(마감)",
+                HEALTHCHECK_MORNING_HOUR, HEALTHCHECK_MORNING_MINUTE,
+                HEALTHCHECK_CLOSING_HOUR, HEALTHCHECK_CLOSING_MINUTE,
+            )
 
     def start(self) -> None:
         """스케줄러를 시작한다."""

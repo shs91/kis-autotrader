@@ -315,3 +315,59 @@ async def test_cancel_order_krx_passthrough() -> None:
     e = TradingEngine(watchlist=["005930"], order=o_api)
     await e._cancel_order("005930", "O1", 5)
     o_api.cancel.assert_awaited_with(order_no="O1", stock_code="005930", quantity=5)
+
+
+# ── P3c-4: DB payload market/currency 배선 ────────────────────
+
+
+def _enqueued_payload(engine: TradingEngine, task_type: str) -> dict:
+    for call in engine._task_queue.enqueue.call_args_list:  # type: ignore[attr-defined]
+        if call.kwargs.get("task_type") == task_type:
+            return call.kwargs["payload"]
+    raise AssertionError(f"{task_type} 미적재")
+
+
+def test_record_trade_payload_market_currency_us() -> None:
+    from src.db.models import TradeType
+
+    e = _us_engine()
+    e._task_queue = MagicMock()
+    e._record_trade_to_db("AAPL", "AAPL", TradeType.BUY, 2, 150.25)
+    p = _enqueued_payload(e, "record_trade")
+    assert p["market"] == "US"
+    assert p["currency"] == "USD"
+
+
+def test_record_trade_payload_market_currency_krx() -> None:
+    from src.db.models import TradeType
+
+    e = TradingEngine(watchlist=["005930"])
+    e._task_queue = MagicMock()
+    e._record_trade_to_db("005930", "삼성전자", TradeType.BUY, 1, 70000)
+    p = _enqueued_payload(e, "record_trade")
+    assert p["market"] == "KRX"
+    assert p["currency"] == "KRW"
+
+
+def test_sync_portfolio_payload_market_currency_and_key_us() -> None:
+    e = _us_engine()
+    e._task_queue = MagicMock()
+    bal = Balance(
+        deposit=1000, total_eval_amount=0, total_profit_loss=0,
+        total_profit_rate=0.0, holdings=[], raw_response={},
+    )
+    e._enqueue_sync_portfolio(bal)
+    call = e._task_queue.enqueue.call_args
+    assert call.kwargs["payload"]["market"] == "US"
+    assert call.kwargs["payload"]["currency"] == "USD"
+    # 시장별 네임스페이스 idempotency 키(KRX/US 충돌 방지)
+    assert "_US_" in call.kwargs["idempotency_key"]
+
+
+def test_board_label_krx_keeps_literal_us_uses_market_code() -> None:
+    krx = TradingEngine(watchlist=["005930"])
+    assert krx._board_label("KOSPI") == "KOSPI"  # market_stats 필터 호환
+    assert krx._board_label("UNKNOWN") == "UNKNOWN"
+    us = _us_engine()
+    assert us._board_label("KOSPI") == "US"  # US는 KRX 보드에 혼입 안 됨
+    assert us._board_label("UNKNOWN") == "US"

@@ -31,6 +31,7 @@ from src.harness.telegram_commands import (
     cmd_run_implement,
     cmd_status_implement,
 )
+from src.market.profile import active_market_profile
 from src.notify.bot import TelegramBot
 from src.notify.formatter import eval_profit_rate
 from src.notify.telegram import TelegramNotifier
@@ -610,13 +611,14 @@ def _register_bot_commands(
 
 async def main() -> None:
     """자동매매 시스템을 시작한다."""
+    market = active_market_profile()
     logger.info("=== KIS 주식 자동매매 시스템 시작 ===")
+    logger.info("시장: %s (%s)", market.market_code, market.timezone)
     logger.info("환경: %s", settings.kis.env)
     logger.info("계좌: %s", settings.kis.account_no)
     logger.info("API 호출 제한: %d건/초", settings.rate_limit.per_second)
     logger.info("최대 손실률: %.1f%%", settings.trading.max_loss_rate * 100)
     logger.info("최대 포지션 비율: %.1f%%", settings.trading.max_position_ratio * 100)
-    logger.info("관심종목: %s", settings.trading.watchlist_codes)
 
     notifier = TelegramNotifier()
 
@@ -624,11 +626,12 @@ async def main() -> None:
     logger.info("데이터베이스 초기화 중...")
     init_db()
 
-    # 매매 엔진 생성
-    engine = TradingEngine()
+    # 매매 엔진 생성 (MARKET env 기반 — KRX 기본, US는 야간 정규장)
+    engine = TradingEngine.create_for_market(market.market_code)
+    logger.info("관심종목: %s", engine._get_watchlist_codes())
 
-    # 스케줄러에 엔진 연결 후 시작
-    scheduler = TradingScheduler(engine=engine)
+    # 스케줄러에 엔진 연결 후 시작 (시장별 시간대/시각)
+    scheduler = TradingScheduler(engine=engine, market_profile=market)
     scheduler.start()
     logger.info("스케줄러 시작 완료")
 
@@ -670,13 +673,16 @@ async def main() -> None:
         worker_task = asyncio.create_task(worker.run())
         logger.info("Worker 프로세스 시작")
 
-    # Screening Worker 시작 (스크리닝 API 분리)
+    # Screening Worker 시작 (스크리닝 API 분리) — KRX 전용.
+    # US 스크리너 시장화는 P3c-5 보류 → US는 watchlist_us 고정 유니버스로 운영.
     screener_worker: ScreeningWorker | None = None
     screener_task: asyncio.Task[None] | None = None
-    if settings.worker.enabled:
+    if settings.worker.enabled and not market.is_overseas:
         screener_worker = ScreeningWorker()
         screener_task = asyncio.create_task(screener_worker.run())
         logger.info("Screening Worker 시작")
+    elif market.is_overseas:
+        logger.info("US 시장 — Screening Worker 미가동(watchlist_us 고정 유니버스)")
 
     await notifier.notify_system(f"자동매매 시스템 가동 ({settings.kis.env})")
     log_system(f"시스템 시작 ({settings.kis.env})")

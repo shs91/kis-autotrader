@@ -48,3 +48,29 @@ class TestIsMarketClosed:
     def test_local_election_day(self) -> None:
         """제9회 전국동시지방선거 임시공휴일은 휴장이다."""
         assert is_market_closed(date(2026, 6, 3)) is True
+
+
+class TestUsMarketHolidays:
+    """US 시장 휴장일 (P3c-6) — market_code 분기 테스트."""
+
+    def test_us_independence_day_observed(self) -> None:
+        """US 독립기념일 관측일(2026-07-03)은 US 휴장, KRX는 개장."""
+        assert is_market_closed(date(2026, 7, 3), "US") is True
+        assert is_market_closed(date(2026, 7, 3), "KRX") is False
+
+    def test_krx_lunar_new_year_not_us(self) -> None:
+        """설날(2026-01-27)은 KRX 휴장, US는 개장."""
+        assert is_market_closed(date(2026, 1, 27), "KRX") is True
+        assert is_market_closed(date(2026, 1, 27), "US") is False
+
+    def test_us_thanksgiving(self) -> None:
+        """US 추수감사절(2026-11-26)은 US 휴장."""
+        assert is_market_closed(date(2026, 11, 26), "US") is True
+
+    def test_us_normal_weekday(self) -> None:
+        """US 일반 평일은 개장이다."""
+        assert is_market_closed(date(2026, 4, 6), "US") is False
+
+    def test_us_weekend(self) -> None:
+        """주말은 시장 무관 휴장."""
+        assert is_market_closed(date(2026, 4, 4), "US") is True
