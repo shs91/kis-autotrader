@@ -65,9 +65,17 @@ class ScreeningFilter:
     거래량 상위 목록에서 부적합 종목을 빠르게 걸러낸다.
     """
 
-    def __init__(self, config: ScreeningConfig | None = None) -> None:
-        """ScreeningFilter를 초기화한다."""
+    def __init__(
+        self, config: ScreeningConfig | None = None, is_overseas: bool = False
+    ) -> None:
+        """ScreeningFilter를 초기화한다.
+
+        Args:
+            config: 스크리닝 설정
+            is_overseas: 해외(US) 시장이면 True — 가격 플로어(USD)·ETF 판별이 시장별.
+        """
         self._config = config or settings.screening
+        self._is_overseas = is_overseas
 
     def apply(
         self,
@@ -90,10 +98,10 @@ class ScreeningFilter:
         for item in items:
             if item.stock_code in exclude_codes:
                 continue
-            if self._is_etf_etn(item.stock_code, item.stock_name):
+            if self._is_etf_etn(item.stock_code, item.stock_name, self._is_overseas):
                 etf_count += 1
                 continue
-            if not self._pass_filter(item, cfg):
+            if not self._pass_filter(item, cfg, self._is_overseas):
                 continue
             passed.append(item)
 
@@ -105,19 +113,27 @@ class ScreeningFilter:
 
     @staticmethod
     def _pass_filter(
-        item: VolumeRankItem | MergedCandidate, cfg: ScreeningConfig
+        item: VolumeRankItem | MergedCandidate,
+        cfg: ScreeningConfig,
+        is_overseas: bool = False,
     ) -> bool:
         """단일 종목의 필터 통과 여부를 판정한다.
 
         멀티소스 후보는 거래량순위 외 출처면 ``market_cap``이 None일 수 있다.
         이때 시총 필터는 **건너뛴다**(breadth 보존). 나머지 필터는 동일 적용.
+        US는 가격 플로어(USD min_price_us)만 적용하고 max_price/market_cap(KRW)은
+        통화 단위가 달라 건너뛴다.
         """
-        if ScreeningFilter._is_etf_etn(item.stock_code, item.stock_name):
+        if ScreeningFilter._is_etf_etn(item.stock_code, item.stock_name, is_overseas):
             return False
-        if item.current_price < cfg.min_price or item.current_price > cfg.max_price:
-            return False
-        if item.market_cap is not None and item.market_cap < cfg.min_market_cap:
-            return False
+        if is_overseas:
+            if item.current_price < cfg.min_price_us:
+                return False
+        else:
+            if item.current_price < cfg.min_price or item.current_price > cfg.max_price:
+                return False
+            if item.market_cap is not None and item.market_cap < cfg.min_market_cap:
+                return False
         if item.change_rate < cfg.change_rate_min or item.change_rate > cfg.change_rate_max:
             return False
         if item.volume < cfg.min_volume:
@@ -148,10 +164,26 @@ class ScreeningFilter:
             ScreeningFilter._ETF_BLOCKLIST = set()
         return ScreeningFilter._ETF_BLOCKLIST
 
+    # 미국 대표 ETF/ETN 심볼 — 알파벳 코드라 KRX 디짓체크가 무효하므로 명시 차단.
+    # (종목마스터 다운로드는 비범위 — 흔한 인덱스/레버리지 ETF만 1차 차단, 후속 보강.)
+    _US_ETF_SYMBOLS: frozenset[str] = frozenset({
+        "SPY", "QQQ", "IWM", "DIA", "VOO", "VTI", "VEA", "VWO", "EEM", "EFA",
+        "TQQQ", "SQQQ", "SOXL", "SOXS", "TLT", "GLD", "SLV", "USO", "UVXY", "VXX",
+        "ARKK", "XLF", "XLE", "XLK", "XLV", "SCHD", "VYM", "HYG", "LQD", "AGG",
+    })
+
     @staticmethod
-    def _is_etf_etn(stock_code: str, stock_name: str) -> bool:
+    def _is_etf_etn(
+        stock_code: str, stock_name: str, is_overseas: bool = False
+    ) -> bool:
         """ETF/ETN/레버리지/인버스/펀드형 등 비(非)일반주 여부를 판별한다."""
-        # 일반 상장주식은 6자리 숫자 코드. 문자 포함 코드(ETN Q…, ELW, 구조화상품
+        if is_overseas:
+            # US: 심볼은 알파벳이라 디짓체크가 무효. 대표 ETF 심볼 + 이름 ETF/ETN 키워드.
+            if stock_code.upper() in ScreeningFilter._US_ETF_SYMBOLS:
+                return True
+            name_u = (stock_name or "").upper()
+            return "ETF" in name_u or "ETN" in name_u
+        # KRX: 일반 상장주식은 6자리 숫자 코드. 문자 포함 코드(ETN Q…, ELW, 구조화상품
         # 0162Z0 등)는 일반주가 아니므로 제외한다.
         if not stock_code.isdigit():
             return True
@@ -291,10 +323,18 @@ class StockScreener:
     필터링 → 전략 분석 → 스코어링 → 정렬 파이프라인을 실행한다.
     """
 
-    def __init__(self, config: ScreeningConfig | None = None) -> None:
-        """StockScreener를 초기화한다."""
+    def __init__(
+        self, config: ScreeningConfig | None = None, is_overseas: bool = False
+    ) -> None:
+        """StockScreener를 초기화한다.
+
+        Args:
+            config: 스크리닝 설정
+            is_overseas: 해외(US) 시장이면 True — 필터가 시장별로 동작.
+        """
         self._config = config or settings.screening
-        self._filter = ScreeningFilter(self._config)
+        self._is_overseas = is_overseas
+        self._filter = ScreeningFilter(self._config, is_overseas=is_overseas)
         self._scorer = ScreeningScorer(self._config)
 
     @property
