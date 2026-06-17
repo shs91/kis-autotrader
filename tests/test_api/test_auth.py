@@ -258,3 +258,78 @@ class TestTokenCache:
 
         assert _token_cache_path("KEY_A") != _token_cache_path("KEY_B")
         assert _token_cache_path("KEY_A") == _token_cache_path("KEY_A")
+
+
+class TestTokenRefreshFallback:
+    """장중 갱신 실패 시 유효 토큰 폴백 + 재시도 쓰로틀."""
+
+    @staticmethod
+    def _failing_client(mock_client_cls: AsyncMock) -> AsyncMock:
+        """토큰 발급(POST)이 실패(500)하는 클라이언트 mock."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Server Error"
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+        return mock_client
+
+    @patch("src.api.auth.httpx.AsyncClient")
+    async def test_refresh_failure_falls_back_to_valid_token(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """갱신(should_refresh) 실패 시 아직 유효한 기존 토큰으로 폴백한다."""
+        mock_client = self._failing_client(mock_client_cls)
+        auth = KISAuth()
+        # 만료 30분 전(should_refresh=True) 이지만 아직 유효한 토큰
+        auth._token_info = TokenInfo(
+            access_token="still_valid",
+            expires_at=datetime.datetime.now() + datetime.timedelta(minutes=30),
+        )
+        token = await auth.get_access_token()
+        assert token == "still_valid"  # 폴백 — 예외 없음
+        mock_client.post.assert_called_once()  # 갱신 시도는 했음
+
+    @patch("src.api.auth.httpx.AsyncClient")
+    async def test_refresh_failure_no_valid_token_raises(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """유효 토큰이 없는데 발급 실패하면 예외를 전파한다."""
+        self._failing_client(mock_client_cls)
+        auth = KISAuth()  # 토큰 없음
+        with pytest.raises(AuthenticationError):
+            await auth.get_access_token()
+
+    @patch("src.api.auth.httpx.AsyncClient")
+    async def test_refresh_throttled_after_failure(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """갱신 실패 후 재시도 간격 내 호출은 발급을 재시도하지 않는다(과부하 방지)."""
+        mock_client = self._failing_client(mock_client_cls)
+        auth = KISAuth()
+        auth._token_info = TokenInfo(
+            access_token="still_valid",
+            expires_at=datetime.datetime.now() + datetime.timedelta(minutes=30),
+        )
+        await auth.get_access_token()  # 1회차: 발급 시도(실패)→폴백→쓰로틀 설정
+        await auth.get_access_token()  # 2회차: 쓰로틀 — 발급 미시도, 기존 토큰 사용
+        assert mock_client.post.call_count == 1
+
+    @patch("src.api.auth.httpx.AsyncClient")
+    async def test_retries_after_throttle_window(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """쓰로틀 만료 후에는 갱신을 재시도한다."""
+        mock_client = self._failing_client(mock_client_cls)
+        auth = KISAuth()
+        auth._token_info = TokenInfo(
+            access_token="still_valid",
+            expires_at=datetime.datetime.now() + datetime.timedelta(minutes=30),
+        )
+        await auth.get_access_token()  # 실패→쓰로틀
+        # 쓰로틀 만료를 과거로 강제(시간 경과 모사)
+        auth._refresh_retry_after = datetime.datetime.now() - datetime.timedelta(seconds=1)
+        await auth.get_access_token()  # 재시도
+        assert mock_client.post.call_count == 2

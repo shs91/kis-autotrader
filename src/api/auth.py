@@ -39,6 +39,11 @@ def _token_cache_path(app_key: str) -> Path:
     return _token_cache_dir() / f"{digest}.json"
 
 
+# 갱신 실패 후 재시도 최소 간격 — 반복 실패 시 토큰 엔드포인트 과부하(1일 1회 발급
+# 원칙) 방지. 이 간격 동안엔 아직 유효한 기존 토큰을 계속 사용한다.
+_REFRESH_RETRY_INTERVAL = datetime.timedelta(seconds=60)
+
+
 @dataclass
 class TokenInfo:
     """OAuth 토큰 정보."""
@@ -69,6 +74,8 @@ class KISAuth:
         self._token_info: TokenInfo | None = None
         self._cache_path = _token_cache_path(self._app_key)
         self._lock = asyncio.Lock()
+        # 갱신 실패 후 재시도 가능 시각(쓰로틀). None이면 즉시 재시도 가능.
+        self._refresh_retry_after: datetime.datetime | None = None
 
         logger.info("KISAuth 초기화 완료 (환경: %s)", settings.kis.env)
 
@@ -90,7 +97,7 @@ class KISAuth:
                 self._token_info = self._load_from_cache()
 
             if self._token_info is None or self._token_info.should_refresh:
-                await self._issue_token()
+                await self._refresh_token()
 
             if self._token_info is None:
                 raise AuthenticationError("토큰 발급에 실패했습니다.")
@@ -99,6 +106,36 @@ class KISAuth:
                 raise TokenExpiredError("토큰이 만료되었습니다. 재발급이 필요합니다.")
 
             return self._token_info.access_token
+
+    async def _refresh_token(self) -> None:
+        """토큰을 발급/갱신하되, 실패 시 아직 유효한 기존 토큰으로 폴백한다.
+
+        장중 만료 1시간 전(should_refresh) 갱신이 네트워크/발급 제한으로 실패해도,
+        기존 토큰이 아직 유효하면 계속 사용하고 다음 호출에서 재시도한다(즉시 매매
+        중단 방지). 반복 실패 시 토큰 엔드포인트 과부하(1일 1회 발급 원칙)를 막기 위해
+        재시도를 _REFRESH_RETRY_INTERVAL 간격으로 쓰로틀한다. 유효 토큰이 전혀 없으면
+        (None/만료) 발급 실패를 그대로 전파한다.
+        """
+        now = datetime.datetime.now()
+        # 쓰로틀: 직전 발급 실패 후 재시도 간격 내면 발급 시도를 생략한다.
+        # (기존 토큰을 유지 — 유효하면 호출부가 사용, 만료/없음이면 호출부 가드가 처리)
+        if self._refresh_retry_after is not None and now < self._refresh_retry_after:
+            return
+
+        try:
+            await self._issue_token()
+            self._refresh_retry_after = None  # 성공 — 쓰로틀 해제
+        except Exception as exc:
+            self._refresh_retry_after = now + _REFRESH_RETRY_INTERVAL
+            # 아직 유효한 기존 토큰이 있으면 폴백(다음 호출에서 재발급 재시도).
+            if self._token_info is not None and not self._token_info.is_expired:
+                logger.warning(
+                    "토큰 갱신 실패 — 유효한 기존 토큰으로 폴백(%d초 후 재시도): %s",
+                    int(_REFRESH_RETRY_INTERVAL.total_seconds()),
+                    exc,
+                )
+                return
+            raise  # 유효 토큰 없음 → 발급 실패 전파
 
     async def _issue_token(self) -> None:
         """OAuth 토큰을 발급받는다.
