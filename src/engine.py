@@ -15,6 +15,7 @@ import pandas as pd
 from src.api.account import AccountAPI, Balance, Execution
 from src.api.client import KISClient
 from src.api.order import OrderAPI
+from src.api.protocols import OrderProvider, QuoteProvider
 from src.api.quote import CurrentPrice, QuoteAPI, VolumeRankItem
 from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
@@ -35,6 +36,7 @@ from src.db.repository import (
     WatchlistRepository,
 )
 from src.db.session import db_healthcheck, get_session
+from src.market.profile import KRX_PROFILE, MarketProfile, get_market_profile
 from src.notify.telegram import TelegramNotifier
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.disclosure_risk import match_critical_disclosure
@@ -51,8 +53,6 @@ logger = setup_logger(__name__)
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
 
-# 거래일 경계 판단용(장중 재시작 시 '오늘' 체결 복원에 사용)
-_KST = ZoneInfo("Asia/Seoul")
 
 # 공시 기반 매수 차단 키워드·매처는 src.strategy.disclosure_risk로 단일화했다
 # (스크리닝 Worker의 후보 사전 배제와 동일 로직 공유 — 드리프트 방지).
@@ -93,6 +93,11 @@ class TradingEngine:
         watchlist: list[str] | None = None,
         strategy: BaseStrategy | None = None,
         selector: StrategySelector | None = None,
+        *,
+        market_profile: MarketProfile | None = None,
+        quote: QuoteProvider | None = None,
+        order: OrderProvider | None = None,
+        account: AccountAPI | None = None,
     ) -> None:
         """매매 엔진을 초기화한다.
 
@@ -101,10 +106,12 @@ class TradingEngine:
             strategy: 매매 전략 (단일 전략 모드, 하위 호환용)
             selector: 전략 셀렉터 (다중 전략 모드)
         """
+        self._market = market_profile or KRX_PROFILE
+        self._tz = ZoneInfo(self._market.timezone)
         self._client = KISClient()
-        self._quote = QuoteAPI(client=self._client)
-        self._order = OrderAPI(client=self._client)
-        self._account = AccountAPI(client=self._client)
+        self._quote: QuoteProvider = quote or QuoteAPI(client=self._client)
+        self._order: OrderProvider = order or OrderAPI(client=self._client)
+        self._account: AccountAPI = account or AccountAPI(client=self._client)
 
         # 전략 셀렉터 초기화: selector > strategy > 설정 파일
         if selector is not None:
@@ -175,6 +182,16 @@ class TradingEngine:
             self._selector.default_strategy_name,
             "고정" if self._fixed_watchlist else "DB",
         )
+
+    @classmethod
+    def create_for_market(cls, market_code: str = "KRX") -> TradingEngine:
+        """MARKET 코드로 시장별 엔진을 생성한다.
+
+        P3c-1은 프로파일/시간대만 시장별로 설정한다. 해외(US) provider 주입과
+        주문/시세 어댑터는 P3c-2에서 추가한다(현재 US는 KRX API로 생성됨).
+        """
+        profile = get_market_profile(market_code)
+        return cls(market_profile=profile)
 
     def _get_watchlist_codes(self) -> list[str]:
         """관심종목 코드를 반환한다.
@@ -319,7 +336,7 @@ class TradingEngine:
         since = self._held_since.get(stock_code)
         if since is None:
             return 0.0
-        return (datetime.now(_KST) - since).total_seconds() / 60.0
+        return (datetime.now(self._tz) - since).total_seconds() / 60.0
 
     async def _set_daily_limit_reached(self) -> None:
         """일일 한도 초과 상태를 설정하고 알림을 전송한다."""
@@ -360,7 +377,7 @@ class TradingEngine:
         # 성공/실패와 무관하게 1회만 시도(매 사이클 DB 조회·재구성 반복 방지).
         self._risk_state_restored = True
         try:
-            today = datetime.now(_KST).date()
+            today = datetime.now(self._tz).date()
             with get_session() as session:
                 trades = TradeRepository(session).get_trades_by_date(today)
             sells = [
@@ -971,7 +988,7 @@ class TradingEngine:
         cooldown_min = settings.trading.buy_cooldown_after_sell_min
         last_sell = self._last_sell_at.get(stock_code)
         if cooldown_min > 0 and last_sell is not None:
-            elapsed_min = (datetime.now(_KST) - last_sell).total_seconds() / 60.0
+            elapsed_min = (datetime.now(self._tz) - last_sell).total_seconds() / 60.0
             if elapsed_min < cooldown_min:
                 skip_reason = "rebuy_cooldown"
                 self._record_buy_reject(
@@ -1169,7 +1186,7 @@ class TradingEngine:
         peak = max(seed, float(current_price))
         self._peak_prices[stock_code] = peak
         # 보유 시작 시각 기록(정체 청산용) — 최초 보유 관측 시점
-        self._held_since.setdefault(stock_code, datetime.now(_KST))
+        self._held_since.setdefault(stock_code, datetime.now(self._tz))
 
         if self._risk.should_stop_loss(float(current_price), avg_price):
             logger.warning(
@@ -1540,7 +1557,7 @@ class TradingEngine:
             self._peak_prices.pop(stock_code, None)
             self._held_since.pop(stock_code, None)
             # 재매수 쿨다운 — 매도 확정 시각 기록(같은 종목 N분 내 재진입 차단)
-            self._last_sell_at[stock_code] = datetime.now(_KST)
+            self._last_sell_at[stock_code] = datetime.now(self._tz)
 
             # 매도 슬리피지 계측 — 실전 한정 당일체결조회로 실체결가 best-effort 조회.
             # 모의는 체결조회가 불가하므로 호출하지 않는다(불필요 API·신뢰불가 회피).
