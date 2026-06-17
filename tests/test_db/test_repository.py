@@ -510,6 +510,38 @@ class TestScreeningResultRepository:
         results = repo.get_by_date(date(2026, 4, 30))
         assert len(results) == 0
 
+    def test_get_by_date_filters_by_market(self, session: Session) -> None:
+        """공유 테이블을 시장별로 격리 조회한다 (US 엔진이 KRX 종목을 읽지 않도록)."""
+        from zoneinfo import ZoneInfo
+        kst = ZoneInfo("Asia/Seoul")
+        et = ZoneInfo("America/New_York")
+        repo = ScreeningResultRepository(session)
+        # KRX 발굴 (KST 06-17 장중)
+        repo.record_screening(
+            stock_code="005930", stock_name="삼성전자",
+            screening_rank=1, volume=5000000, price_change_pct=3.5,
+            screened_at=datetime(2026, 6, 17, 9, 0, tzinfo=kst),
+            cycle_number=1,
+        )
+        # US 발굴 (ET 06-17 장중) — 같은 테이블, 다른 시장
+        repo.record_screening(
+            stock_code="AAPL", stock_name="Apple",
+            screening_rank=1, volume=1000000, price_change_pct=1.2,
+            screened_at=datetime(2026, 6, 17, 10, 0, tzinfo=et),
+            cycle_number=1, market="US",
+        )
+        session.commit()
+
+        # 기본(KRX): 한국 종목만 — 미국 종목 누수 없음
+        krx = repo.get_by_date(date(2026, 6, 17))
+        assert [r.stock_code for r in krx] == ["005930"]
+
+        # US: 미국 종목만 — KRX 종목 누수 없음(버그 회귀 방지)
+        us = repo.get_by_date(
+            date(2026, 6, 17), market="US", tz="America/New_York"
+        )
+        assert [r.stock_code for r in us] == ["AAPL"]
+
 
 class TestSystemMetricRepository:
     """SystemMetricRepository 테스트."""

@@ -892,22 +892,35 @@ class ScreeningResultRepository:
         )
         return list(self._session.execute(stmt).scalars().all())
 
-    def get_by_date(self, target_date: date) -> list[ScreeningResult]:
-        """특정 날짜의 스크리닝 결과를 조회한다.
+    def get_by_date(
+        self,
+        target_date: date,
+        market: str = "KRX",
+        tz: str = "Asia/Seoul",
+    ) -> list[ScreeningResult]:
+        """특정 날짜의 스크리닝 결과를 시장별로 조회한다.
+
+        멀티마켓(KRX/US) 환경에서 ``screening_results``는 공유 테이블이므로,
+        시장(market)으로 반드시 필터링한다 — 미국 엔진이 KRX 발굴 종목을 읽어
+        한국 종목코드를 처리하는 누수를 막는다. 날짜 경계는 시장 타임존(tz)
+        기준으로 잡는다(US는 ET, KRX는 KST). 기본값은 KRX 동작 보존용.
 
         Args:
-            target_date: 조회 날짜
+            target_date: 조회 날짜 (해당 시장 타임존 기준의 날짜)
+            market: 시장 코드 ("KRX" | "US")
+            tz: 날짜 경계 산정용 IANA 타임존
 
         Returns:
-            스크리닝 결과 리스트
+            해당 시장·날짜의 스크리닝 결과 리스트
         """
         from zoneinfo import ZoneInfo
-        kst = ZoneInfo("Asia/Seoul")
-        start = datetime.combine(target_date, datetime.min.time(), tzinfo=kst)
+        zone = ZoneInfo(tz)
+        start = datetime.combine(target_date, datetime.min.time(), tzinfo=zone)
         end = start + timedelta(days=1)
         stmt = (
             select(ScreeningResult)
             .where(
+                ScreeningResult.market == market,
                 ScreeningResult.screened_at >= start,
                 ScreeningResult.screened_at < end,
             )

@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-18] 스크리닝 결과 시장별 격리 — US가 KRX 발굴 종목 읽던 누수 차단 (v0.16.2)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/db/repository.py: ScreeningResultRepository.get_by_date(target_date, market="KRX", tz="Asia/Seoul") — market 필터 + 날짜 경계를 시장 타임존 기준 산정. 기본값 KRX 불변.
+  - src/engine.py: _screen_stocks·_record_screening_match_metric이 self._market의 market_code·timezone 주입.
+  - tests/test_db/test_repository.py: test_get_by_date_filters_by_market(KRX↔US 격리 회귀 1건).
+- 배경: 멀티마켓 공유 screening_results 테이블에서 get_by_date가 시장 필터 없이 당일 전체 행 반환 → US 엔진(MARKET=US)이 KRX ScreeningWorker 발굴 종목(한국 종목코드)을 읽어 "[거래소 미해결] 003280 — 기본 거래소 NASD 사용" 류 경고 양산 + US API 예산 낭비(6/18 logs/autotrader.us.out.log 관측).
+- 영향: US는 US-market 행만 조회(현재 0건 → watchlist_us 폴백). KRX는 market="KRX" 기본값으로 기존 행과 일치 → 동작 불변(byte-invariant). 한국 종목은 US 시세조회/가격하한에서 걸려 오주문은 없었으나(비위험) API 낭비·로그 오염 해소.
+- 검증 결과: pytest 전체 **1196 passed**(신규 1) | mypy strict ✅(변경 2 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작 시 반영. DB/스키마/마이그레이션 불변. KRX(`com.kis.autotrader`)는 영향 없음.
+
+---
+
 ## [2026-06-17] 본전스톱·정체청산 sell_reason enum 매핑 — NULL 기록 정합화 (v0.16.1)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -57,20 +70,5 @@
 - 영향: 매수가능조회로 현금 기준 수량 캡 → rt_cd=7 제거, 재시도·현재가 폭주 차단. 부족 시 주문 미시도 보류(보수적). 정상 매수는 영향 없음(현금 충분 시 캡≥risk_qty라 동일). DB/스키마/config 불변.
 - 검증 결과: pytest 전체 **1075 passed**(신규 5) | mypy strict ✅(96 files) | ruff ✅(변경분).
 - 비고: 멀티소스(v0.13/0.14)와 결합 시 rt_cd=7 없이 후보 확대 효과만 취득. KIS 일일 호출 제한 없음(초당만) — 자가 캡 API_DAILY_CALL_LIMIT 별도 검토. 운영자 액션 — `com.kis.autotrader` 재시작 시 반영.
-
----
-
-## [2026-06-15] 수급 flow_score 스크리너 배선 — 멀티소스 가산 신호 (증분2, default-off) (v0.14.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/config.py: flow_enabled(false)·weight_flow(0.0). weight_flow는 5축 합(=1.0)과 별개의 signed 가산항.
-  - src/strategy/screener.py: score_merged/score_merged_candidate에 flow_score 인자(total += weight_flow×flow_score), ScoredCandidate.flow_score 필드.
-  - src/worker/screener.py: 멀티소스 분석 풀에 한해 get_investor_trend_daily 1콜(일일 캐시)로 flow_score 산출 → score_merged 전달. flow_score가 공매도 미사용이라 short_sale 미조회(예산 절감). flow_enabled=false면 0.0(무동작).
-  - docs/BRIDGE_SPEC.md: SCREENING_WEIGHT_FLOW(0~0.3)·flow 가산항(합 제약 별개)·flow 스위치 명시.
-  - tests/test_strategy/test_screener.py: 신규 2건(flow 부호 가산·default-off 미반영).
-- 배경: v0.12.0 flow_filter shadow(순수 스코어러)의 Phase 3 배선. 구조화 수급(기관·외국인 순매수, FHPTJ04160001)을 스크리너 스코어에 read-only 반영해 smart-money 방향을 후보 랭킹에 보강.
-- 영향: 기관·외국인 순매도 종목 demote 가능(가산 음수→min_score 컷). default-off라 운영자 opt-in 전 무동작. per-stock 예산은 분석풀(≤MAX_ANALYSIS_POOL)·일일 캐시·investor_trend 1콜로 한정. 멀티소스 ON 위에서만 동작.
-- 검증 결과: pytest 전체 **1070 passed**(신규 2) | mypy strict ✅(96 files) | ruff ✅(변경분).
-- 비고: 활성화는 config_overrides로 `SCREENING_FLOW_ENABLED=true` + `SCREENING_WEIGHT_FLOW` 상향(멀티소스도 ON 필요). 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(OFF면 동작 무변경).
 
 ---
