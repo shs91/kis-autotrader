@@ -364,13 +364,20 @@ class PortfolioRepository:
         stmt = select(Portfolio).where(Portfolio.stock_id == stock_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
-    def get_peak_prices(self) -> dict[str, float]:
+    def get_peak_prices(self, market: str | None = None) -> dict[str, float]:
         """보유 포지션의 (종목코드 → peak_price) 맵을 반환한다 (NULL 제외).
 
-        engine.pre_market에서 인메모리 peak dict 시드용.
+        engine.pre_market에서 인메모리 peak dict 시드용. 멀티마켓에서 portfolios는
+        공유 테이블이므로 ``market`` 지정 시 해당 시장 포지션만 반환한다(US 엔진이
+        KRX peak를 자기 dict에 적재하지 않도록). None이면 전 시장(기존 동작).
+
+        Args:
+            market: 시장 코드("KRX"|"US")로 필터. None이면 전 시장.
         """
         result: dict[str, float] = {}
         for p in self.get_all_positions():
+            if market is not None and p.market != market:
+                continue
             if p.peak_price is not None and p.stock is not None:
                 result[p.stock.code] = float(p.peak_price)
         return result
@@ -702,22 +709,30 @@ class TradeRepository:
         )
         return trade
 
-    def get_trades_by_date(self, target_date: date) -> list[Trade]:
+    def get_trades_by_date(
+        self, target_date: date, market: str | None = None
+    ) -> list[Trade]:
         """특정 날짜의 체결 내역을 조회한다.
+
+        멀티마켓(KRX/US)에서 trades는 공유 테이블이므로, 시장별 집계가 필요한
+        호출부(리스크 상태 복구·시장별 캘린더)는 ``market``으로 필터해야 한다.
+        ``market=None``이면 전 시장 합산(기존 동작 보존).
 
         Args:
             target_date: 조회 날짜
+            market: 시장 코드("KRX"|"US")로 필터. None이면 전 시장.
 
         Returns:
             체결 내역 리스트
         """
         start = datetime(target_date.year, target_date.month, target_date.day)
         end = start + timedelta(days=1)
-        stmt = (
-            select(Trade)
-            .where(Trade.traded_at >= start, Trade.traded_at < end)
-            .order_by(Trade.traded_at)
+        stmt = select(Trade).where(
+            Trade.traded_at >= start, Trade.traded_at < end
         )
+        if market is not None:
+            stmt = stmt.where(Trade.market == market)
+        stmt = stmt.order_by(Trade.traded_at)
         return list(self._session.execute(stmt).scalars().all())
 
     def get_trades_by_stock(self, stock_code: str) -> list[Trade]:

@@ -241,6 +241,25 @@ class TestPortfolioRepository:
 
         assert port_repo.get_by_stock(stock.id) is None
 
+    def test_get_peak_prices_filters_by_market(self, session: Session) -> None:
+        """peak_price 시드를 시장별로 격리한다 (US 엔진이 KRX peak를 안 담도록)."""
+        stock_repo = StockRepository(session)
+        s_krx = stock_repo.create("005930", "삼성전자", "KOSPI")
+        s_us = stock_repo.create("AAPL", "Apple", "NASD")
+        session.flush()
+
+        port_repo = PortfolioRepository(session)
+        port_repo.upsert(s_krx.id, 100, 68000.0, 70000.0, peak_price=71000.0)
+        port_repo.upsert(
+            s_us.id, 2, 180.0, 190.0, peak_price=192.0,
+            market="US", currency="USD",
+        )
+        session.commit()
+
+        assert set(port_repo.get_peak_prices().keys()) == {"005930", "AAPL"}
+        assert port_repo.get_peak_prices(market="KRX") == {"005930": 71000.0}
+        assert port_repo.get_peak_prices(market="US") == {"AAPL": 192.0}
+
 
 class TestDailyPerformanceRepository:
     """DailyPerformanceRepository 테스트."""
@@ -356,6 +375,32 @@ class TestTradeRepository:
 
         trades = repo.get_trades_by_date(date(2026, 4, 7))
         assert len(trades) == 2
+
+    def test_get_trades_by_date_filters_by_market(self, session: Session) -> None:
+        """공유 trades를 시장별로 격리 조회한다 (US 리스크복구가 KRX 거래를 안 세도록)."""
+        repo = TradeRepository(session)
+        repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.SELL, quantity=10, price=72000,
+            total_amount=720000, traded_at=datetime(2026, 6, 17, 14, 0),
+            profit_loss_amount=20000,
+        )  # KRX 기본
+        repo.record_trade(
+            stock_code="AAPL", stock_name="Apple",
+            trade_type=TradeType.SELL, quantity=2, price=190,
+            total_amount=380, traded_at=datetime(2026, 6, 17, 20, 0),
+            profit_loss_amount=10, market="US", currency="USD",
+        )
+        session.commit()
+
+        # 전 시장(기존 동작 보존)
+        assert len(repo.get_trades_by_date(date(2026, 6, 17))) == 2
+        # KRX만 — US 거래 누수 없음
+        krx = repo.get_trades_by_date(date(2026, 6, 17), market="KRX")
+        assert [t.stock_code for t in krx] == ["005930"]
+        # US만 — KRX 거래 누수 없음(일일 한도 오염 회귀 방지)
+        us = repo.get_trades_by_date(date(2026, 6, 17), market="US")
+        assert [t.stock_code for t in us] == ["AAPL"]
 
     def test_get_trades_by_stock(self, session: Session) -> None:
         """종목별 체결 내역을 조회한다."""

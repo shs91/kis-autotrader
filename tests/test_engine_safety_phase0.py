@@ -194,3 +194,25 @@ def test_premarket_disables_restart_restore() -> None:
     with patch("src.engine.get_session") as gs:
         engine._restore_risk_state_if_needed()
     gs.assert_not_called()
+
+
+def test_restart_restore_passes_market_filter() -> None:
+    """리스크 복구가 자기 시장으로 trades를 필터한다 (US가 KRX 거래로 일일한도/halt 오염 차단)."""
+    engine = _make_engine()  # KRX 엔진
+    engine._load_peak_prices = MagicMock(return_value={})  # type: ignore[method-assign]
+
+    repo = MagicMock()
+    repo.get_trades_by_date.return_value = []
+
+    @contextmanager
+    def fake_session():
+        yield MagicMock()
+
+    with patch("src.engine.get_session", fake_session), \
+         patch("src.engine.TradeRepository", return_value=repo):
+        engine._restore_risk_state_if_needed()
+
+    # 공유 trades를 엔진 시장(KRX)으로 필터 호출 — 타 시장 체결 재생 차단
+    assert engine._market.market_code == "KRX"
+    _, kwargs = repo.get_trades_by_date.call_args
+    assert kwargs.get("market") == "KRX"
