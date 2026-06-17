@@ -268,10 +268,24 @@ class TradingConfig:
             if ":" in s
         ]
     )
-    # 미국 사이클 매수 예산(USD). P3c-2 functional seed용 deposit 원천. 실예수금 연동은 P4.
+    # 미국 사이클 매수 예산(USD). P3c-2 functional seed용 deposit 원천. 실예수금 연동은 후속.
     # 실제 매수 수량은 브로커 매수가능수량(orderable_qty)으로 캡되어 과대주문 불가.
     us_cash_budget: float = field(
         default_factory=lambda: _env_float("US_CASH_BUDGET", 1000.0)
+    )
+    # 미국 보수 한도(P4) — 야간 무인 실전 진입 안전장치. 미국 엔진은 이 값으로
+    # RiskManager를 생성하고 종목당 진입 1회를 적용한다(KRX는 전역 기본값 불변).
+    us_max_position_ratio: float = field(
+        default_factory=lambda: _env_float("US_MAX_POSITION_RATIO", 0.1)
+    )
+    us_daily_trade_limit: int = field(
+        default_factory=lambda: _env_int("US_DAILY_TRADE_LIMIT", 5)
+    )
+    us_max_loss_rate: float = field(
+        default_factory=lambda: _env_float("US_MAX_LOSS_RATE", 0.03)
+    )
+    us_max_daily_trades_per_stock: int = field(
+        default_factory=lambda: _env_int("US_MAX_DAILY_TRADES_PER_STOCK", 1)
     )
 
     # 장중 매매 사이클 최소 간격(초). 종목 수 기반 산출값과 0종목 폴백 모두 이 하한을 따른다.

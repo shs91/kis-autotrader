@@ -417,6 +417,51 @@ kill $(pgrep -f "python main.py")
 
 ---
 
+### 미국(US) 야간 정규장 배포 + 소액 카나리
+
+국내(KRX, 주간)와 **분리 프로세스**로 미국(US, 야간 ET 정규장)을 운영한다. 같은 코드·공유 PostgreSQL(`market` 컬럼 구분)을 쓰되, `MARKET=US` 환경변수로 프로세스가 미국 프로파일(ET 타임존, 실전, `KIS_US_*` 자격증명, 보수 한도)로 구동된다. 시간대 비중첩(국내 주간 vs 미국 야간)이라 rate limit 충돌이 없다.
+
+> ⚠️ **미국은 처음부터 실전 소액**이다(모의 해외 시세 미지원 회피). 반드시 **킬스위치·보수 한도·소액**으로 시작하고, 운영자가 첫 며칠 야간 모니터링한다.
+
+**1) `.env` 미국 설정** (`.env.example`의 멀티마켓 섹션 참조)
+```bash
+KIS_US_APP_KEY=...        KIS_US_APP_SECRET=...     KIS_US_ACCOUNT_NO=...   # 실전 US 계좌
+WATCHLIST_CODES_US=AAPL:NASD,MSFT:NASD,KO:NYSE                              # 고정 유니버스(거래소 동반)
+US_CASH_BUDGET=1000      # 소액 예산(USD). 실매수량은 브로커 매수가능수량으로 캡
+# 보수 한도는 기본값(포지션 10%·일일 5건·종목당 1회)이 KRX보다 보수적 — 그대로 시작 권장
+```
+
+**2) DB 마이그레이션 적용** (운영자, 코드 배포 후 1회 — market/currency 컬럼 + 가격 Numeric 전환 포함)
+```bash
+.venv/bin/python -m alembic upgrade head    # market/currency 컬럼 + trades 가격 Numeric(18,4)
+```
+
+**3) launchd US 서비스 등록** (`deploy/com.kis.autotrader.us.plist` 템플릿)
+```bash
+cp deploy/com.kis.autotrader.us.plist ~/Library/LaunchAgents/
+# plist 내 경로(/Users/...)를 본인 환경에 맞게 수정 후
+launchctl load ~/Library/LaunchAgents/com.kis.autotrader.us.plist
+launchctl list | grep kis            # com.kis.autotrader(국내) + .us(미국) 공존 확인
+tail -f logs/autotrader.us.out.log   # 미국 프로세스 로그(국내와 분리)
+```
+- `MARKET=US`·`HEALTH_PORT=18924`가 plist에 내장(국내 18923과 분리). 내부 APScheduler가 **ET 정규장(09:30~16:00) 야간 세션**을 자동 제어하므로 상시 가동(KeepAlive)으로 둔다.
+
+**4) watchdog 미국 인스턴스** (`scripts/watchdog.sh`는 `MARKET`로 시장 인지)
+```bash
+# crontab 또는 launchd로 야간(KST 23:00~07:00) 5분 간격 실행:
+MARKET=US /Users/songhansu/IdeaProjects/kis-autotrader/scripts/watchdog.sh
+```
+- US 워치독은 `com.kis.autotrader.us`·포트 18924·`holidays_us.json`·**ET 시간 게이팅**으로 자동 분기(국내 워치독과 상태 파일 분리: `.us` 접미사).
+
+**5) 카나리 운영 체크리스트**
+- 첫 주: `US_CASH_BUDGET` 소액 + 보수 한도 유지, 야간 텔레그램(체결/에러/킬스위치) 모니터링.
+- 비상 정지: `touch .trading_halt` (양 시장 즉시 동결), 재개 `rm .trading_halt`.
+- 공유 Postgres 보호(2026-05-20 락 고갈 사고 재발 방지): 락 경합 시간대(국내 결산↔미국 준비 경계) 주의.
+
+> **비범위(후속)**: 미국 동적 스크리닝(현재 watchlist_us 고정 유니버스), 환율 급변 게이트, 실예수금(present-balance) 연동.
+
+---
+
 ## 환경변수 설정
 
 `.env` 파일에 아래 항목을 설정합니다.
