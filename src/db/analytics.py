@@ -731,12 +731,12 @@ def get_cumulative_pnl(
         .order_by(Trade.traded_at)
     ).scalars().all()
 
-    daily: dict[str, int] = {}
+    daily: dict[str, float] = {}
     for t in sells:
         day_key = t.traded_at.strftime("%Y-%m-%d")
         daily[day_key] = daily.get(day_key, 0) + (t.profit_loss_amount or 0)
 
-    cumulative = 0
+    cumulative = 0.0
     curve = []
     for day_key in sorted(daily):
         cumulative += daily[day_key]
@@ -804,7 +804,7 @@ def get_strategy_comparison(
         )
     ).scalars().all()
 
-    pnl_by_signal: dict[str, list[int]] = {}
+    pnl_by_signal: dict[str, list[float]] = {}
     for t in sells:
         sig = t.signal_type or "UNKNOWN"
         if sig not in pnl_by_signal:
@@ -912,7 +912,7 @@ def get_optimal_risk_params(
 
 def _daily_pnl_series(
     session: Session, start_date: date, end_date: date,
-) -> list[tuple[str, int]]:
+) -> list[tuple[str, float]]:
     """기간 내 일별 실현손익 시계열을 반환한다 (내부 헬퍼)."""
     start = datetime(start_date.year, start_date.month, start_date.day)
     end = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
@@ -927,7 +927,7 @@ def _daily_pnl_series(
         .order_by(Trade.traded_at)
     ).scalars().all()
 
-    daily: dict[str, int] = {}
+    daily: dict[str, float] = {}
     for t in sells:
         day_key = t.traded_at.strftime("%Y-%m-%d")
         daily[day_key] = daily.get(day_key, 0) + (t.profit_loss_amount or 0)
@@ -954,12 +954,12 @@ def get_max_drawdown(
     if not series:
         return {"mdd_pct": 0.0, "mdd_amount": 0, "peak": 0, "trough": 0, "peak_date": None, "trough_date": None}
 
-    cumulative = 0
-    peak = 0
+    cumulative = 0.0
+    peak = 0.0
     peak_date = series[0][0]
-    mdd_amount = 0
-    mdd_peak = 0
-    mdd_trough = 0
+    mdd_amount = 0.0
+    mdd_peak = 0.0
+    mdd_trough = 0.0
     mdd_peak_date = series[0][0]
     mdd_trough_date = series[0][0]
 
