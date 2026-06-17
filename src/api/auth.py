@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
+import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 import httpx
@@ -14,6 +18,25 @@ from src.utils.exceptions import AuthenticationError, TokenExpiredError
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# 토큰 캐시 디렉토리. KIS 토큰은 24시간 유효하고 **1일 1회 발급이 원칙**(잦은 재발급 시
+# 이용 제한)이므로, 프로세스 재시작마다 재발급하지 않도록 디스크에 캐시해 24시간 재사용한다.
+# 앱키별 파일로 분리 → 국내(KIS_)/미국(KIS_US_)이 다른 앱키면 자연 분리, 같은 앱키면 공유
+# (국내·미국 프로세스가 하루 1개 토큰을 공유). 경로는 KIS_TOKEN_CACHE_DIR로 오버라이드 가능.
+
+
+def _token_cache_dir() -> Path:
+    """토큰 캐시 디렉토리(KIS_TOKEN_CACHE_DIR env 우선, 기본 프로젝트 루트 .kis_tokens)."""
+    override = os.getenv("KIS_TOKEN_CACHE_DIR")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / ".kis_tokens"
+
+
+def _token_cache_path(app_key: str) -> Path:
+    """앱키 해시 기반 토큰 캐시 파일 경로(앱키 노출 방지)."""
+    digest = hashlib.sha256(app_key.encode("utf-8")).hexdigest()[:16]
+    return _token_cache_dir() / f"{digest}.json"
 
 
 @dataclass
@@ -44,6 +67,7 @@ class KISAuth:
         self._app_secret = settings.kis.app_secret
         self._base_url = settings.kis.base_url
         self._token_info: TokenInfo | None = None
+        self._cache_path = _token_cache_path(self._app_key)
         self._lock = asyncio.Lock()
 
         logger.info("KISAuth 초기화 완료 (환경: %s)", settings.kis.env)
@@ -61,6 +85,10 @@ class KISAuth:
             TokenExpiredError: 토큰이 만료되어 갱신 불가 시
         """
         async with self._lock:
+            # 디스크 캐시 우선 로드 — 프로세스 재시작 시 유효 토큰을 재사용해 재발급 회피.
+            if self._token_info is None:
+                self._token_info = self._load_from_cache()
+
             if self._token_info is None or self._token_info.should_refresh:
                 await self._issue_token()
 
@@ -75,9 +103,20 @@ class KISAuth:
     async def _issue_token(self) -> None:
         """OAuth 토큰을 발급받는다.
 
+        발급 직전 디스크 캐시를 한 번 더 확인해, 다른 프로세스(동일 앱키)가 방금
+        유효 토큰을 발급·캐시했으면 재사용한다(KIS 1일 1회 발급 원칙 — 중복 발급 회피).
+
         Raises:
             AuthenticationError: 토큰 발급 요청 실패 시
         """
+        cached = self._load_from_cache()
+        if cached is not None and not cached.should_refresh:
+            self._token_info = cached
+            logger.info(
+                "OAuth 토큰 캐시 재사용 (만료: %s)", cached.expires_at.isoformat()
+            )
+            return
+
         url = f"{self._base_url}/oauth2/tokenP"
         body = {
             "grant_type": "client_credentials",
@@ -110,11 +149,43 @@ class KISAuth:
                 access_token=access_token,
                 expires_at=expires_at,
             )
+            self._save_to_cache(self._token_info)
 
             logger.info("OAuth 토큰 발급 성공 (만료: %s)", expires_at.isoformat())
 
         except httpx.HTTPError as e:
             raise AuthenticationError(f"토큰 발급 요청 중 네트워크 에러: {e}") from e
+
+    def _load_from_cache(self) -> TokenInfo | None:
+        """디스크 캐시에서 토큰을 로드한다. 없거나 파싱 불가 시 None."""
+        try:
+            if not self._cache_path.exists():
+                return None
+            data = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            token = data.get("access_token")
+            expires_raw = data.get("expires_at")
+            if not token or not expires_raw:
+                return None
+            expires_at = datetime.datetime.fromisoformat(expires_raw)
+            return TokenInfo(access_token=token, expires_at=expires_at)
+        except Exception:
+            logger.debug("토큰 캐시 로드 실패 — 무시하고 발급 진행")
+            return None
+
+    def _save_to_cache(self, token: TokenInfo) -> None:
+        """토큰을 디스크 캐시에 원자적으로 저장한다(임시파일+rename). 실패해도 무시."""
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps({
+                "access_token": token.access_token,
+                "expires_at": token.expires_at.isoformat(),
+            })
+            tmp = self._cache_path.with_suffix(".json.tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, self._cache_path)  # 원자적 교체
+            os.chmod(self._cache_path, 0o600)  # 토큰 파일 권한 제한
+        except Exception:
+            logger.warning("토큰 캐시 저장 실패 (매매에 영향 없음)")
 
     async def get_hashkey(self, body: dict[str, str | int]) -> str:
         """주문 요청에 필요한 hashkey를 발급받는다.
