@@ -15,6 +15,49 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class MarketHours:
+    """시장별 스케줄 시각 (시, 분). 스케줄러가 **시장 타임존**에서 cron으로 사용한다.
+
+    각 값은 ``(hour, minute)``. US는 ET(America/New_York) 기준이라 KST에서 자정을
+    교차하지만, 스케줄러를 시장 타임존에서 돌리면 같은 날 세션으로 단순해진다.
+    """
+
+    pre_market: tuple[int, int]
+    """장 시작 전 작업(리스크 상태 재구성 등)."""
+    register: tuple[int, int]
+    """당일 장중 매매 사이클 잡 등록(장 시작 직전)."""
+    market_open: tuple[int, int]
+    """장중 매매 사이클 시작."""
+    market_close: tuple[int, int]
+    """장중 매매 사이클 종료(실제 폐장 약간 전)."""
+    post_market: tuple[int, int]
+    """장 마감 후 작업(결산/캘린더/포트폴리오 동기화)."""
+    summary: tuple[int, int]
+    """일일 요약 집계."""
+
+
+# KRX 시각 — jobs.py 기존 상수와 동일(행동 불변). KST 타임존에서 cron.
+_KRX_TRADING_HOURS = MarketHours(
+    pre_market=(8, 30),
+    register=(8, 55),
+    market_open=(9, 0),
+    market_close=(15, 20),
+    post_market=(15, 40),
+    summary=(16, 0),
+)
+
+# US 정규장(ET) — 09:30~16:00. 사이클 종료는 폐장 약간 전(15:50). ET 타임존에서 cron.
+_US_TRADING_HOURS = MarketHours(
+    pre_market=(9, 0),
+    register=(9, 25),
+    market_open=(9, 30),
+    market_close=(15, 50),
+    post_market=(16, 10),
+    summary=(16, 30),
+)
+
+
+@dataclass(frozen=True)
 class MarketProfile:
     """한 시장(KRX/US 등)의 매매에 필요한 메타데이터 묶음."""
 
@@ -45,6 +88,9 @@ class MarketProfile:
     quote_exchange_map: dict[str, str] = field(default_factory=dict)
     """주문 거래소코드(4자리) → 시세 거래소코드(3자리) 매핑. KRX는 빈 dict."""
 
+    trading_hours: MarketHours = field(default_factory=lambda: _KRX_TRADING_HOURS)
+    """시장 타임존 기준 스케줄 시각(시,분). 기본은 KRX 시각."""
+
     @property
     def is_overseas(self) -> bool:
         """해외 시장이면 True (국내 KRX는 False)."""
@@ -61,6 +107,7 @@ KRX_PROFILE = MarketProfile(
     credentials_env_prefix="KIS",
     exchanges=(),
     quote_exchange_map={},
+    trading_hours=_KRX_TRADING_HOURS,
 )
 
 US_PROFILE = MarketProfile(
@@ -73,6 +120,7 @@ US_PROFILE = MarketProfile(
     credentials_env_prefix="KIS_US",
     exchanges=("NASD", "NYSE", "AMEX"),
     quote_exchange_map={"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS"},
+    trading_hours=_US_TRADING_HOURS,
 )
 
 _PROFILES: dict[str, MarketProfile] = {
