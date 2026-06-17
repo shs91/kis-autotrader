@@ -716,3 +716,61 @@ class TestImplementationLogRepository:
         )
         session.commit()
         assert repo.count() == 1
+
+
+class TestMultiMarketColumns:
+    """P3c-4: market/currency payload 배선 — repo 지속성 검증."""
+
+    def test_record_trade_defaults_krx(self, session: Session) -> None:
+        repo = TradeRepository(session)
+        t = repo.record_trade(
+            stock_code="005930", stock_name="삼성전자", trade_type=TradeType.BUY,
+            quantity=1, price=70000, total_amount=70000,
+            traded_at=datetime(2026, 6, 17, 9, 30),
+        )
+        session.commit()
+        assert t.market == "KRX"
+        assert t.currency == "KRW"
+
+    def test_record_trade_us(self, session: Session) -> None:
+        repo = TradeRepository(session)
+        t = repo.record_trade(
+            stock_code="AAPL", stock_name="AAPL", trade_type=TradeType.BUY,
+            quantity=2, price=150.25, total_amount=300.50,
+            traded_at=datetime(2026, 6, 17, 23, 30),
+            market="US", currency="USD",
+        )
+        session.commit()
+        assert t.market == "US"
+        assert t.currency == "USD"
+
+    def test_record_signal_us(self, session: Session) -> None:
+        repo = SignalRepository(session)
+        s = repo.record_signal(
+            stock_code="AAPL", stock_name="AAPL", signal_type="GOLDEN_CROSS",
+            detected_at=datetime(2026, 6, 17, 23, 0), market="US",
+        )
+        session.commit()
+        assert s.market == "US"
+
+    def test_record_screening_us(self, session: Session) -> None:
+        repo = ScreeningResultRepository(session)
+        r = repo.record_screening(
+            stock_code="AAPL", stock_name="AAPL", screening_rank=1,
+            volume=1000, price_change_pct=1.2,
+            screened_at=datetime(2026, 6, 17, 23, 0), market="US",
+        )
+        session.commit()
+        assert r.market == "US"
+
+    def test_portfolio_upsert_us(self, session: Session) -> None:
+        stock_repo = StockRepository(session)
+        stock = stock_repo.create("AAPL", "AAPL", "US")
+        session.flush()
+        port_repo = PortfolioRepository(session)
+        p = port_repo.upsert(
+            stock.id, 3, 150.25, 151.0, market="US", currency="USD"
+        )
+        session.commit()
+        assert p.market == "US"
+        assert p.currency == "USD"

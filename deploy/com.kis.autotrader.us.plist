@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  미국(US) 야간 정규장 자동매매 launchd 서비스 — 국내(com.kis.autotrader)와 공존.
+  설치: 이 파일을 ~/Library/LaunchAgents/com.kis.autotrader.us.plist 로 복사 후
+        경로(/Users/songhansu/...)를 본인 환경에 맞게 수정, launchctl load.
+  특징:
+   - MARKET=US → 엔진/스케줄러가 미국 프로파일(ET 타임존, real, KIS_US_* 자격증명) 구동.
+   - HEALTH_PORT=18924 → 국내(18923)와 분리. watchdog도 MARKET=US로 이 포트 감시.
+   - 별도 로그(autotrader.us.*.log). KeepAlive로 상시 가동, 내부 스케줄러가 ET 야간 세션 제어.
+   - 자격증명(KIS_US_APP_KEY 등)·관심종목(WATCHLIST_CODES_US)은 프로젝트 .env에서 로드.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kis.autotrader.us</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/songhansu/IdeaProjects/kis-autotrader/.venv/bin/python</string>
+        <string>/Users/songhansu/IdeaProjects/kis-autotrader/main.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/songhansu/IdeaProjects/kis-autotrader</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/songhansu/IdeaProjects/kis-autotrader/logs/autotrader.us.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/songhansu/IdeaProjects/kis-autotrader/logs/autotrader.us.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>MARKET</key>
+        <string>US</string>
+        <key>HEALTH_PORT</key>
+        <string>18924</string>
+    </dict>
+</dict>
+</plist>

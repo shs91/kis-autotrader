@@ -15,6 +15,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -183,6 +184,12 @@ class Portfolio(Base):
         Integer, ForeignKey("stocks.id"), unique=True, nullable=False
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default="KRW"
+    )
     avg_price: Mapped[float] = mapped_column(Float, nullable=False)
     current_price: Mapped[float] = mapped_column(Float, nullable=False)
     peak_price: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -252,12 +259,24 @@ class Trade(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stock_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, server_default="KRW"
+    )
     trade_type: Mapped[TradeType] = mapped_column(
         SAEnum(TradeType, name="trade_type_enum"), nullable=False
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    price: Mapped[int] = mapped_column(Integer, nullable=False)
-    total_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 가격/금액은 Numeric(18,4) — 멀티마켓 정밀 저장(KRX 정수 무손실, US 센트).
+    # asdecimal=False로 Python 읽기는 float 유지(기존 집계/JSON 직렬화 호환).
+    price: Mapped[float] = mapped_column(
+        Numeric(18, 4, asdecimal=False), nullable=False
+    )
+    total_amount: Mapped[float] = mapped_column(
+        Numeric(18, 4, asdecimal=False), nullable=False
+    )
     buy_reason: Mapped[BuyReason | None] = mapped_column(
         SAEnum(BuyReason, name="buy_reason_enum"), nullable=True
     )
@@ -266,7 +285,9 @@ class Trade(Base):
     )
     signal_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     profit_loss_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
-    profit_loss_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    profit_loss_amount: Mapped[float | None] = mapped_column(
+        Numeric(18, 4, asdecimal=False), nullable=True
+    )
     cycle_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     traded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -322,6 +343,9 @@ class Signal(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stock_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
     signal_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     signal_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
@@ -350,6 +374,9 @@ class ScreeningResult(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stock_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     stock_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
     screening_rank: Mapped[int] = mapped_column(Integer, nullable=False)
     volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
     price_change_pct: Mapped[float] = mapped_column(Float, nullable=False)

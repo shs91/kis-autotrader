@@ -10,13 +10,34 @@
 set -euo pipefail
 
 PROJECT_DIR="$HOME/IdeaProjects/kis-autotrader"
-LOG_FILE="$PROJECT_DIR/logs/autotrader.out.log"
-WATCHDOG_LOG="$PROJECT_DIR/logs/watchdog.log"
-WATCHDOG_STATE="$PROJECT_DIR/logs/.watchdog_state"
-RESTART_COUNT_FILE="$PROJECT_DIR/logs/.watchdog_restart_count"
-HEAL_LOCK_FILE="$PROJECT_DIR/logs/.auto_heal_today"
-SERVICE_NAME="com.kis.autotrader"
-HEALTH_URL="http://localhost:18923/health"
+
+# ── 시장별 설정 (MARKET=US면 미국 야간, 미설정/KRX면 기존 국내 — 행동 불변) ──
+# 시간 게이팅은 시장 타임존(TZ)으로 수행 → US는 ET 같은 날 세션(KST 자정 교차 회피).
+MARKET="${MARKET:-KRX}"
+if [ "$MARKET" = "US" ]; then
+    SERVICE_NAME="com.kis.autotrader.us"
+    HEALTH_PORT="${HEALTH_PORT:-18924}"
+    HOLIDAYS_FILE="$PROJECT_DIR/holidays_us.json"
+    MARKET_TZ="America/New_York"
+    MARKET_OPEN=$((9 * 60 + 5))    # 09:05 ET (장 시작 후 5분 여유)
+    MARKET_CLOSE=$((15 * 60 + 50)) # 15:50 ET (사이클 종료)
+    SUFFIX=".us"
+else
+    SERVICE_NAME="com.kis.autotrader"
+    HEALTH_PORT="${HEALTH_PORT:-18923}"
+    HOLIDAYS_FILE="$PROJECT_DIR/holidays.json"
+    MARKET_TZ="Asia/Seoul"
+    MARKET_OPEN=$((9 * 60 + 5))    # 09:05 KST
+    MARKET_CLOSE=$((15 * 60 + 20)) # 15:20 KST
+    SUFFIX=""
+fi
+
+LOG_FILE="$PROJECT_DIR/logs/autotrader${SUFFIX}.out.log"
+WATCHDOG_LOG="$PROJECT_DIR/logs/watchdog${SUFFIX}.log"
+WATCHDOG_STATE="$PROJECT_DIR/logs/.watchdog_state${SUFFIX}"
+RESTART_COUNT_FILE="$PROJECT_DIR/logs/.watchdog_restart_count${SUFFIX}"
+HEAL_LOCK_FILE="$PROJECT_DIR/logs/.auto_heal_today${SUFFIX}"
+HEALTH_URL="http://localhost:${HEALTH_PORT}/health"
 STALE_THRESHOLD=300  # 초 (5분)
 RESTART_THRESHOLD=3  # 이 횟수 이상 재시작 시 auto-heal 트리거
 RESTART_WINDOW=1800  # 30분 (초)
@@ -113,16 +134,15 @@ restart_service() {
     fi
 }
 
-# 주말 체크 (토요일=6, 일요일=7)
-DAY_OF_WEEK=$(date +%u)  # 1=월 ~ 7=일
+# 주말 체크 (토요일=6, 일요일=7) — 시장 타임존 기준
+DAY_OF_WEEK=$(TZ="$MARKET_TZ" date +%u)  # 1=월 ~ 7=일
 if [ "$DAY_OF_WEEK" -ge 6 ]; then
     rm -f "$WATCHDOG_STATE" "$RESTART_COUNT_FILE"
     exit 0
 fi
 
-# 공휴일(휴장일) 체크
-TODAY=$(date +%Y-%m-%d)
-HOLIDAYS_FILE="$PROJECT_DIR/holidays.json"
+# 공휴일(휴장일) 체크 — 시장별 휴장일 파일(HOLIDAYS_FILE은 상단에서 시장별 설정)
+TODAY=$(TZ="$MARKET_TZ" date +%Y-%m-%d)
 if [ -f "$HOLIDAYS_FILE" ]; then
     if python3 -c "import json,sys; sys.exit(0 if '$TODAY' in json.load(open('$HOLIDAYS_FILE'))['holidays'] else 1)" 2>/dev/null; then
         rm -f "$WATCHDOG_STATE" "$RESTART_COUNT_FILE"
@@ -130,12 +150,10 @@ if [ -f "$HOLIDAYS_FILE" ]; then
     fi
 fi
 
-# 장중 시간 체크 (09:05~15:25)
-HOUR=$(date +%-H)
-MINUTE=$(date +%-M)
+# 장중 시간 체크 (시장 타임존, MARKET_OPEN/CLOSE는 상단에서 시장별 설정)
+HOUR=$(TZ="$MARKET_TZ" date +%-H)
+MINUTE=$(TZ="$MARKET_TZ" date +%-M)
 CURRENT_MIN=$((HOUR * 60 + MINUTE))
-MARKET_OPEN=$((9 * 60 + 5))   # 09:05 (장 시작 후 5분 여유)
-MARKET_CLOSE=$((15 * 60 + 20)) # 15:20
 
 if [ "$CURRENT_MIN" -lt "$MARKET_OPEN" ] || [ "$CURRENT_MIN" -gt "$MARKET_CLOSE" ]; then
     # 장외 시간 — 상태 파일 초기화 후 종료

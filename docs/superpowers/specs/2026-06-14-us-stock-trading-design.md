@@ -276,3 +276,20 @@ P5  launchd/watchdog 야간 배포 + 소액 카나리(canary)
 5. 마스터파일 클래스주 표기(`BRK.B` vs `BRKB`)와 주문 `SYMB` 입력 규칙 일치.
 6. 해외 순위/시세 API의 초당/TR당 호출 제한이 국내와 다른지(외부 벤더 throttle).
 7. **(실전 소액 채택으로 우선순위↓)** 모의 해외 시세/순위 지원 여부 — 미국은 실전 사용이므로 영향 없음.
+
+---
+
+## 14. P3c 엔진 멀티마켓 설계 (2026-06-17 확정)
+
+> 전제: B안(한 프로세스 한 시장). 협의 확정: **MarketProfile 주입 + 얇은 어댑터 메서드**, **price/total_amount Numeric 전환**.
+
+1. **엔진 팩토리 + 주입**: `TradingEngine.create_for_market(market_code)` — `MarketProfile` + 시장별 provider(국내 `QuoteAPI`/`OrderAPI`/`AccountAPI` 또는 해외 `Overseas*`) 주입. `__init__(..., market_profile=None, quote=None, order=None, account=None)` 기본 None→KRX 기본 생성(기존 `TradingEngine()` 호환). 현재 `__init__`은 라인 104-107에서 국내 API 직접 생성.
+2. **시간대 주입**: `self._tz = ZoneInfo(market_profile.timezone)`. 전역 `_KST`(engine.py:55) 사용처를 `self._tz`로 치환(`datetime.now(_KST)` 약 5곳). KRX는 Asia/Seoul로 동일(행동불변).
+3. **얇은 어댑터 메서드**: `_place_buy(code, qty, price)`/`_place_sell`/`_get_current(code)` 등. **이 메서드 안에서만** `if self._market.is_overseas` 분기(국내 code·int / 해외 symbol+exchange·Decimal). 전략·리스크·사이클 로직은 시장 무관 유지. 주문 시그니처: 국내 `buy(code,qty,price:int)` vs 해외 `buy(symbol,exchange,qty,price:Decimal)`.
+4. **price Numeric**: `trades.price`/`total_amount` → `Numeric(18,4)`(별도 마이그레이션, 운영자 액션). 엔진 저장은 `str(Decimal)` 직렬화. 분석/대시보드의 int 가정 지점 회귀 확인. 엔진 내부 손절/익절 계산은 이미 `float` 변환이라 시장 무관.
+5. **DB payload**: Trade/Signal/Portfolio 적재 payload에 `market=self._market.market_code`, `currency=self._market.currency` + Worker 핸들러(RecordTradeHandler 등) 반영. 현재 Stock 생성은 "KOSPI" 하드코딩(engine.py:2731,2809) → market_code.
+6. **스크리너**: `StockScreener`/`ScreeningWorker`에 `MarketProfile`+provider 주입. 해외는 거래소별 `get_ranking` 반복 → candidate에 `exchange` 자연 동반.
+7. **종목→거래소 resolve**: 스크리너 candidate는 `exchange` 보유(해결됨). 고정 watchlist는 `WATCHLIST_CODES_US="AAPL:NASD,..."` 형식으로 거래소 동반(KIS 종목마스터 다운로드는 후속/비범위).
+8. **main.py/scheduler**: `MARKET` 읽어 엔진/스크리너/스케줄 시장별. 미국 야간 시간대 잡 등록(P4 연계). scheduler 시간 상수(jobs.py:37-44)·`_calculate_trading_interval` 시장별.
+
+**구현 분해(각 독립 plan)**: P3c-1 엔진 생성구조(팩토리+주입+시간대, 행동불변 리팩터) · P3c-2 얇은 어댑터(주문/시세/잔고) · P3c-3 price Numeric 마이그(운영자 액션→별도 PR) · P3c-4 DB payload market/currency · P3c-5 스크리너 시장별 · P3c-6 main.py/scheduler MARKET.

@@ -11,6 +11,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from src.market.profile import active_market_profile
+
 load_dotenv()
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -127,17 +129,31 @@ def _env_float(key: str, default: float = 0.0) -> float:
     return float(_env(key, str(default)))
 
 
+def _market_cred(suffix: str, default: str = "") -> str:
+    """활성 시장의 자격증명 prefix로 환경변수를 읽는다(KRX→KIS_, US→KIS_US_)."""
+    prefix = active_market_profile().credentials_env_prefix
+    return _env(f"{prefix}_{suffix}", default)
+
+
+def _market_env() -> str:
+    """시장별 KIS_ENV. KIS_ENV 명시값 우선, 없으면 활성 시장 기본(KRX=virtual/US=real)."""
+    override = _env("KIS_ENV", "")
+    if override:
+        return override
+    return active_market_profile().kis_env
+
+
 @dataclass(frozen=True)
 class KISConfig:
     """한국투자증권 API 설정."""
 
-    app_key: str = field(default_factory=lambda: _env("KIS_APP_KEY"))
-    app_secret: str = field(default_factory=lambda: _env("KIS_APP_SECRET"))
-    account_no: str = field(default_factory=lambda: _env("KIS_ACCOUNT_NO"))
+    app_key: str = field(default_factory=lambda: _market_cred("APP_KEY"))
+    app_secret: str = field(default_factory=lambda: _market_cred("APP_SECRET"))
+    account_no: str = field(default_factory=lambda: _market_cred("ACCOUNT_NO"))
     account_product_code: str = field(
-        default_factory=lambda: _env("KIS_ACCOUNT_PRODUCT_CODE", "01")
+        default_factory=lambda: _market_cred("ACCOUNT_PRODUCT_CODE", "01")
     )
-    env: str = field(default_factory=lambda: _env("KIS_ENV", "virtual"))
+    env: str = field(default_factory=_market_env)
 
     @property
     def base_url(self) -> str:
@@ -190,7 +206,7 @@ class RateLimitConfig:
     per_second: int = field(
         default_factory=lambda: _env_int(
             "API_RATE_LIMIT_PER_SECOND",
-            20 if _env("KIS_ENV", "virtual") == "real" else 5,
+            20 if _market_env() == "real" else 5,
         )
     )
     daily_limit: int = field(
@@ -242,6 +258,34 @@ class TradingConfig:
             for c in _env("WATCHLIST_CODES", "005930,000660,035420").split(",")
             if c.strip()
         ]
+    )
+    # 미국 관심종목: "AAPL:NASD,MSFT:NASD" 형식(symbol:OVRS_EXCG_CD). 거래소 동반.
+    # 멀티마켓(P3c-2) US 엔진은 이 목록의 심볼을 watchlist로, 거래소를 _exchanges에 시드한다.
+    watchlist_us: list[tuple[str, str]] = field(
+        default_factory=lambda: [
+            (s.split(":")[0].strip(), s.split(":")[1].strip())
+            for s in _env("WATCHLIST_CODES_US", "").split(",")
+            if ":" in s
+        ]
+    )
+    # 미국 사이클 매수 예산(USD). P3c-2 functional seed용 deposit 원천. 실예수금 연동은 후속.
+    # 실제 매수 수량은 브로커 매수가능수량(orderable_qty)으로 캡되어 과대주문 불가.
+    us_cash_budget: float = field(
+        default_factory=lambda: _env_float("US_CASH_BUDGET", 1000.0)
+    )
+    # 미국 보수 한도(P4) — 야간 무인 실전 진입 안전장치. 미국 엔진은 이 값으로
+    # RiskManager를 생성하고 종목당 진입 1회를 적용한다(KRX는 전역 기본값 불변).
+    us_max_position_ratio: float = field(
+        default_factory=lambda: _env_float("US_MAX_POSITION_RATIO", 0.1)
+    )
+    us_daily_trade_limit: int = field(
+        default_factory=lambda: _env_int("US_DAILY_TRADE_LIMIT", 5)
+    )
+    us_max_loss_rate: float = field(
+        default_factory=lambda: _env_float("US_MAX_LOSS_RATE", 0.03)
+    )
+    us_max_daily_trades_per_stock: int = field(
+        default_factory=lambda: _env_int("US_MAX_DAILY_TRADES_PER_STOCK", 1)
     )
 
     # 장중 매매 사이클 최소 간격(초). 종목 수 기반 산출값과 0종목 폴백 모두 이 하한을 따른다.
@@ -409,6 +453,10 @@ class ScreeningConfig:
     # 사전 필터
     min_price: int = field(
         default_factory=lambda: _env_int("SCREENING_MIN_PRICE", 1000)
+    )
+    # 미국 매수 하드 가격 플로어(USD). 국내 min_price(KRW)는 통화 단위 불일치라 별도.
+    min_price_us: float = field(
+        default_factory=lambda: _env_float("SCREENING_MIN_PRICE_US", 1.0)
     )
     max_price: int = field(
         default_factory=lambda: _env_int("SCREENING_MAX_PRICE", 500000)

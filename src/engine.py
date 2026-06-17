@@ -7,15 +7,26 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from src.api.account import AccountAPI, Balance, Execution
+from src.api.account import AccountAPI, Balance, Execution, StockHolding
 from src.api.client import KISClient
-from src.api.order import OrderAPI
-from src.api.quote import CurrentPrice, QuoteAPI, VolumeRankItem
+from src.api.order import OrderAPI, OrderResult
+from src.api.overseas_account import OverseasAccountAPI
+from src.api.overseas_order import OverseasOrderAPI
+from src.api.overseas_quote import OverseasQuoteAPI
+from src.api.protocols import (
+    OrderProvider,
+    OverseasAccountProvider,
+    OverseasOrderProvider,
+    OverseasQuoteProvider,
+    QuoteProvider,
+)
+from src.api.quote import QuoteAPI, VolumeRankItem
 from src.calendar.event import CalendarEventCreator
 from src.calendar.google_auth import GoogleCalendarAuth
 from src.config import settings
@@ -35,6 +46,7 @@ from src.db.repository import (
     WatchlistRepository,
 )
 from src.db.session import db_healthcheck, get_session
+from src.market.profile import KRX_PROFILE, MarketProfile, get_market_profile
 from src.notify.telegram import TelegramNotifier
 from src.strategy.base import BaseStrategy, Signal, SignalType
 from src.strategy.disclosure_risk import match_critical_disclosure
@@ -51,8 +63,6 @@ logger = setup_logger(__name__)
 # 잔고 조회 캐시 유효 시간(초) — 매 사이클 잔고 조회도 줄임
 BALANCE_CACHE_TTL: float = 60.0
 
-# 거래일 경계 판단용(장중 재시작 시 '오늘' 체결 복원에 사용)
-_KST = ZoneInfo("Asia/Seoul")
 
 # 공시 기반 매수 차단 키워드·매처는 src.strategy.disclosure_risk로 단일화했다
 # (스크리닝 Worker의 후보 사전 배제와 동일 로직 공유 — 드리프트 방지).
@@ -77,9 +87,28 @@ class PendingOrder:
     stock_name: str = ""
     # 고아 체결 회수용 — 취소 직전 잔고 재확인으로 지연 체결을 잡아 DB에 기록한다.
     qty_before: int = 0
-    price: int = 0
+    price: float = 0.0
     avg_price: float | None = None
     signal_type: str | None = None
+    # 해외 취소용 거래소코드(OVRS_EXCG_CD). KRX는 빈 문자열(미사용).
+    exchange: str = ""
+
+
+@dataclass
+class _Quote:
+    """어댑터 정규화 현재가 — 시장 무관 float 가격(엔진 내부 DTO)."""
+
+    stock_code: str
+    stock_name: str
+    current_price: float
+
+
+@dataclass
+class _Bar:
+    """어댑터 정규화 일봉 한 건 — 종가 float(엔진 내부 DTO)."""
+
+    date: str
+    close: float
 
 
 class TradingEngine:
@@ -93,6 +122,14 @@ class TradingEngine:
         watchlist: list[str] | None = None,
         strategy: BaseStrategy | None = None,
         selector: StrategySelector | None = None,
+        *,
+        market_profile: MarketProfile | None = None,
+        quote: QuoteProvider | None = None,
+        order: OrderProvider | None = None,
+        account: AccountAPI | None = None,
+        overseas_quote: OverseasQuoteProvider | None = None,
+        overseas_order: OverseasOrderProvider | None = None,
+        overseas_account: OverseasAccountProvider | None = None,
     ) -> None:
         """매매 엔진을 초기화한다.
 
@@ -101,10 +138,29 @@ class TradingEngine:
             strategy: 매매 전략 (단일 전략 모드, 하위 호환용)
             selector: 전략 셀렉터 (다중 전략 모드)
         """
+        self._market = market_profile or KRX_PROFILE
+        self._tz = ZoneInfo(self._market.timezone)
         self._client = KISClient()
-        self._quote = QuoteAPI(client=self._client)
-        self._order = OrderAPI(client=self._client)
-        self._account = AccountAPI(client=self._client)
+        self._quote: QuoteProvider = quote or QuoteAPI(client=self._client)
+        self._order: OrderProvider = order or OrderAPI(client=self._client)
+        self._account: AccountAPI = account or AccountAPI(client=self._client)
+
+        # 해외(US) provider — 국내와 시그니처(symbol/exchange·Decimal)가 달라 별도 보유.
+        # 어댑터(_get_current/_place_buy 등) 안에서만 is_overseas로 분기한다.
+        self._overseas_quote: OverseasQuoteProvider | None = overseas_quote
+        self._overseas_order: OverseasOrderProvider | None = overseas_order
+        self._overseas_account: OverseasAccountProvider | None = overseas_account
+        if self._market.is_overseas:
+            self._overseas_quote = overseas_quote or OverseasQuoteAPI(client=self._client)
+            self._overseas_order = overseas_order or OverseasOrderAPI(client=self._client)
+            self._overseas_account = (
+                overseas_account or OverseasAccountAPI(client=self._client)
+            )
+        # 종목코드 → 주문 거래소코드(OVRS_EXCG_CD, 4자리) 매핑. KRX는 빈 dict(no-op).
+        # US watchlist 파싱으로 시드하고, 잔고 정규화 시 보유종목 거래소를 추가 시드한다.
+        self._exchanges: dict[str, str] = {}
+        if self._market.is_overseas:
+            self._exchanges = dict(settings.trading.watchlist_us)
 
         # 전략 셀렉터 초기화: selector > strategy > 설정 파일
         if selector is not None:
@@ -117,13 +173,32 @@ class TradingEngine:
             registry = StrategyRegistry.create_default()
             self._selector = StrategySelector.from_config(registry)
 
-        self._risk = RiskManager()
+        # 미국은 야간 무인 실전 보수 한도(P4)로 RiskManager 생성. KRX는 전역 기본값(불변).
+        if self._market.is_overseas:
+            _t = settings.trading
+            self._risk = RiskManager(
+                max_position_ratio=_t.us_max_position_ratio,
+                daily_trade_limit=_t.us_daily_trade_limit,
+                max_loss_rate=_t.us_max_loss_rate,
+            )
+            self._max_daily_trades_per_stock = _t.us_max_daily_trades_per_stock
+        else:
+            self._risk = RiskManager()
+            self._max_daily_trades_per_stock = (
+                settings.trading.max_daily_trades_per_stock
+            )
         self._notifier = TelegramNotifier()
         self._screener = StockScreener()
         self._task_queue = TaskQueueService()
 
-        # 관심종목: 직접 지정 시 고정, 미지정 시 DB에서 매 사이클 조회
-        self._fixed_watchlist: list[str] | None = watchlist
+        # 관심종목: 직접 지정 시 고정, 미지정 시 DB에서 매 사이클 조회.
+        # US는 미지정 시 watchlist_us 심볼로 고정(DB watchlist 배선은 P3c-6).
+        if watchlist is None and self._market.is_overseas:
+            self._fixed_watchlist: list[str] | None = [
+                sym for sym, _ in settings.trading.watchlist_us
+            ]
+        else:
+            self._fixed_watchlist = watchlist
         # 스크리닝으로 발굴된 동적 종목
         self._screened_codes: set[str] = set()
 
@@ -174,6 +249,182 @@ class TradingEngine:
             "매매 엔진 초기화: 기본전략=%s, 관심종목모드=%s",
             self._selector.default_strategy_name,
             "고정" if self._fixed_watchlist else "DB",
+        )
+
+    @classmethod
+    def create_for_market(cls, market_code: str = "KRX") -> TradingEngine:
+        """MARKET 코드로 시장별 엔진을 생성한다.
+
+        P3c-2 완료: ``__init__``이 ``is_overseas``를 보고 해외 provider를 생성하며,
+        어댑터(_get_current/_get_balance/_place_buy 등)가 시장별로 구동한다.
+        """
+        profile = get_market_profile(market_code)
+        return cls(market_profile=profile)
+
+    # ── 거래소 resolve / 가격 포맷·정규화 헬퍼 ─────────────────
+
+    def _exchange_of(self, code: str) -> str:
+        """종목의 주문 거래소코드(OVRS_EXCG_CD, 4자리)를 반환한다. KRX는 빈 문자열."""
+        if not self._market.is_overseas:
+            return ""
+        exc = self._exchanges.get(code)
+        if exc:
+            return exc
+        default = self._market.exchanges[0] if self._market.exchanges else ""
+        logger.warning("[거래소 미해결] %s — 기본 거래소 %s 사용", code, default)
+        return default
+
+    def _quote_excd(self, code: str) -> str:
+        """시세 조회용 거래소코드(EXCD, 3자리)를 반환한다(OVRS_EXCG_CD→EXCD 변환)."""
+        exc = self._exchange_of(code)
+        return self._market.quote_exchange_map.get(exc, exc)
+
+    def _board_label(self, krx_default: str) -> str:
+        """stocks.market(보드 구분) 값. KRX는 기존 리터럴 유지(market_stats의
+        KOSPI/KOSDAQ 필터 호환), US는 시장코드(US 종목이 KRX 통계에 혼입 방지).
+        """
+        return krx_default if not self._market.is_overseas else self._market.market_code
+
+    def _fmt_price(self, value: float) -> str:
+        """가격 로그 포맷. 정수값은 천단위(소수점 없음), 소수는 2자리.
+
+        KRX 가격은 항상 정수값(float)이라 기존 ``f"{int:,}"``와 바이트 동일.
+        """
+        return f"{int(value):,}" if float(value).is_integer() else f"{value:,.2f}"
+
+    def _norm_price(self, value: float) -> float:
+        """DB/체결가 경계 가격 정규화. KRX(precision 0)는 int, US는 round(HALF_UP).
+
+        KRX는 int 반환으로 기존 저장/포맷 바이트 불변. US는 센트 보존.
+        """
+        if self._market.price_precision == 0:
+            return int(value)
+        quantum = Decimal(1).scaleb(-self._market.price_precision)
+        return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP))
+
+    def _order_price(self, value: float) -> Decimal:
+        """주문 단가(지정가) Decimal. price_precision 자리로 HALF_UP 양자화."""
+        quantum = Decimal(1).scaleb(-self._market.price_precision)
+        return Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+
+    # ── 시세/주문/잔고 어댑터 (is_overseas 분기 집약) ──────────
+
+    @property
+    def _ovs_quote(self) -> OverseasQuoteProvider:
+        """해외 시세 provider(US 엔진 한정). 미설정이면 명시적 오류."""
+        if self._overseas_quote is None:
+            raise RuntimeError("해외 시세 provider 미설정 (US 엔진 아님)")
+        return self._overseas_quote
+
+    @property
+    def _ovs_order(self) -> OverseasOrderProvider:
+        """해외 주문 provider(US 엔진 한정)."""
+        if self._overseas_order is None:
+            raise RuntimeError("해외 주문 provider 미설정 (US 엔진 아님)")
+        return self._overseas_order
+
+    @property
+    def _ovs_account(self) -> OverseasAccountProvider:
+        """해외 잔고 provider(US 엔진 한정)."""
+        if self._overseas_account is None:
+            raise RuntimeError("해외 잔고 provider 미설정 (US 엔진 아님)")
+        return self._overseas_account
+
+    async def _get_current(self, code: str) -> _Quote:
+        """현재가를 시장 무관 _Quote(float)로 조회한다."""
+        if self._market.is_overseas:
+            oc = await self._ovs_quote.get_current_price(code, self._quote_excd(code))
+            return _Quote(code, code, float(oc.last))
+        cp = await self._quote.get_current_price(code)
+        return _Quote(cp.stock_code, cp.stock_name, float(cp.current_price))
+
+    async def _fetch_daily(self, code: str) -> list[_Bar]:
+        """일봉을 시장 무관 _Bar(float 종가, 최신→과거) 리스트로 조회한다."""
+        if self._market.is_overseas:
+            rows = await self._ovs_quote.get_daily_price(code, self._quote_excd(code))
+            return [_Bar(r.date, float(r.close)) for r in rows]
+        items = await self._quote.get_daily_price(code)
+        return [_Bar(it.date, float(it.close_price)) for it in items]
+
+    async def _fetch_overseas_balance(self) -> Balance:
+        """해외 거래소별 잔고를 합산해 국내 Balance 형태로 정규화한다.
+
+        deposit은 us_cash_budget(설정 예산)로 둔다(실예수금 연동은 P4). 실제 주문
+        수량은 _get_buyable_qty(브로커 orderable_qty)가 캡한다. total_*는 0(결산은
+        KRX 주간 프로세스 소관). 보유종목 거래소는 self._exchanges에 시드한다.
+        동일 symbol 중복(복수 거래소 응답)은 last-wins로 합쳐 이중계산을 막는다.
+        """
+        by_symbol: dict[str, StockHolding] = {}
+        for exch in self._market.exchanges:
+            ob = await self._ovs_account.get_balance(exch, self._market.currency)
+            for oh in ob.holdings:
+                self._exchanges[oh.symbol] = oh.exchange or exch
+                by_symbol[oh.symbol] = StockHolding(
+                    stock_code=oh.symbol,
+                    stock_name=oh.symbol,
+                    quantity=oh.quantity,
+                    avg_price=float(oh.avg_price),
+                    current_price=int(round(oh.current_price)),
+                    eval_amount=int(round(oh.eval_amount)),
+                    profit_loss=int(round(oh.profit_loss)),
+                    profit_rate=oh.profit_rate,
+                )
+        return Balance(
+            deposit=int(settings.trading.us_cash_budget),
+            total_eval_amount=0,
+            total_profit_loss=0,
+            total_profit_rate=0.0,
+            holdings=list(by_symbol.values()),
+            raw_response={},
+        )
+
+    async def _get_executions(self) -> list[Execution]:
+        """당일 체결 내역. 해외는 미지원 → 빈 리스트(결산/슬리피지 no-op)."""
+        if self._market.is_overseas:
+            return []
+        return await self._account.get_executions()
+
+    async def _place_buy(
+        self, code: str, quantity: int, ref_price: float
+    ) -> OrderResult:
+        """매수 발행. KRX 시장가(수량만), US 지정가(ref_price 한도, ORD_DVSN '00')."""
+        if self._market.is_overseas:
+            return await self._ovs_order.buy(
+                symbol=code,
+                exchange=self._exchange_of(code),
+                quantity=quantity,
+                price=self._order_price(ref_price),
+                order_type="00",
+            )
+        return await self._order.buy(stock_code=code, quantity=quantity)
+
+    async def _place_sell(
+        self, code: str, quantity: int, ref_price: float
+    ) -> OrderResult:
+        """매도 발행. KRX 시장가(수량만), US 지정가(ref_price 한도)."""
+        if self._market.is_overseas:
+            return await self._ovs_order.sell(
+                symbol=code,
+                exchange=self._exchange_of(code),
+                quantity=quantity,
+                price=self._order_price(ref_price),
+                order_type="00",
+            )
+        return await self._order.sell(stock_code=code, quantity=quantity)
+
+    async def _cancel_order(
+        self, code: str, order_no: str, quantity: int
+    ) -> OrderResult:
+        """미체결 취소. KRX (order_no,stock_code,qty), US (order_no,symbol,exchange,qty)."""
+        if self._market.is_overseas:
+            return await self._ovs_order.cancel(
+                order_no=order_no,
+                symbol=code,
+                exchange=self._exchange_of(code),
+                quantity=quantity,
+            )
+        return await self._order.cancel(
+            order_no=order_no, stock_code=code, quantity=quantity
         )
 
     def _get_watchlist_codes(self) -> list[str]:
@@ -241,8 +492,8 @@ class TradingEngine:
         if cached is not None and cached[0] == today_str:
             return cached[1]
 
-        # API 호출
-        daily_prices = await self._quote.get_daily_price(stock_code)
+        # API 호출 (어댑터: KRX 일봉 / US 해외 일봉 — close float 정규화)
+        daily_prices = await self._fetch_daily(stock_code)
         min_daily_count = settings.strategy.ma_long_period + 2
         if len(daily_prices) < min_daily_count:
             logger.info("[%s] 일봉 데이터 부족 (%d건), 스킵", stock_code, len(daily_prices))
@@ -256,7 +507,7 @@ class TradingEngine:
 
         df = pd.DataFrame(
             [
-                {"close": item.close_price, "date": item.date}
+                {"close": item.close, "date": item.date}
                 for item in reversed(daily_prices)
             ]
         )
@@ -293,7 +544,10 @@ class TradingEngine:
             if now - cached_time < BALANCE_CACHE_TTL:
                 return cached_balance
 
-        balance = await self._account.get_balance()
+        if self._market.is_overseas:
+            balance = await self._fetch_overseas_balance()
+        else:
+            balance = await self._account.get_balance()
         self._balance_cache = (now, balance)
         return balance
 
@@ -306,8 +560,14 @@ class TradingEngine:
 
         deposit(예수금총액)이 아닌 실제 주문가능 현금 기준 수량. 시장가 매수와
         동일 ORD_DVSN(01)로 조회한다. 조회 실패 시 None(호출부는 보수적으로 보류).
+        US는 통합증거금 매수가능금액(orderable_qty)을 반환한다.
         """
         try:
+            if self._market.is_overseas:
+                ob = await self._ovs_account.get_buyable_amount(
+                    stock_code, self._exchange_of(stock_code), self._order_price(price)
+                )
+                return ob.orderable_qty
             buyable = await self._account.get_buyable(stock_code, int(price))
             return buyable.nrcvb_buy_qty
         except Exception:
@@ -319,7 +579,7 @@ class TradingEngine:
         since = self._held_since.get(stock_code)
         if since is None:
             return 0.0
-        return (datetime.now(_KST) - since).total_seconds() / 60.0
+        return (datetime.now(self._tz) - since).total_seconds() / 60.0
 
     async def _set_daily_limit_reached(self) -> None:
         """일일 한도 초과 상태를 설정하고 알림을 전송한다."""
@@ -360,7 +620,7 @@ class TradingEngine:
         # 성공/실패와 무관하게 1회만 시도(매 사이클 DB 조회·재구성 반복 방지).
         self._risk_state_restored = True
         try:
-            today = datetime.now(_KST).date()
+            today = datetime.now(self._tz).date()
             with get_session() as session:
                 trades = TradeRepository(session).get_trades_by_date(today)
             sells = [
@@ -659,7 +919,7 @@ class TradingEngine:
             # 반환해 KIS executions를 그대로 신뢰할 수 없다. 모든 장 마감 집계는
             # DB trades 테이블을 기준으로 계산한다. KIS executions는 부가 로깅
             # 용도로만 사용.
-            kis_executions = await self._account.get_executions()
+            kis_executions = await self._get_executions()
             today = date.today()
             trades = self._load_today_trades(today)
 
@@ -851,8 +1111,8 @@ class TradingEngine:
                 })
             return
 
-        # 2. 현재가 조회 (실시간)
-        current = await self._quote.get_current_price(stock_code)
+        # 2. 현재가 조회 (실시간, 어댑터: KRX int / US Decimal→float)
+        current = await self._get_current(stock_code)
 
         # 2-1. 종목명 해결: API 응답 → DB 조회 → 코드 fallback
         self._resolve_current_stock_name(current, stock_code)
@@ -868,7 +1128,7 @@ class TradingEngine:
             "Y" if is_held else "N",
             signal.signal_type.value,
             signal.confidence,
-            f"{current.current_price:,}",
+            self._fmt_price(current.current_price),
         )
 
         # 3-0. 단기 신호 반전 관측 (순수 관측 — 매매 동작 불변)
@@ -949,7 +1209,7 @@ class TradingEngine:
         # BUY 시그널 — 종목별 당일 진입 횟수 제한 (proposal 2026-05-23)
         # 동일 종목 동일 거래일 N회 이상 진입을 차단. 매도(청산)는 제한하지 않는다.
         buys_today = self._today_buys_per_stock.get(stock_code, 0)
-        if buys_today >= settings.trading.max_daily_trades_per_stock:
+        if buys_today >= self._max_daily_trades_per_stock:
             skip_reason = "daily_trade_limit_per_stock"
             self._record_buy_reject(
                 stock_code=stock_code,
@@ -957,7 +1217,7 @@ class TradingEngine:
                 confidence=signal.confidence,
                 context={
                     "buys_today": buys_today,
-                    "limit": settings.trading.max_daily_trades_per_stock,
+                    "limit": self._max_daily_trades_per_stock,
                 },
             )
             self._record_signal_to_db(
@@ -971,7 +1231,7 @@ class TradingEngine:
         cooldown_min = settings.trading.buy_cooldown_after_sell_min
         last_sell = self._last_sell_at.get(stock_code)
         if cooldown_min > 0 and last_sell is not None:
-            elapsed_min = (datetime.now(_KST) - last_sell).total_seconds() / 60.0
+            elapsed_min = (datetime.now(self._tz) - last_sell).total_seconds() / 60.0
             if elapsed_min < cooldown_min:
                 skip_reason = "rebuy_cooldown"
                 self._record_buy_reject(
@@ -1065,10 +1325,12 @@ class TradingEngine:
             signal=signal, strategy_name=strategy.name,
         )
 
-    def _resolve_current_stock_name(self, current: CurrentPrice, stock_code: str) -> str:
+    def _resolve_current_stock_name(self, current: _Quote, stock_code: str) -> str:
         """현재가 응답의 종목명을 해결한다: API 응답 → DB 조회 → 코드 fallback.
 
-        해결한 이름을 ``current.stock_name``에 반영하고 동일 값을 반환한다.
+        해결한 이름을 ``current.stock_name``에 쓰고(mutate) 동일 값을 반환한다.
+        ``_Quote``는 비frozen이며 어댑터가 호출마다 새 인스턴스를 만든다. US는
+        stock_name=code로 시작하므로 항상 DB resolve 경로를 탄다.
 
         Args:
             current: 현재가 정보 (stock_name이 보정됨)
@@ -1104,7 +1366,7 @@ class TradingEngine:
             stock_code: 종목코드
             holding: 보유 정보 (avg_price, quantity)
         """
-        current = await self._quote.get_current_price(stock_code)
+        current = await self._get_current(stock_code)
         stock_name = self._resolve_current_stock_name(current, stock_code)
 
         self._record_metric("RISK_ONLY_EVAL", {
@@ -1115,7 +1377,8 @@ class TradingEngine:
         })
         logger.info(
             "[%s %s] 일봉 없음 — 현재가 기준 손절/익절만 평가 (현재가=%s, 매입가=%.0f)",
-            stock_code, stock_name, f"{current.current_price:,}", holding["avg_price"],
+            stock_code, stock_name, self._fmt_price(current.current_price),
+            holding["avg_price"],
         )
 
         # HOLD 시그널을 넘겨 전략 매도 분기는 건너뛰고 손절/익절만 평가
@@ -1128,7 +1391,7 @@ class TradingEngine:
     async def _process_held_stock(
         self,
         stock_code: str,
-        current_price: int,
+        current_price: float,
         holding: dict[str, float],
         signal: Signal,
         stock_name: str = "",
@@ -1150,7 +1413,7 @@ class TradingEngine:
         # 통째로 스킵하고 다음 사이클에서 정상 시세로 재평가한다.
         if current_price <= 0:
             logger.warning(
-                "[%s] 비정상 시세(현재가 %s) — 매도 평가 스킵 (매입가 %.0f)",
+                "[%s] 비정상 시세(현재가 %d) — 매도 평가 스킵 (매입가 %.0f)",
                 stock_code, current_price, holding["avg_price"],
             )
             self._record_metric("INVALID_PRICE_SKIP", {
@@ -1169,7 +1432,7 @@ class TradingEngine:
         peak = max(seed, float(current_price))
         self._peak_prices[stock_code] = peak
         # 보유 시작 시각 기록(정체 청산용) — 최초 보유 관측 시점
-        self._held_since.setdefault(stock_code, datetime.now(_KST))
+        self._held_since.setdefault(stock_code, datetime.now(self._tz))
 
         if self._risk.should_stop_loss(float(current_price), avg_price):
             logger.warning(
@@ -1268,7 +1531,7 @@ class TradingEngine:
         return "매매불가" in text
 
     async def _execute_buy(
-        self, stock_code: str, stock_name: str, quantity: int, price: int,
+        self, stock_code: str, stock_name: str, quantity: int, price: float,
         signal: Signal | None = None, strategy_name: str = "",
     ) -> None:
         """매수 주문을 실행하고 DB에 기록한다."""
@@ -1281,10 +1544,15 @@ class TradingEngine:
         # 하드 가격 안전 플로어 — KIS 종목마스터(market_actions)가 정리매매/관리 지정을
         # 놓쳐도, 페니/정리매매성 종목(현재가 < 스크리닝 최저가)은 실시간 가격으로 매수를
         # 차단한다. (2026-06-01: 5원 정리매매 종목이 모든 필터를 우회해 모니터링되던 사례 대응)
-        min_price = settings.screening.min_price
+        # US는 통화 단위가 달라 min_price_us(USD)를 적용한다.
+        min_price: float = (
+            settings.screening.min_price_us
+            if self._market.is_overseas
+            else settings.screening.min_price
+        )
         if price <= 0 or price < min_price:
             logger.warning(
-                "[매수 차단] %s(%s) — 가격 하한 미달(현재가=%s원 < %s원)",
+                "[매수 차단] %s(%s) — 가격 하한 미달(현재가=%d원 < %s원)",
                 stock_name, stock_code, price, min_price,
             )
             self._record_buy_outcome(stock_code, "BLOCK_PRICE_FLOOR")
@@ -1343,7 +1611,7 @@ class TradingEngine:
             qty_before = 0
 
         try:
-            result = await self._order.buy(stock_code=stock_code, quantity=quantity)
+            result = await self._place_buy(stock_code, quantity, price)
         except OrderError as exc:
             if self._is_untradable_order_error(exc):
                 # 당일 블랙리스트 등록 — 같은 거래일 동안 재진입 시도 차단
@@ -1392,14 +1660,15 @@ class TradingEngine:
                 self._pending_orders[stock_code] = PendingOrder(
                     order_no=result.order_no, side="BUY", quantity=quantity,
                     placed_cycle=self._cycle_count, stock_name=stock_name,
-                    qty_before=qty_before, price=int(price),
+                    qty_before=qty_before, price=self._norm_price(price),
+                    exchange=self._exchange_of(stock_code),
                 )
                 return
 
             # 체결 확정 — 체결 수량(잔고 증가분) + 현재가(0가드 적용)로 기록·알림.
             # 모의투자는 체결가 정밀조회가 불가하므로 현재가를 체결가로 근사한다.
             fill_qty = filled
-            fill_price = int(price)
+            fill_price = self._norm_price(price)
             self._today_trade_count += 1
             # 종목별 당일 진입 횟수 누적 (다음 사이클 이후 동일 종목 재진입 차단용)
             self._today_buys_per_stock[stock_code] = (
@@ -1452,7 +1721,7 @@ class TradingEngine:
         self,
         stock_code: str,
         quantity: int,
-        price: int,
+        price: float,
         reason: str = "",
         avg_price: float | None = None,
         signal_type: str | None = None,
@@ -1482,7 +1751,7 @@ class TradingEngine:
             qty_before = quantity
 
         try:
-            result = await self._order.sell(stock_code=stock_code, quantity=quantity)
+            result = await self._place_sell(stock_code, quantity, price)
         except Exception:
             logger.exception("[매도 주문 실패] %s", stock_code)
             return
@@ -1512,14 +1781,15 @@ class TradingEngine:
                 self._pending_orders[stock_code] = PendingOrder(
                     order_no=result.order_no, side="SELL", quantity=quantity,
                     placed_cycle=self._cycle_count, stock_name=stock_name,
-                    qty_before=qty_before, price=int(price),
+                    qty_before=qty_before, price=self._norm_price(price),
+                    exchange=self._exchange_of(stock_code),
                     avg_price=avg_price, signal_type=signal_type,
                 )
                 return
 
             # 체결 확정 — 체결 수량(잔고 감소분) + 현재가(0가드 적용)로 기록·알림.
             fill_qty = filled
-            fill_price = int(price)
+            fill_price = self._norm_price(price)
             self._today_trade_count += 1
             # 체결 완료 — 미체결 추적 해제
             self._pending_orders.pop(stock_code, None)
@@ -1540,7 +1810,7 @@ class TradingEngine:
             self._peak_prices.pop(stock_code, None)
             self._held_since.pop(stock_code, None)
             # 재매수 쿨다운 — 매도 확정 시각 기록(같은 종목 N분 내 재진입 차단)
-            self._last_sell_at[stock_code] = datetime.now(_KST)
+            self._last_sell_at[stock_code] = datetime.now(self._tz)
 
             # 매도 슬리피지 계측 — 실전 한정 당일체결조회로 실체결가 best-effort 조회.
             # 모의는 체결조회가 불가하므로 호출하지 않는다(불필요 API·신뢰불가 회피).
@@ -1608,7 +1878,7 @@ class TradingEngine:
         order_no 우선 매칭, 없으면 종목 최근 체결. 실패/미발견 시 None(슬리피지 미기록).
         """
         try:
-            execs = await self._account.get_executions()
+            execs = await self._get_executions()
         except Exception:
             logger.debug("슬리피지용 체결조회 실패 %s", stock_code, exc_info=True)
             return None
@@ -1750,10 +2020,7 @@ class TradingEngine:
                     stock_code, pending.order_no,
                 )
         try:
-            await self._order.cancel(
-                order_no=pending.order_no, stock_code=stock_code,
-                quantity=pending.quantity,
-            )
+            await self._cancel_order(stock_code, pending.order_no, pending.quantity)
             logger.info(
                 "[미체결 취소] %s 주문번호=%s 수량=%d 사유=%s",
                 stock_code, pending.order_no, pending.quantity, reason,
@@ -1786,7 +2053,7 @@ class TradingEngine:
         if filled <= 0:
             return False
 
-        fill_price = int(pending.price)
+        fill_price = self._norm_price(pending.price)
         self._today_trade_count += 1
         self._pending_orders.pop(stock_code, None)
         self._record_metric(
@@ -1932,7 +2199,7 @@ class TradingEngine:
         stock_name: str,
         trade_type: TradeType,
         quantity: int,
-        price: int,
+        price: float,
         reason: str = "",
         signal: Signal | None = None,
         signal_type: str | None = None,
@@ -1941,13 +2208,16 @@ class TradingEngine:
         """매매 체결 내역을 Worker Queue에 적재한다.
 
         비즈니스 로직(buy_reason 판별, profit_loss 계산)은 엔진에서 처리하고,
-        DB INSERT만 Worker에게 위임한다.
+        DB INSERT만 Worker에게 위임한다. price/profit_loss_amount는 시장별로 정규화한다
+        (KRX int·US round). RiskManager 입력은 int 유지(연패/MDD 게이트 KRX 불변).
         """
         try:
+            # DB/payload 경계 가격 정규화 — KRX는 int로 기존 저장 바이트 불변.
+            price = self._norm_price(price)
             buy_reason: BuyReason | None = None
             sell_reason: SellReason | None = None
             profit_loss_pct: float | None = None
-            profit_loss_amount: int | None = None
+            profit_loss_amount: float | None = None
 
             if trade_type == TradeType.BUY and signal is not None:
                 buy_reason = self._detect_buy_reason(signal)
@@ -1958,8 +2228,9 @@ class TradingEngine:
                 if avg_price and avg_price > 0:
                     avg_price = float(avg_price)
                     profit_loss_pct = float(((price - avg_price) / avg_price) * 100)
-                    profit_loss_amount = int((price - avg_price) * quantity)
-                    self._risk.record_trade_result(profit_loss_amount)
+                    # DB(Numeric)엔 정규화값(KRX int·US 센트), RiskManager엔 int 유지.
+                    profit_loss_amount = self._norm_price((price - avg_price) * quantity)
+                    self._risk.record_trade_result(int(profit_loss_amount))
                     sell_reason = self._reconcile_sell_reason(
                         sell_reason, profit_loss_pct, stock_code,
                     )
@@ -1980,6 +2251,8 @@ class TradingEngine:
                     "signal_type": signal_type,
                     "profit_loss_pct": profit_loss_pct,
                     "profit_loss_amount": profit_loss_amount,
+                    "market": self._market.market_code,
+                    "currency": self._market.currency,
                 },
                 priority=10,
             )
@@ -2006,6 +2279,7 @@ class TradingEngine:
                         screened_at=datetime.now(UTC),
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
+                        market=self._market.market_code,
                     )
         except Exception:
             logger.exception("스크리닝 DB 적재 실패")
@@ -2092,6 +2366,7 @@ class TradingEngine:
                     },
                     "confidence": conf,
                     "action_taken": action_taken,
+                    "market": self._market.market_code,
                 },
                 priority=5,
             )
@@ -2435,9 +2710,16 @@ class TradingEngine:
             })
         self._task_queue.enqueue(
             task_type="sync_portfolio",
-            payload={"holdings": holdings},
+            payload={
+                "holdings": holdings,
+                "market": self._market.market_code,
+                "currency": self._market.currency,
+            },
             priority=1,
-            idempotency_key=f"sync_portfolio_{date.today().isoformat()}",
+            # 시장별 네임스페이스 — KRX/US 분리 프로세스가 같은 날 키 충돌하지 않도록.
+            idempotency_key=(
+                f"sync_portfolio_{self._market.market_code}_{date.today().isoformat()}"
+            ),
         )
 
     def _enqueue_daily_performance(
@@ -2622,7 +2904,10 @@ class TradingEngine:
 
         stocks 테이블에 없거나 이름이 코드와 동일한 종목은
         현재가 API를 호출하여 이름을 가져온 뒤 등록/갱신한다.
+        해외 현재가 API는 한글명을 주지 않으므로 US는 스킵한다(이름 보정은 P3c-4/후속).
         """
+        if self._market.is_overseas:
+            return
         try:
             with get_session() as session:
                 stock_repo = StockRepository(session)
@@ -2675,7 +2960,7 @@ class TradingEngine:
                         continue
                     stock = stock_repo.get_by_code(code)
                     if stock is None:
-                        stock_repo.create(code, name, "UNKNOWN")
+                        stock_repo.create(code, name, self._board_label("UNKNOWN"))
                         registered += 1
                     elif stock.name == stock.code or not stock.name:
                         stock_repo.update_name(code, name)
@@ -2730,7 +3015,9 @@ class TradingEngine:
 
                 stock = stock_repo.get_by_code(stock_code)
                 if stock is None:
-                    stock = stock_repo.create(stock_code, stock_name or stock_code, "KOSPI")
+                    stock = stock_repo.create(
+                        stock_code, stock_name or stock_code, self._board_label("KOSPI")
+                    )
 
                 order = order_repo.create(stock.id, order_type, quantity, price)
                 order_repo.update_status(order.id, OrderStatus.SUBMITTED, order_no)
@@ -2739,7 +3026,12 @@ class TradingEngine:
             logger.exception("주문 DB 기록 실패: %s", stock_code)
 
     async def _seed_watchlist_from_env(self) -> None:
-        """최초 실행 시 .env의 관심종목을 DB에 시드하고, 종목명을 보정한다."""
+        """최초 실행 시 .env의 관심종목을 DB에 시드하고, 종목명을 보정한다.
+
+        watchlist_codes(KRX 코드) 기반이라 US는 스킵한다(US watchlist 배선은 P3c-6).
+        """
+        if self._market.is_overseas:
+            return
         try:
             with get_session() as session:
                 repo = WatchlistRepository(session)

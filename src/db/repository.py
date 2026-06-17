@@ -307,6 +307,8 @@ class PortfolioRepository:
         avg_price: float,
         current_price: float,
         peak_price: float | None = None,
+        market: str = "KRX",
+        currency: str = "KRW",
     ) -> Portfolio:
         """보유 포지션을 생성하거나 갱신한다.
 
@@ -316,6 +318,8 @@ class PortfolioRepository:
             avg_price: 평균매수단가
             current_price: 현재가
             peak_price: 보유 중 최고가 (None이면 기존 값 보존)
+            market: 시장 코드 (KRX/US) — 신규 생성 시 설정
+            currency: 결제 통화 (KRW/USD) — 신규 생성 시 설정
 
         Returns:
             생성 또는 갱신된 포지션 객체
@@ -328,6 +332,8 @@ class PortfolioRepository:
                 avg_price=avg_price,
                 current_price=current_price,
                 peak_price=peak_price,
+                market=market,
+                currency=currency,
             )
             self._session.add(portfolio)
         else:
@@ -633,15 +639,17 @@ class TradeRepository:
         stock_name: str,
         trade_type: TradeType,
         quantity: int,
-        price: int,
-        total_amount: int,
+        price: float,
+        total_amount: float,
         traded_at: datetime,
         cycle_number: int = 0,
         buy_reason: BuyReason | None = None,
         sell_reason: SellReason | None = None,
         signal_type: str | None = None,
         profit_loss_pct: float | None = None,
-        profit_loss_amount: int | None = None,
+        profit_loss_amount: float | None = None,
+        market: str = "KRX",
+        currency: str = "KRW",
     ) -> Trade:
         """매매 체결 내역을 기록한다.
 
@@ -659,6 +667,8 @@ class TradeRepository:
             signal_type: 시그널 유형
             profit_loss_pct: 수익률 (매도 시)
             profit_loss_amount: 손익금액 (매도 시)
+            market: 시장 코드 (KRX/US)
+            currency: 결제 통화 (KRW/USD)
 
         Returns:
             생성된 Trade 객체
@@ -677,6 +687,8 @@ class TradeRepository:
             signal_type=signal_type,
             profit_loss_pct=profit_loss_pct,
             profit_loss_amount=profit_loss_amount,
+            market=market,
+            currency=currency,
         )
         self._session.add(trade)
         self._session.flush()
@@ -745,6 +757,7 @@ class SignalRepository:
         signal_value: dict[str, Any] | None = None,
         confidence: float = 0.0,
         action_taken: bool = False,
+        market: str = "KRX",
     ) -> Signal:
         """시그널을 기록한다.
 
@@ -756,6 +769,7 @@ class SignalRepository:
             signal_value: 시그널 상세 값 (JSON)
             confidence: 신뢰도
             action_taken: 실제 매매 실행 여부
+            market: 시장 코드 (KRX/US)
 
         Returns:
             생성된 Signal 객체
@@ -768,6 +782,7 @@ class SignalRepository:
             signal_value=signal_value,
             confidence=confidence,
             action_taken=action_taken,
+            market=market,
         )
         self._session.add(signal)
         self._session.flush()
@@ -821,6 +836,7 @@ class ScreeningResultRepository:
         screened_at: datetime,
         cycle_number: int = 0,
         converted_to_trade: bool = False,
+        market: str = "KRX",
     ) -> ScreeningResult:
         """스크리닝 결과를 기록한다.
 
@@ -833,6 +849,7 @@ class ScreeningResultRepository:
             screened_at: 스크리닝 시각
             cycle_number: 사이클 번호
             converted_to_trade: 매매 전환 여부
+            market: 시장 코드 (KRX/US)
 
         Returns:
             생성된 ScreeningResult 객체
@@ -846,6 +863,7 @@ class ScreeningResultRepository:
             screened_at=screened_at,
             cycle_number=cycle_number,
             converted_to_trade=converted_to_trade,
+            market=market,
         )
         self._session.add(result)
         self._session.flush()
@@ -1038,7 +1056,9 @@ class DailySummaryRepository:
 
         summary.total_buy_count = buy_count
         summary.total_sell_count = sell_count
-        summary.total_profit_loss = total_pl
+        # DailySummary.total_profit_loss는 정수(KRX) 컬럼 — Numeric 전환 비범위(P3c-3).
+        # trades.profit_loss_amount가 float(Numeric)이 되어 total_pl이 float이므로 캐스트.
+        summary.total_profit_loss = int(total_pl)
         summary.win_rate = win_rate
         summary.stop_loss_count = stop_loss
         summary.take_profit_count = take_profit
