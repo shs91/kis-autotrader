@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-18] 읽기측 시장 격리 — US 리스크복구가 KRX 거래로 일일한도 채워 매매 차단되던 P0 (v0.16.3)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/db/repository.py: TradeRepository.get_trades_by_date(target_date, market=None) — market 필터 추가(None=전 시장 보존). PortfolioRepository.get_peak_prices(market=None) — 시장별 peak 시드.
+  - src/engine.py: _restore_risk_state_if_needed가 get_trades_by_date(today, market=self._market.market_code)로 호출(P0). _load_peak_prices가 시장별 시드. _load_today_trades(today, market=None) 추가 + 시장별 캘린더(_create_calendar_event) 격리. 결산 집계(post_market)는 daily_summary/daily_performances에 market 컬럼 부재로 market=None 유지(마이그 후속).
+  - tests: test_get_trades_by_date_filters_by_market·test_get_peak_prices_filters_by_market·test_restart_restore_passes_market_filter(신규 3).
+- 배경: P3c-4가 쓰기측 market 라우팅만 넣고 읽기측 집계 격리를 누락. US 엔진(MARKET=US)의 장중 재시작 복구가 공유 trades를 시장 무관 조회 → KRX 당일 체결을 US 리스크상태로 재생하고 _today_trade_count=len(trades)로 **US 일일 한도(5건)를 KRX 거래로 채워 US 매매를 차단**(6/18 라이브: US 실거래 0건인데 "당일매도 3건 재생 PnL=10670원" + 한도도달 사이클 스킵). #59(스크리닝)는 같은 부류의 일부였음.
+- 영향: US는 자기 시장 체결만 리스크/일일카운트에 반영 → US 매매 정상화. KRX는 market=None/기본값으로 동작 불변. peak·캘린더도 시장 격리. 결산(daily_summary)의 시장 분리는 market 컬럼 마이그가 필요해 후속(현재 KRX/US 합산 유지=무회귀).
+- 검증 결과: pytest 전체 **1199 passed**(신규 3) | mypy strict ✅(변경 2 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변. KRX(`com.kis.autotrader`)는 무영향.
+
+---
+
 ## [2026-06-18] 스크리닝 결과 시장별 격리 — US가 KRX 발굴 종목 읽던 누수 차단 (v0.16.2)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -59,16 +72,5 @@
 - 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. `BUY_COOLDOWN_AFTER_SELL_MIN`으로 분 단위 조정(롤백=0).
 
 ---
-
-## [2026-06-15] 매수 사이징 실주문가능액 캡 — rt_cd=7 폭주 차단 (증분4) (v0.14.1)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/api/account.py: get_buyable(TTTC8908R/inquire-psbl-order) + Buyable DTO. ord_psbl_cash(주문가능현금)·nrcvb_buy_qty(미수없는=현금만 매수수량)·max_buy_qty 반환.
-  - src/engine.py: 매수 직전 _get_buyable_qty로 nrcvb_buy_qty 캡(quantity=min(risk, buyable)). 부족/조회불가 시 INSUFFICIENT_BUYABLE로 매수 보류(주문 미시도).
-  - tests/test_api/test_account.py(신규 3)·tests/test_engine_buy_funnel.py(_get_buyable_qty 2).
-- 배경: 06-15 멀티소스 활성 후 매수 주문 실패 1,266건(HL만도 862·디앤디 247·대한항공 149). 엔진이 deposit(DNCA_TOT_AMT 예수금총액)으로 사이징 → KIS 실주문가능액(T+2 미결제·타포지션 점유) 초과 → rt_cd=7 거부. 실패는 성공매수로 안 잡혀 MAX_DAILY_TRADES_PER_STOCK에 안 걸리고 매 사이클 무한 재시도(+현재가 호출 인플레로 자가 일일캡 85% 견인).
-- 영향: 매수가능조회로 현금 기준 수량 캡 → rt_cd=7 제거, 재시도·현재가 폭주 차단. 부족 시 주문 미시도 보류(보수적). 정상 매수는 영향 없음(현금 충분 시 캡≥risk_qty라 동일). DB/스키마/config 불변.
-- 검증 결과: pytest 전체 **1075 passed**(신규 5) | mypy strict ✅(96 files) | ruff ✅(변경분).
-- 비고: 멀티소스(v0.13/0.14)와 결합 시 rt_cd=7 없이 후보 확대 효과만 취득. KIS 일일 호출 제한 없음(초당만) — 자가 캡 API_DAILY_CALL_LIMIT 별도 검토. 운영자 액션 — `com.kis.autotrader` 재시작 시 반영.
 
 ---

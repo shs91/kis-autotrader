@@ -516,12 +516,14 @@ class TradingEngine:
         return df
 
     def _load_peak_prices(self) -> dict[str, float]:
-        """portfolios.peak_price를 읽어 인메모리 peak dict를 시드한다."""
+        """portfolios.peak_price를 읽어 인메모리 peak dict를 시드한다(시장별)."""
         from src.db.repository import PortfolioRepository
 
         try:
             with get_session() as session:
-                return PortfolioRepository(session).get_peak_prices()
+                return PortfolioRepository(session).get_peak_prices(
+                    market=self._market.market_code
+                )
         except Exception:
             logger.exception("peak_price 시드 로드 실패 — 빈 dict로 시작")
             return {}
@@ -622,7 +624,11 @@ class TradingEngine:
         try:
             today = datetime.now(self._tz).date()
             with get_session() as session:
-                trades = TradeRepository(session).get_trades_by_date(today)
+                # 시장별 격리 — US 엔진이 KRX 당일 체결을 자기 리스크 상태/일일
+                # 한도 카운트로 재생하면 US 매매가 부당하게 차단된다(공유 trades).
+                trades = TradeRepository(session).get_trades_by_date(
+                    today, market=self._market.market_code
+                )
             sells = [
                 t
                 for t in trades
@@ -2797,7 +2803,8 @@ class TradingEngine:
         """
         try:
             today = date.today()
-            trades = self._load_today_trades(today)
+            # 시장별 캘린더 이벤트 — US 이벤트에 KRX 거래·원화가 섞이지 않도록 격리.
+            trades = self._load_today_trades(today, market=self._market.market_code)
 
             auth = GoogleCalendarAuth()
             service = auth.get_service()
@@ -2825,12 +2832,18 @@ class TradingEngine:
             logger.exception("Google Calendar 이벤트 등록 실패 (매매 결과에는 영향 없음)")
 
     @staticmethod
-    def _load_today_trades(today: date) -> list[Any]:
-        """오늘 체결된 매매 내역을 DB에서 조회한다."""
+    def _load_today_trades(today: date, market: str | None = None) -> list[Any]:
+        """오늘 체결된 매매 내역을 DB에서 조회한다.
+
+        ``market`` 지정 시 해당 시장만(시장별 캘린더 이벤트용). 결산 집계 경로는
+        daily_summary/daily_performances에 market 컬럼이 없어 시장별 분리 시
+        같은 날짜 행을 덮어쓰므로, 마이그레이션 전까지 market=None(전 시장 합산)을
+        유지한다.
+        """
         try:
             with get_session() as session:
                 repo = TradeRepository(session)
-                return list(repo.get_trades_by_date(today))
+                return list(repo.get_trades_by_date(today, market=market))
         except Exception:
             logger.exception("DB 체결 내역 조회 실패 — 캘린더에는 빈 내역으로 기록")
             return []
