@@ -259,6 +259,20 @@ class TradingConfig:
             if c.strip()
         ]
     )
+    # 미국 관심종목: "AAPL:NASD,MSFT:NASD" 형식(symbol:OVRS_EXCG_CD). 거래소 동반.
+    # 멀티마켓(P3c-2) US 엔진은 이 목록의 심볼을 watchlist로, 거래소를 _exchanges에 시드한다.
+    watchlist_us: list[tuple[str, str]] = field(
+        default_factory=lambda: [
+            (s.split(":")[0].strip(), s.split(":")[1].strip())
+            for s in _env("WATCHLIST_CODES_US", "").split(",")
+            if ":" in s
+        ]
+    )
+    # 미국 사이클 매수 예산(USD). P3c-2 functional seed용 deposit 원천. 실예수금 연동은 P4.
+    # 실제 매수 수량은 브로커 매수가능수량(orderable_qty)으로 캡되어 과대주문 불가.
+    us_cash_budget: float = field(
+        default_factory=lambda: _env_float("US_CASH_BUDGET", 1000.0)
+    )
 
     # 장중 매매 사이클 최소 간격(초). 종목 수 기반 산출값과 0종목 폴백 모두 이 하한을 따른다.
     # 1초 폭주(일일 API 한도 조기 소진 + KIS EGW00201 초당한도 거부) 방지용.
@@ -425,6 +439,10 @@ class ScreeningConfig:
     # 사전 필터
     min_price: int = field(
         default_factory=lambda: _env_int("SCREENING_MIN_PRICE", 1000)
+    )
+    # 미국 매수 하드 가격 플로어(USD). 국내 min_price(KRW)는 통화 단위 불일치라 별도.
+    min_price_us: float = field(
+        default_factory=lambda: _env_float("SCREENING_MIN_PRICE_US", 1.0)
     )
     max_price: int = field(
         default_factory=lambda: _env_int("SCREENING_MAX_PRICE", 500000)
