@@ -173,7 +173,20 @@ class TradingEngine:
             registry = StrategyRegistry.create_default()
             self._selector = StrategySelector.from_config(registry)
 
-        self._risk = RiskManager()
+        # 미국은 야간 무인 실전 보수 한도(P4)로 RiskManager 생성. KRX는 전역 기본값(불변).
+        if self._market.is_overseas:
+            _t = settings.trading
+            self._risk = RiskManager(
+                max_position_ratio=_t.us_max_position_ratio,
+                daily_trade_limit=_t.us_daily_trade_limit,
+                max_loss_rate=_t.us_max_loss_rate,
+            )
+            self._max_daily_trades_per_stock = _t.us_max_daily_trades_per_stock
+        else:
+            self._risk = RiskManager()
+            self._max_daily_trades_per_stock = (
+                settings.trading.max_daily_trades_per_stock
+            )
         self._notifier = TelegramNotifier()
         self._screener = StockScreener()
         self._task_queue = TaskQueueService()
@@ -1196,7 +1209,7 @@ class TradingEngine:
         # BUY 시그널 — 종목별 당일 진입 횟수 제한 (proposal 2026-05-23)
         # 동일 종목 동일 거래일 N회 이상 진입을 차단. 매도(청산)는 제한하지 않는다.
         buys_today = self._today_buys_per_stock.get(stock_code, 0)
-        if buys_today >= settings.trading.max_daily_trades_per_stock:
+        if buys_today >= self._max_daily_trades_per_stock:
             skip_reason = "daily_trade_limit_per_stock"
             self._record_buy_reject(
                 stock_code=stock_code,
@@ -1204,7 +1217,7 @@ class TradingEngine:
                 confidence=signal.confidence,
                 context={
                     "buys_today": buys_today,
-                    "limit": settings.trading.max_daily_trades_per_stock,
+                    "limit": self._max_daily_trades_per_stock,
                 },
             )
             self._record_signal_to_db(

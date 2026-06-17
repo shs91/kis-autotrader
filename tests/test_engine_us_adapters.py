@@ -371,3 +371,27 @@ def test_board_label_krx_keeps_literal_us_uses_market_code() -> None:
     us = _us_engine()
     assert us._board_label("KOSPI") == "US"  # US는 KRX 보드에 혼입 안 됨
     assert us._board_label("UNKNOWN") == "US"
+
+
+# ── P4: 미국 보수 한도 (야간 무인 실전 안전장치) ──────────────
+
+
+def test_us_engine_uses_conservative_risk_limits() -> None:
+    e = _us_engine()
+    t = cfg.settings.trading
+    # US는 us_* 보수 한도 사용(기본 포지션 10%·일일 5건·종목당 1회)
+    assert e._risk._max_position_ratio == t.us_max_position_ratio
+    assert e._risk._daily_trade_limit == t.us_daily_trade_limit
+    assert e._max_daily_trades_per_stock == t.us_max_daily_trades_per_stock
+    # KRX 대비 보수적(작거나 같음)
+    assert e._risk._max_position_ratio <= t.max_position_ratio
+    assert e._max_daily_trades_per_stock <= t.max_daily_trades_per_stock
+
+
+def test_krx_engine_uses_default_risk_limits() -> None:
+    e = TradingEngine(watchlist=["005930"])
+    t = cfg.settings.trading
+    # KRX는 전역 settings 그대로(불변) — 튜닝값과 무관하게 일치
+    assert e._risk._max_position_ratio == t.max_position_ratio
+    assert e._risk._daily_trade_limit == t.daily_trade_limit
+    assert e._max_daily_trades_per_stock == t.max_daily_trades_per_stock
