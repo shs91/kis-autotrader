@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-06-17] 본전스톱·정체청산 sell_reason enum 매핑 — NULL 기록 정합화 (v0.16.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/db/models.py: SellReason enum에 BREAKEVEN·STAGNATION 추가.
+  - src/engine.py: _SELL_REASON_MAP에 "본전스톱"→BREAKEVEN·"정체청산"→STAGNATION 매핑 2건.
+  - alembic/versions/c3d4e5f6a7b8_add_sell_reason_breakeven_stagnation.py: ALTER TYPE sell_reason_enum ADD VALUE (BREAKEVEN, STAGNATION). autocommit_block 사용(PG ADD VALUE 트랜잭션 제약).
+  - tests/test_engine_sell_reason.py: 본전스톱→BREAKEVEN·정체청산→STAGNATION 기록 + _SELL_REASON_MAP 완전성 회귀 4건.
+- 배경: v0.16.0 청산 로직(본전스톱/정체청산)이 _SELL_REASON_MAP에 매핑이 없어 sell_reason=NULL로 기록(6/17 아주IB투자 정체청산 +1.9%·보유180분 사례로 발견). 청산은 정상 작동하나 매도사유 집계·대시보드·룰엔진에서 누락. pytest가 risk.should_*만 검증해 엔진 DB 기록 경로 미테스트로 미발견.
+- 영향: 정체청산→STAGNATION·본전스톱→BREAKEVEN 정확 기록. 청산 동작·손익 불변(기록만 정합화). 매핑 완전성 테스트로 향후 청산사유 추가 시 NULL 회귀 차단. 기존 NULL 1건(6/17 아주IB) 백필은 운영자 승인 후 별도(6/15 흥아해운 NULL은 원인 미상).
+- 검증 결과: pytest 전체 **1126 passed**(신규 4) | mypy strict ✅(102 files) | ruff ✅(변경분) | 골든 11 통과.
+- 비고: 운영자 액션 — alembic upgrade head 적용 완료(→c3d4e5f6a7b8). `com.kis.autotrader` 재시작 시 매핑 반영. DB enum 값 추가는 비가역(downgrade no-op)·기존 데이터 영향 0.
+
+---
+
 ## [2026-06-16] 본전 스톱 + 정체 청산 — 이익 보호 & 횡보 슬롯 회수 (v0.16.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -58,21 +72,5 @@
 - 영향: 기관·외국인 순매도 종목 demote 가능(가산 음수→min_score 컷). default-off라 운영자 opt-in 전 무동작. per-stock 예산은 분석풀(≤MAX_ANALYSIS_POOL)·일일 캐시·investor_trend 1콜로 한정. 멀티소스 ON 위에서만 동작.
 - 검증 결과: pytest 전체 **1070 passed**(신규 2) | mypy strict ✅(96 files) | ruff ✅(변경분).
 - 비고: 활성화는 config_overrides로 `SCREENING_FLOW_ENABLED=true` + `SCREENING_WEIGHT_FLOW` 상향(멀티소스도 ON 필요). 운영자 액션 — `com.kis.autotrader` 재시작 시 코드 반영(OFF면 동작 무변경).
-
----
-
-## [2026-06-15] 스크리너 다중 순위 병합 + 체결강도/호가잔량 스코어 (증분1, default-off) (v0.13.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/api/quote.py: RankItem + get_change_rate_rank(FHPST01700000)·get_volume_power_rank(FHPST01680000)·get_quote_balance_rank(FHPST01720000). 모의 미지원/에러→빈 리스트 방어, 엔드포인트별 코드키(stck_shrn_iscd/mksc_shrn_iscd) 흡수.
-  - src/strategy/screener.py: MergedCandidate·merge_rankings(union/dedup·market_cap best-effort)·score_merged(5축)·prelim_score(예산 가드 사전컷)·rank-decay. ScoredCandidate에 volume_power_score/quote_balance_score 추가. 필터 market_cap None 통과(breadth).
-  - src/config.py: weight_volume_power/quote_balance(0.0)·multisource_enabled(false)·max_analysis_pool(40).
-  - src/worker/screener.py: 마스터스위치 분기 — OFF=현행 단일소스(불변)·ON=4소스 fetch→merge→필터→prelim cap→분석→score→DB + SCREENING_MULTISOURCE 관측 메트릭.
-  - docs/BRIDGE_SPEC.md: 가중치 제약 3→5축, 신규 파라미터·마스터스위치 명시.
-  - tests/: test_quote(순위 3종 파싱·방어 6건)·test_screener(병합·rank-decay·default-off·prelim 8건).
-- 배경: 스크리너 거래량 단일소스 → candidate 구조적 빈약(메모리: 약세장 0매매 주원인). KIS 순위 3종(등락률·체결강도·호가잔량)은 env=real에서 동작 → 후보 폭 확대 + 신호 스코어링.
-- 영향: 후보 폭 확대로 매매 활성화 기대. **마스터스위치 default false → 출시 시 매매 동작 현행과 완전 동일**, 운영자 2단계 opt-in(스위치 ON→가중치 상향). 예산 가드(MAX_ANALYSIS_POOL=40)로 daily-price 폭증 방지. 다운스트림 게이트(앙상블·리스크) 불변.
-- 검증 결과: pytest 전체 **1068 passed**(신규 13) | mypy strict ✅(96 files) | ruff ✅(변경분).
-- 비고: 06-15 운영자가 config_overrides로 `SCREENING_MULTISOURCE_ENABLED=true` 활성(스테이지1, 가중치 0). 설계 docs/superpowers/specs/2026-06-15-screener-multisource-design.md.
 
 ---
