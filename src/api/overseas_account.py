@@ -170,9 +170,31 @@ class OverseasAccountAPI:
             OVERSEAS_PSAMOUNT_PATH, params=params, tr_id=tr_id
         )
         output = response.get("output", {}) or {}
+        # 통합증거금 반영 필드를 우선 읽는다(2026-06-18 실측). ord_psbl_qty/
+        # ord_psbl_frcr_amt는 **외화 현금 한정**이라 통합증거금(원화담보 환산) 매수여력을
+        # 0으로 보고함 → ovrs_max_ord_psbl_qty(해외최대주문가능수량)·frcr_ord_psbl_amt1
+        # (외화주문가능금액=통합)을 우선. 각 후보 중 **첫 양수값**을 채택(0은 건너뜀 —
+        # _get이 부재 시 "0"을 반환하므로 단순 or는 부적합).
+        def _first_pos_int(*keys: str) -> int:
+            for key in keys:
+                try:
+                    val = int(_get(output, key, "0") or "0")
+                except ValueError:
+                    val = 0
+                if val > 0:
+                    return val
+            return 0
+
+        def _first_pos_dec(*keys: str) -> Decimal:
+            for key in keys:
+                val = _decimal(_get(output, key))
+                if val > 0:
+                    return val
+            return Decimal(0)
+
         return OverseasBuyable(
-            orderable_cash=_decimal(_get(output, "ord_psbl_frcr_amt")),
-            orderable_qty=int(_get(output, "ord_psbl_qty", "0") or "0"),
+            orderable_cash=_first_pos_dec("frcr_ord_psbl_amt1", "ord_psbl_frcr_amt"),
+            orderable_qty=_first_pos_int("ovrs_max_ord_psbl_qty", "ord_psbl_qty"),
             raw=output,
         )
 

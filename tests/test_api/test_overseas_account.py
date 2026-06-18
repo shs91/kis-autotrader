@@ -85,7 +85,8 @@ class TestGetBalance:
 
 
 class TestGetBuyableAmount:
-    async def test_parses_buyable(self) -> None:
+    async def test_parses_buyable_cash_fallback(self) -> None:
+        # 통합 필드 부재 시 현금 필드(ord_psbl_qty/ord_psbl_frcr_amt) 폴백.
         c = AsyncMock()
         c.get.return_value = {
             "output": {"ord_psbl_frcr_amt": "5000.00", "ord_psbl_qty": "33"}
@@ -94,6 +95,20 @@ class TestGetBuyableAmount:
         result = await api.get_buyable_amount("AAPL", "NASD", Decimal("150.25"))
         assert result.orderable_cash == Decimal("5000.00")
         assert result.orderable_qty == 33
+
+    async def test_prefers_integrated_margin_fields(self) -> None:
+        # 통합증거금: ord_psbl_qty=0(현금)이어도 ovrs_max_ord_psbl_qty(통합) 우선.
+        c = AsyncMock()
+        c.get.return_value = {
+            "output": {
+                "ord_psbl_frcr_amt": "0.00", "ord_psbl_qty": "0",
+                "ovrs_max_ord_psbl_qty": "124", "frcr_ord_psbl_amt1": "620.11",
+            }
+        }
+        api = OverseasAccountAPI(client=c)
+        result = await api.get_buyable_amount("SNAP", "NYSE", Decimal("5"))
+        assert result.orderable_qty == 124  # 통합증거금 반영(현금 0 아님)
+        assert result.orderable_cash == Decimal("620.11")
 
 
 class TestGetPresentBalance:
