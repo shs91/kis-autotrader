@@ -1,8 +1,9 @@
 {
   "_meta": {
-    "updated_at": "2026-06-16",
-    "updated_by": "manual:trailing-drawdown-3pct"
+    "updated_at": "2026-06-18",
+    "updated_by": "manual:enable-us-dynamic-screener"
   },
+  "SCREENING_US_ENABLED": true,
   "MAX_LOSS_RATE": 0.03,
   "TRAILING_DRAWDOWN_RATIO": 0.03,
   "SCREENING_MULTISOURCE_ENABLED": true,
