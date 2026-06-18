@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-06-18] 매수가능 통합증거금 필드 우선 파싱 — US 동적매수 buyable=0 라이브 블로커 (v0.19.4)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/api/overseas_account.py: get_buyable_amount이 psamount 응답에서 통합증거금 반영 필드(ovrs_max_ord_psbl_qty 해외최대주문가능수량·frcr_ord_psbl_amt1 외화주문가능금액)를 **우선** 파싱. 기존엔 ord_psbl_qty/ord_psbl_frcr_amt(외화 **현금 한정**)만 읽어 통합증거금(원화담보 환산) 매수여력을 0으로 보고 → 전 종목 buyable=0. 각 후보 중 첫 양수값 채택(_first_pos_int/_first_pos_dec, 0은 건너뜀 — _get 부재 시 "0" 반환이라 단순 or 부적합).
+  - tests: 통합증거금 필드 우선(ord_psbl_qty=0이어도 ovrs_max_ord_psbl_qty=124 채택)·현금 폴백 회귀.
+- 배경: US 라이브 매수가 마감가드(#67)·발굴(#66) 해소 후에도 전부 미체결. 진단 결과 psamount(TTTS3007R)의 ord_psbl_qty는 외화 현금만 반영 → 통합증거금 활성 계좌도 0. 실측 통합증거금 매수여력 $620.11(=itgr_ord_psbl_amt=frcr_ord_psbl_amt1, ovrs_max_ord_psbl_qty=124=620/5). KIS 앱 매수가 정상인 것과 모순돼 필드 추적 → 통합증거금은 ovrs_max_ord_psbl_qty/frcr_ord_psbl_amt1에 반영됨 확인(docs Excel "해외증거금 통화별조회" TTTC2101R itgr_ord_psbl_amt와 일치).
+- 영향: 통합증거금 활성 US 계좌가 실제 매수여력(현금+원화담보 환산)으로 주문 수량 산정 → 동적 매수 실행 가능. 실주문은 여전히 min(risk_qty, buyable)·us_cash_budget 사이징 캡 적용(과대주문 없음). KRX 무관(해외 전용 psamount). 현금 필드 폴백 유지로 통합증거금 미활성 계좌도 동작.
+- 검증 결과: pytest 전체 통과(통합증거금 우선 신규 회귀) | mypy strict ✅ | ruff ✅.
+- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 매수여력 정상 인식. DB/마이그 불변. #68(present-balance)에 누락됐던 분리 수정(force-push 차단으로 amend 미반영) — 이 PR로 본 블로커 해소.
+
+---
+
 ## [2026-06-18] present-balance output3 파싱 + 통합증거금 과대주문 방지 (v0.19.3)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -58,18 +70,4 @@
 - 영향: **opt-in 기본 off** — SCREENING_US_ENABLED=false면 US는 watchlist_us 고정+메인 100%(현 P5 무변경). true면 워커 가동+쿼터 분할. **KRX 완전 불변**(is_overseas/us_enabled 기본 false 뒤 분기, 전체 1225 통과). 어댑버설 리뷰(거래소 라우팅 실금 민감) 수행.
 - 검증 결과: pytest 전체 **1225 passed**(신규 3) | mypy strict ✅(103 files) | ruff ✅(변경분).
 - 비고: 운영자 액션 — main 머지 후 pull → 재시작(기본 off라 무변경). 활성화는 config_overrides/env `SCREENING_US_ENABLED=true` + US 재시작. DB/스키마/마이그 불변(stocks.market 재사용). 첫 활성 시 거래소 라우팅·발굴 로그 모니터링 권장.
-
----
-
-## [2026-06-18] Telegram 알림 통화 인지화 — US 알림 "원"→"$" (통화 일관성 마무리) (v0.18.1)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/notify/formatter.py: format_buy/sell/daily_summary/diagnostics에 currency 파라미터(기본 KRW) + format_money 라우팅. BuyDetail/SellDetail 금액 필드 float화(USD 센트). 잔고 라인은 balance.currency 사용.
-  - src/notify/telegram.py: notify_buy/sell/daily_summary/diagnostics에 currency 전달. notify_sell 손익은 KRW만 int(USD 센트 보존).
-  - src/engine.py: 텔레그램 enqueue 6종(buy×2·sell×2·daily_summary·diagnostics) message_data에 currency=self._market.currency 배선.
-  - tests: US 통화("$") 회귀 4건 + _FakeBalance.currency.
-- 배경: #61이 엔진 로그를 통화 인지화했으나 Telegram 포맷터는 엔진→태스크큐→워커→노티파이어 경유라 currency plumbing이 필요해 후속으로 미뤘던 항목. US 매수/매도/결산/진단 알림이 USD를 전부 "원"으로 표기해 운영자 통화 혼동.
-- 영향: US 알림이 "$"+센트로 표기. **KRX는 currency=KRW 기본값·format_money(KRW) 정수+"원"으로 바이트 동일**(전체 1219 통과, notify 기존 테스트 무회귀). 멀티마켓 통화 인지화 3층(로그 #61·결산테이블 #63·알림 #이번) 완결.
-- 검증 결과: pytest 전체 **1219 passed**(신규 4) | mypy strict ✅(102 files) | ruff ✅(변경분).
-- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변.
 
