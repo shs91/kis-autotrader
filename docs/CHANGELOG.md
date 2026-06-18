@@ -6,6 +6,21 @@
 
 ---
 
+## [2026-06-18] 결산 테이블 시장 격리 — daily_summary/daily_performances market 컬럼 + alembic 중복 head 복구 (v0.18.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/db/models.py: DailySummary/DailyPerformance에 market 컬럼(server_default KRX) + 복합 unique(date, market). 기존 단일 date unique 해제.
+  - alembic: c3d4e5f6a7b8 중복 revision 해소 — sell_reason 마이그를 고유 ID d4e5f6a7b8c9로 rename + Numeric(c3d4e5f6a7b8) 뒤로 재연결(선형화). 신규 e5f6a7b8c9d0: market 컬럼 추가 + unique 인덱스→복합 제약, 기존 행 KRX 백필.
+  - src/db/repository.py: upsert_daily_summary(date, market)·get_by_date(date, market) — trades·screening_results 시장 필터 + (date,market) upsert. DailyPerformanceRepository.create/get_by_date에 market.
+  - src/worker/handlers.py: DailySummary/DailyPerformance 핸들러가 payload market 전달. src/engine.py: 결산 enqueue payload + 레거시 경로 market 배선. src/scheduler/jobs.py·src/db/analytics.py: market 전달. dashboard: daily_summary/perf 쿼리 market='KRX' 필터(복합키 후 더블카운트 방지).
+  - tests: 결산 시장 격리 회귀 2건(summary·performance).
+- 배경: #62가 결산 enqueue 멱등키를 시장 분리했으나, daily_summary/daily_performances 테이블 자체는 date 단일 unique라 KRX/US가 같은 날짜 행을 덮어쓰던 잔여(#4). 또한 sell_reason 마이그(v0.16.1)가 Numeric 마이그와 동일 revision ID(c3d4e5f6a7b8)를 잘못 써 alembic head가 갈라진 사전존재 결함을 발견 — 새 마이그 생성을 막아 동반 복구.
+- 영향: KRX/US 결산이 (date, market) 복합키로 분리 저장. trades·screening 집계 시장 격리(error/cycle는 system_metrics market 컬럼 부재로 합산 유지=기존과 동일). **KRX는 market=KRX 기본값·dashboard 필터로 동작 불변**(전체 1215 통과). sell_reason는 ADD VALUE IF NOT EXISTS라 재실행 no-op(stamp 불필요).
+- 검증 결과: pytest 전체 **1215 passed**(신규 2) | mypy strict ✅(102 files) | ruff ✅(변경분) | 마이그 오프라인 SQL 검증.
+- 비고: **운영자 액션 — alembic upgrade head**(sell_reason 재실행 no-op + daily 테이블 market 컬럼 추가) → main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. 과거 US 오염 결산 행(6/18 daily_perf 등)은 KRX 라벨 백필 — 필요 시 별도 데이터 정정.
+
+---
+
 ## [2026-06-18] 결산 멱등키 시장 네임스페이스 — US가 KRX 캘린더/결산을 선점·디듑하던 버그 (v0.17.1)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -60,18 +75,6 @@
 - 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작 시 반영. DB/스키마/마이그레이션 불변. KRX(`com.kis.autotrader`)는 영향 없음.
 
 ---
-
-## [2026-06-17] 본전스톱·정체청산 sell_reason enum 매핑 — NULL 기록 정합화 (v0.16.1)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/db/models.py: SellReason enum에 BREAKEVEN·STAGNATION 추가.
-  - src/engine.py: _SELL_REASON_MAP에 "본전스톱"→BREAKEVEN·"정체청산"→STAGNATION 매핑 2건.
-  - alembic/versions/c3d4e5f6a7b8_add_sell_reason_breakeven_stagnation.py: ALTER TYPE sell_reason_enum ADD VALUE (BREAKEVEN, STAGNATION). autocommit_block 사용(PG ADD VALUE 트랜잭션 제약).
-  - tests/test_engine_sell_reason.py: 본전스톱→BREAKEVEN·정체청산→STAGNATION 기록 + _SELL_REASON_MAP 완전성 회귀 4건.
-- 배경: v0.16.0 청산 로직(본전스톱/정체청산)이 _SELL_REASON_MAP에 매핑이 없어 sell_reason=NULL로 기록(6/17 아주IB투자 정체청산 +1.9%·보유180분 사례로 발견). 청산은 정상 작동하나 매도사유 집계·대시보드·룰엔진에서 누락. pytest가 risk.should_*만 검증해 엔진 DB 기록 경로 미테스트로 미발견.
-- 영향: 정체청산→STAGNATION·본전스톱→BREAKEVEN 정확 기록. 청산 동작·손익 불변(기록만 정합화). 매핑 완전성 테스트로 향후 청산사유 추가 시 NULL 회귀 차단. 기존 NULL 1건(6/17 아주IB) 백필은 운영자 승인 후 별도(6/15 흥아해운 NULL은 원인 미상).
-- 검증 결과: pytest 전체 **1126 passed**(신규 4) | mypy strict ✅(102 files) | ruff ✅(변경분) | 골든 11 통과.
-- 비고: 운영자 액션 — alembic upgrade head 적용 완료(→c3d4e5f6a7b8). `com.kis.autotrader` 재시작 시 매핑 반영. DB enum 값 추가는 비가역(downgrade no-op)·기존 데이터 영향 0.
 
 ---
 

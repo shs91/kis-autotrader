@@ -2772,10 +2772,13 @@ class TradingEngine:
         )
 
     def _enqueue_daily_summary(self, today_str: str) -> None:
-        """일일 요약 집계를 Worker Queue에 적재한다."""
+        """일일 요약 집계를 Worker Queue에 적재한다(시장별)."""
         self._task_queue.enqueue(
             task_type="daily_summary",
-            payload={"report_date": today_str},
+            payload={
+                "report_date": today_str,
+                "market": self._market.market_code,
+            },
             priority=1,
             idempotency_key=(
                 f"daily_summary_{self._market.market_code}_{today_str}"
@@ -2845,6 +2848,7 @@ class TradingEngine:
                 "profit_rate": float(balance.total_profit_rate) / 100.0,
                 "execution_count": len(trades),
                 "details": details,
+                "market": self._market.market_code,
             },
             priority=5,
             idempotency_key=f"daily_perf_{self._market.market_code}_{today_str}",
@@ -2857,7 +2861,7 @@ class TradingEngine:
         try:
             with get_session() as session:
                 repo = DailySummaryRepository(session)
-                repo.upsert_daily_summary(self._today())
+                repo.upsert_daily_summary(self._today(), self._market.market_code)
         except Exception:
             logger.exception("일일 요약 DB 적재 실패")
 
@@ -3151,8 +3155,9 @@ class TradingEngine:
             with get_session() as session:
                 perf_repo = DailyPerformanceRepository(session)
                 today = self._today()
+                mkt = self._market.market_code
 
-                existing = perf_repo.get_by_date(today)
+                existing = perf_repo.get_by_date(today, mkt)
                 if existing is not None:
                     logger.info("금일 성과 이미 존재, 스킵")
                     return
@@ -3178,8 +3183,9 @@ class TradingEngine:
                     rate=float(balance.total_profit_rate) / 100.0,
                     count=len(executions),
                     details=details,
+                    market=mkt,
                 )
-                logger.info("일일 성과 저장 완료: %s", today)
+                logger.info("일일 성과 저장 완료: %s [%s]", today, mkt)
 
         except Exception:
             logger.exception("일일 성과 저장 실패")

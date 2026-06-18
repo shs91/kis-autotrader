@@ -422,6 +422,7 @@ class DailyPerformanceRepository:
         rate: float,
         count: int,
         details: str | None = None,
+        market: str = "KRX",
     ) -> DailyPerformance:
         """일일 성과를 생성한다.
 
@@ -431,12 +432,14 @@ class DailyPerformanceRepository:
             rate: 수익률
             count: 체결건수
             details: 종목별 상세 내역 (JSON 문자열)
+            market: 시장 코드("KRX"|"US"). 기본 KRX(기존 동작 보존).
 
         Returns:
             생성된 일일 성과 객체
         """
         performance = DailyPerformance(
             date=perf_date,
+            market=market,
             total_profit_loss=total_pl,
             profit_rate=rate,
             execution_count=count,
@@ -445,23 +448,30 @@ class DailyPerformanceRepository:
         self._session.add(performance)
         self._session.flush()
         logger.info(
-            "일일 성과 생성: date=%s, pl=%.0f, rate=%.2f%%",
+            "일일 성과 생성: date=%s, market=%s, pl=%.0f, rate=%.2f%%",
             perf_date,
+            market,
             total_pl,
             rate * 100,
         )
         return performance
 
-    def get_by_date(self, perf_date: date) -> DailyPerformance | None:
-        """날짜로 일일 성과를 조회한다.
+    def get_by_date(
+        self, perf_date: date, market: str = "KRX"
+    ) -> DailyPerformance | None:
+        """(날짜, 시장)으로 일일 성과를 조회한다.
 
         Args:
             perf_date: 조회 날짜
+            market: 시장 코드("KRX"|"US"). 기본 KRX(기존 동작 보존).
 
         Returns:
             일일 성과 객체 또는 None
         """
-        stmt = select(DailyPerformance).where(DailyPerformance.date == perf_date)
+        stmt = select(DailyPerformance).where(
+            DailyPerformance.date == perf_date,
+            DailyPerformance.market == market,
+        )
         return self._session.execute(stmt).scalar_one_or_none()
 
     def get_recent(self, days: int = 30) -> list[DailyPerformance]:
@@ -1011,11 +1021,18 @@ class DailySummaryRepository:
         """
         self._session = session
 
-    def upsert_daily_summary(self, report_date: date) -> DailySummary:
-        """일일 요약을 trades 테이블 기반으로 집계하여 UPSERT한다.
+    def upsert_daily_summary(
+        self, report_date: date, market: str = "KRX"
+    ) -> DailySummary:
+        """일일 요약을 trades 테이블 기반으로 집계하여 (날짜, 시장)별로 UPSERT한다.
+
+        멀티마켓: trades·screening_results를 시장으로 필터해 KRX/US 결산을 분리한다.
+        단, error_count·cycle_count의 원천 system_metrics는 market 컬럼이 없어 전
+        시장 합산이다(프로세스 레벨 지표 — 시장 분리는 후속). 기본값 KRX는 기존 보존.
 
         Args:
             report_date: 리포트 날짜
+            market: 시장 코드("KRX"|"US")
 
         Returns:
             생성 또는 갱신된 DailySummary 객체
@@ -1023,10 +1040,14 @@ class DailySummaryRepository:
         start = datetime(report_date.year, report_date.month, report_date.day)
         end = start + timedelta(days=1)
 
-        # trades 집계
+        # trades 집계 (시장별)
         trades = list(
             self._session.execute(
-                select(Trade).where(Trade.traded_at >= start, Trade.traded_at < end)
+                select(Trade).where(
+                    Trade.traded_at >= start,
+                    Trade.traded_at < end,
+                    Trade.market == market,
+                )
             ).scalars().all()
         )
 
@@ -1044,12 +1065,13 @@ class DailySummaryRepository:
         take_profit = sum(1 for t in sells if t.sell_reason == SellReason.TAKE_PROFIT)
         strategy_sell = sum(1 for t in sells if t.sell_reason == SellReason.STRATEGY)
 
-        # screening_results 집계
+        # screening_results 집계 (시장별)
         screenings = list(
             self._session.execute(
                 select(ScreeningResult).where(
                     ScreeningResult.screened_at >= start,
                     ScreeningResult.screened_at < end,
+                    ScreeningResult.market == market,
                 )
             ).scalars().all()
         )
@@ -1074,12 +1096,15 @@ class DailySummaryRepository:
             )
         ).scalar_one()
 
-        # UPSERT
-        stmt = select(DailySummary).where(DailySummary.report_date == report_date)
+        # UPSERT (날짜, 시장)
+        stmt = select(DailySummary).where(
+            DailySummary.report_date == report_date,
+            DailySummary.market == market,
+        )
         summary = self._session.execute(stmt).scalar_one_or_none()
 
         if summary is None:
-            summary = DailySummary(report_date=report_date)
+            summary = DailySummary(report_date=report_date, market=market)
             self._session.add(summary)
 
         summary.total_buy_count = buy_count
@@ -1106,16 +1131,22 @@ class DailySummaryRepository:
         )
         return summary
 
-    def get_by_date(self, report_date: date) -> DailySummary | None:
-        """날짜로 일일 요약을 조회한다.
+    def get_by_date(
+        self, report_date: date, market: str = "KRX"
+    ) -> DailySummary | None:
+        """(날짜, 시장)으로 일일 요약을 조회한다.
 
         Args:
             report_date: 조회 날짜
+            market: 시장 코드("KRX"|"US"). 기본 KRX(기존 동작 보존).
 
         Returns:
             DailySummary 객체 또는 None
         """
-        stmt = select(DailySummary).where(DailySummary.report_date == report_date)
+        stmt = select(DailySummary).where(
+            DailySummary.report_date == report_date,
+            DailySummary.market == market,
+        )
         return self._session.execute(stmt).scalar_one_or_none()
 
 
