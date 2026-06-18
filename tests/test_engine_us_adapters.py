@@ -433,6 +433,36 @@ def test_sync_portfolio_payload_market_currency_and_key_us() -> None:
     assert "_US_" in call.kwargs["idempotency_key"]
 
 
+def _enqueue_key(engine: TradingEngine, method: str, **kw: object) -> str:
+    engine._task_queue = MagicMock()
+    getattr(engine, method)(**kw)
+    return str(engine._task_queue.enqueue.call_args.kwargs["idempotency_key"])
+
+
+def test_settlement_idempotency_keys_market_namespaced() -> None:
+    """결산 enqueue 멱등키가 시장 네임스페이스 — US가 KRX 결산을 선점·디듑하던 버그 차단."""
+    bal = Balance(
+        deposit=0, total_eval_amount=0, total_profit_loss=0,
+        total_profit_rate=0.0, holdings=[], raw_response={},
+    )
+    cases: list[tuple[str, dict[str, object]]] = [
+        ("_enqueue_calendar_event",
+         {"trades": [], "realized_profit_loss": 0, "realized_rate": 0.0}),
+        ("_enqueue_telegram_daily_summary",
+         {"balance": bal, "buy_count": 0, "sell_count": 0,
+          "realized_profit_loss": 0, "realized_rate": 0.0}),
+        ("_enqueue_telegram_diagnostics", {"diag": {"deposit": 0}}),
+        ("_enqueue_daily_summary", {"today_str": "2026-06-18"}),
+        ("_enqueue_daily_performance", {"balance": bal, "trades": []}),
+    ]
+    for method, kw in cases:
+        us_key = _enqueue_key(_us_engine(), method, **kw)
+        krx_key = _enqueue_key(TradingEngine(watchlist=["005930"]), method, **kw)
+        assert "_US_" in us_key, f"{method}: US 키 네임스페이스 누락 ({us_key})"
+        assert "_KRX_" in krx_key, f"{method}: KRX 키 네임스페이스 누락 ({krx_key})"
+        assert us_key != krx_key, f"{method}: KRX/US 멱등키 충돌 ({us_key})"
+
+
 def test_board_label_krx_keeps_literal_us_uses_market_code() -> None:
     krx = TradingEngine(watchlist=["005930"])
     assert krx._board_label("KOSPI") == "KOSPI"  # market_stats 필터 호환

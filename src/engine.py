@@ -308,6 +308,15 @@ class TradingEngine:
         """
         return format_money(amount, self._market.currency)
 
+    def _today(self) -> date:
+        """시장 타임존 기준 '오늘' 날짜.
+
+        결산/일일 집계의 날짜 기준. ``date.today()``는 프로세스 로컬(KST)이라 US
+        프로세스가 KST 자정 교차로 잘못된 날짜를 쓰던 문제를 막는다(US는 ET 세션
+        날짜). KRX는 self._tz=Asia/Seoul이라 기존 동작 불변.
+        """
+        return datetime.now(self._tz).date()
+
     def _norm_price(self, value: float) -> float:
         """DB/체결가 경계 가격 정규화. KRX(precision 0)는 int, US는 round(HALF_UP).
 
@@ -974,7 +983,7 @@ class TradingEngine:
             # DB trades 테이블을 기준으로 계산한다. KIS executions는 부가 로깅
             # 용도로만 사용.
             kis_executions = await self._get_executions()
-            today = date.today()
+            today = self._today()  # 시장 타임존 기준(US=ET 세션 날짜)
             trades = self._load_today_trades(today)
 
             buy_count = sum(1 for t in trades if t.trade_type == TradeType.BUY)
@@ -1074,7 +1083,7 @@ class TradingEngine:
             return
 
         try:
-            today = date.today()
+            today = self._today()
             with get_session() as session:
                 repo = ScreeningResultRepository(session)
                 # 공유 screening_results를 시장별로 격리 — US 엔진이 KRX 발굴
@@ -2625,7 +2634,7 @@ class TradingEngine:
         없으면 SCREENING_MISS로 기록한다. 매수 본 흐름과 분리(예외 시 swallow).
         """
         try:
-            today = date.today()
+            today = self._today()
             with get_session() as session:
                 repo = ScreeningResultRepository(session)
                 results = repo.get_by_date(
@@ -2696,7 +2705,7 @@ class TradingEngine:
         하므로 평가손익(``balance.total_profit_loss``)이 아닌 DB trades
         테이블 기반 실현손익/실현수익률을 전달한다.
         """
-        today = date.today()
+        today = self._today()
         details_json = json.dumps(
             self._group_trades_for_calendar(trades),
             ensure_ascii=False,
@@ -2711,7 +2720,9 @@ class TradingEngine:
                 "details_json": details_json,
             },
             priority=1,
-            idempotency_key=f"calendar_{today.isoformat()}",
+            # 멱등키를 시장 네임스페이스 — US 결산(KST 새벽)이 같은 날짜 KRX 캘린더를
+            # 선점·디듑하던 버그 차단. KRX/US가 각자 이벤트를 등록한다.
+            idempotency_key=f"calendar_{self._market.market_code}_{today.isoformat()}",
         )
 
     def _enqueue_telegram_daily_summary(
@@ -2729,7 +2740,7 @@ class TradingEngine:
         평가손익(balance.total_profit_loss, total_profit_rate)이 아닌 DB trades
         테이블에서 집계한 실현손익/수익률을 전달한다.
         """
-        today_str = date.today().isoformat()
+        today_str = self._today().isoformat()
         _ = balance  # 현재 payload에 balance 필드는 포함하지 않음 (호환 유지)
         self._task_queue.enqueue(
             task_type="telegram_notify",
@@ -2745,17 +2756,19 @@ class TradingEngine:
                 },
             },
             priority=3,
-            idempotency_key=f"telegram_summary_{today_str}",
+            idempotency_key=(
+                f"telegram_summary_{self._market.market_code}_{today_str}"
+            ),
         )
 
     def _enqueue_telegram_diagnostics(self, diag: dict[str, Any]) -> None:
         """장 마감 매매 진단 알림을 Worker Queue에 적재한다(결산 직후 별도 1건)."""
-        today_str = date.today().isoformat()
+        today_str = self._today().isoformat()
         self._task_queue.enqueue(
             task_type="telegram_notify",
             payload={"notify_type": "diagnostics", "message_data": {"diag": diag}},
             priority=3,
-            idempotency_key=f"telegram_diag_{today_str}",
+            idempotency_key=f"telegram_diag_{self._market.market_code}_{today_str}",
         )
 
     def _enqueue_daily_summary(self, today_str: str) -> None:
@@ -2764,7 +2777,9 @@ class TradingEngine:
             task_type="daily_summary",
             payload={"report_date": today_str},
             priority=1,
-            idempotency_key=f"daily_summary_{today_str}",
+            idempotency_key=(
+                f"daily_summary_{self._market.market_code}_{today_str}"
+            ),
         )
 
     def _enqueue_sync_portfolio(self, balance: Balance) -> None:
@@ -2789,7 +2804,7 @@ class TradingEngine:
             priority=1,
             # 시장별 네임스페이스 — KRX/US 분리 프로세스가 같은 날 키 충돌하지 않도록.
             idempotency_key=(
-                f"sync_portfolio_{self._market.market_code}_{date.today().isoformat()}"
+                f"sync_portfolio_{self._market.market_code}_{self._today().isoformat()}"
             ),
         )
 
@@ -2821,17 +2836,18 @@ class TradingEngine:
         # DB daily_performances.profit_rate 컬럼은 비율(ratio) 단위로 저장한다
         # (예: 2.5% → 0.025). KIS API는 퍼센트 단위(ASST_ICDC_ERNG_RT)로
         # 값을 주므로 100으로 나눠 통일한다.
+        today_str = self._today().isoformat()
         self._task_queue.enqueue(
             task_type="daily_performance",
             payload={
-                "trade_date": date.today().isoformat(),
+                "trade_date": today_str,
                 "total_profit_loss": float(balance.total_profit_loss),
                 "profit_rate": float(balance.total_profit_rate) / 100.0,
                 "execution_count": len(trades),
                 "details": details,
             },
             priority=5,
-            idempotency_key=f"daily_perf_{date.today().isoformat()}",
+            idempotency_key=f"daily_perf_{self._market.market_code}_{today_str}",
         )
 
     # ── 레거시 직접 호출 (Worker 미가동 시 폴백) ─────────
@@ -2841,7 +2857,7 @@ class TradingEngine:
         try:
             with get_session() as session:
                 repo = DailySummaryRepository(session)
-                repo.upsert_daily_summary(date.today())
+                repo.upsert_daily_summary(self._today())
         except Exception:
             logger.exception("일일 요약 DB 적재 실패")
 
@@ -2857,7 +2873,7 @@ class TradingEngine:
         전일 대비 자산증감수익률)를 그대로 사용한다.
         """
         try:
-            today = date.today()
+            today = self._today()
             # 시장별 캘린더 이벤트 — US 이벤트에 KRX 거래·원화가 섞이지 않도록 격리.
             trades = self._load_today_trades(today, market=self._market.market_code)
 
@@ -3134,7 +3150,7 @@ class TradingEngine:
         try:
             with get_session() as session:
                 perf_repo = DailyPerformanceRepository(session)
-                today = date.today()
+                today = self._today()
 
                 existing = perf_repo.get_by_date(today)
                 if existing is not None:

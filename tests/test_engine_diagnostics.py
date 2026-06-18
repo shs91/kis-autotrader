@@ -10,8 +10,14 @@ from src.engine import TradingEngine
 
 def test_enqueue_telegram_diagnostics_payload() -> None:
     """진단 dict가 telegram_notify(diagnostics) 태스크로 적재된다."""
+    from zoneinfo import ZoneInfo
+
+    from src.market.profile import KRX_PROFILE
+
     engine = TradingEngine.__new__(TradingEngine)
     engine._task_queue = MagicMock()  # type: ignore[attr-defined]
+    engine._market = KRX_PROFILE  # type: ignore[attr-defined]
+    engine._tz = ZoneInfo(KRX_PROFILE.timezone)  # type: ignore[attr-defined]
 
     diag = {
         "trade_date": date(2026, 6, 8).isoformat(),

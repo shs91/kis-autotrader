@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-06-18] 결산 멱등키 시장 네임스페이스 — US가 KRX 캘린더/결산을 선점·디듑하던 버그 (v0.17.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/engine.py: _today()=datetime.now(self._tz).date()(시장 타임존 날짜, US=ET). post_market·결산 enqueue 5종(calendar/telegram_summary/telegram_diag/daily_summary/daily_perf)의 idempotency_key를 `{type}_{market_code}_{date}`로 시장 네임스페이스(sync_portfolio는 P3c-4에서 이미 적용). 결산/스크리닝/일일성과 날짜를 _today()로 통일.
+  - tests: test_settlement_idempotency_keys_market_namespaced(KRX/US 키 분리·충돌 검증), diagnostics 테스트에 _market/_tz 주입.
+- 배경: 결산 enqueue 멱등키가 시장 네임스페이스 없이 `calendar_{date}`라, US 프로세스가 ET 16:10 결산(=KST 새벽)에 date.today()=KST 다음날로 0건 태스크를 먼저 등록 → 같은 날짜 KRX 결산(15:40)의 실제 enqueue가 멱등 디듑됨. 6/18 KRX 10건(+17,332원)인데 캘린더가 "0건 +0원"(US가 calendar_2026-06-18을 KST 05:10에 선점, 태스크 id 397124 exec_cnt=0). 캘린더 외 telegram_summary·telegram_diag·daily_perf도 동일 선점.
+- 영향: KRX/US가 각자 결산 이벤트/알림을 등록(키 분리). US date.today()의 KST 오인을 _today()로 교정(US=ET 세션 날짜). **KRX는 self._tz=Asia/Seoul·market_code=KRX라 날짜·키 모두 기존과 동일**(동작 불변). daily_summary 테이블 자체 격리(market 컬럼)는 후속(#4). 과거 잘못 등록된 6/18 이벤트는 운영자 수동 정리.
+- 검증 결과: pytest 전체 **1213 passed**(신규 1) | mypy strict ✅(102 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. DB/스키마 불변. 오늘(6/18) KRX 캘린더 이벤트는 별도 재생성/정리 필요.
+
+---
+
 ## [2026-06-18] US 통화 인지 — present-balance(외화예수금·총손익·환율) + 로그 통화 단위 (v0.17.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -60,20 +72,6 @@
 - 영향: 정체청산→STAGNATION·본전스톱→BREAKEVEN 정확 기록. 청산 동작·손익 불변(기록만 정합화). 매핑 완전성 테스트로 향후 청산사유 추가 시 NULL 회귀 차단. 기존 NULL 1건(6/17 아주IB) 백필은 운영자 승인 후 별도(6/15 흥아해운 NULL은 원인 미상).
 - 검증 결과: pytest 전체 **1126 passed**(신규 4) | mypy strict ✅(102 files) | ruff ✅(변경분) | 골든 11 통과.
 - 비고: 운영자 액션 — alembic upgrade head 적용 완료(→c3d4e5f6a7b8). `com.kis.autotrader` 재시작 시 매핑 반영. DB enum 값 추가는 비가역(downgrade no-op)·기존 데이터 영향 0.
-
----
-
-## [2026-06-16] 본전 스톱 + 정체 청산 — 이익 보호 & 횡보 슬롯 회수 (v0.16.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/config.py: StrategyConfig.breakeven_activation_ratio(env BREAKEVEN_ACTIVATION_RATIO, 기본 0.02, 0=비활성)·stagnation_hours(env STAGNATION_HOURS, 기본 3.0, 0=비활성).
-  - src/strategy/risk.py: should_breakeven_stop(고점이 +X%(기본 2%) 도달한 뒤 현재가가 평단 이하로 회귀 시 본전 청산) + should_stagnation_exit(보유 N시간(기본 3h) 초과 + 트레일링 미무장(고점<+5%) 시 정체 청산). __init__에 두 파라미터 추가(None→settings 폴백).
-  - src/engine.py: _held_since(종목별 최초 보유 KST 시각, tz-aware _KST) 추적 + _held_minutes 헬퍼. _process_held_stock 청산 사다리에 4순위 본전스톱·5순위 정체청산 삽입(손절>마감청산>트레일링/익절>본전스톱>정체청산>전략매도). pre_market·_execute_sell에서 리셋/pop. 골든 G01(engine naive datetime 금지) 준수.
-  - tests/test_strategy/test_risk.py: 신규 8건(본전스톱 4·정체청산 4).
-- 배경: 06-16 손절 2%→3% 완화 후에도 횡보 종목이 슬롯(MAX_POSITION_RATIO 0.3 → ~3개)을 장시간 점유해 회전율 병목. 트레일링은 +5% 무장 전엔 무방비라 +2~4% 갔다 본전 회귀하는 이익 되돌림을 못 막음(쿨다운·손절 모두 사각).
-- 영향: (1) 본전스톱 — 고점 +2% 찍은 종목이 평단까지 밀리면 손실 전환 전 청산해 이익 되돌림 방지. (2) 정체청산 — 3시간 보유에도 트레일링 못 켠 죽은 종목 정리 → 슬롯 회수로 회전 가속. 손절·마감·트레일링·익절이 모두 우선이라 정상 추세·이익 포지션엔 영향 없음. default-ON.
-- 검증 결과: pytest 전체 **1086 passed**(신규 8) | mypy strict ✅(96 files) | ruff ✅(변경분) | 골든 G01 통과.
-- 비고: 운영자 액션 — `com.kis.autotrader` 재시작 시 반영. `BREAKEVEN_ACTIVATION_RATIO=0`·`STAGNATION_HOURS=0`으로 개별 비활성, config_overrides로 튜닝. DB/스키마 불변.
 
 ---
 
