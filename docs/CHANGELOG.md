@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-06-18] Telegram 알림 통화 인지화 — US 알림 "원"→"$" (통화 일관성 마무리) (v0.18.1)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/notify/formatter.py: format_buy/sell/daily_summary/diagnostics에 currency 파라미터(기본 KRW) + format_money 라우팅. BuyDetail/SellDetail 금액 필드 float화(USD 센트). 잔고 라인은 balance.currency 사용.
+  - src/notify/telegram.py: notify_buy/sell/daily_summary/diagnostics에 currency 전달. notify_sell 손익은 KRW만 int(USD 센트 보존).
+  - src/engine.py: 텔레그램 enqueue 6종(buy×2·sell×2·daily_summary·diagnostics) message_data에 currency=self._market.currency 배선.
+  - tests: US 통화("$") 회귀 4건 + _FakeBalance.currency.
+- 배경: #61이 엔진 로그를 통화 인지화했으나 Telegram 포맷터는 엔진→태스크큐→워커→노티파이어 경유라 currency plumbing이 필요해 후속으로 미뤘던 항목. US 매수/매도/결산/진단 알림이 USD를 전부 "원"으로 표기해 운영자 통화 혼동.
+- 영향: US 알림이 "$"+센트로 표기. **KRX는 currency=KRW 기본값·format_money(KRW) 정수+"원"으로 바이트 동일**(전체 1219 통과, notify 기존 테스트 무회귀). 멀티마켓 통화 인지화 3층(로그 #61·결산테이블 #63·알림 #이번) 완결.
+- 검증 결과: pytest 전체 **1219 passed**(신규 4) | mypy strict ✅(102 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변.
+
+---
+
 ## [2026-06-18] 결산 테이블 시장 격리 — daily_summary/daily_performances market 컬럼 + alembic 중복 head 복구 (v0.18.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -62,17 +76,6 @@
 - 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변. KRX(`com.kis.autotrader`)는 무영향.
 
 ---
-
-## [2026-06-18] 스크리닝 결과 시장별 격리 — US가 KRX 발굴 종목 읽던 누수 차단 (v0.16.2)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/db/repository.py: ScreeningResultRepository.get_by_date(target_date, market="KRX", tz="Asia/Seoul") — market 필터 + 날짜 경계를 시장 타임존 기준 산정. 기본값 KRX 불변.
-  - src/engine.py: _screen_stocks·_record_screening_match_metric이 self._market의 market_code·timezone 주입.
-  - tests/test_db/test_repository.py: test_get_by_date_filters_by_market(KRX↔US 격리 회귀 1건).
-- 배경: 멀티마켓 공유 screening_results 테이블에서 get_by_date가 시장 필터 없이 당일 전체 행 반환 → US 엔진(MARKET=US)이 KRX ScreeningWorker 발굴 종목(한국 종목코드)을 읽어 "[거래소 미해결] 003280 — 기본 거래소 NASD 사용" 류 경고 양산 + US API 예산 낭비(6/18 logs/autotrader.us.out.log 관측).
-- 영향: US는 US-market 행만 조회(현재 0건 → watchlist_us 폴백). KRX는 market="KRX" 기본값으로 기존 행과 일치 → 동작 불변(byte-invariant). 한국 종목은 US 시세조회/가격하한에서 걸려 오주문은 없었으나(비위험) API 낭비·로그 오염 해소.
-- 검증 결과: pytest 전체 **1196 passed**(신규 1) | mypy strict ✅(변경 2 files) | ruff ✅(변경분).
-- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작 시 반영. DB/스키마/마이그레이션 불변. KRX(`com.kis.autotrader`)는 영향 없음.
 
 ---
 

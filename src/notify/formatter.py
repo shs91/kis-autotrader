@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.market.profile import format_money
+
 if TYPE_CHECKING:
     from src.api.account import Balance, Execution
 
@@ -20,7 +22,7 @@ if TYPE_CHECKING:
 class BuyDetail:
     """매수 알림에 필요한 부가 정보."""
 
-    total_amount: int = 0  # 매수 총액 (quantity × price)
+    total_amount: float = 0  # 매수 총액 (quantity × price). 해외는 USD float.
     strategy: str = ""  # 전략명 (예: 이동평균교차(5/20))
     reason: str = ""  # 시그널 근거 (예: 골든크로스)
     confidence: float = 0.0  # 시그널 신뢰도 (0.0~1.0)
@@ -30,9 +32,9 @@ class BuyDetail:
 class SellDetail:
     """매도 알림에 필요한 부가 정보."""
 
-    total_amount: int = 0  # 매도 총액
+    total_amount: float = 0  # 매도 총액. 해외는 USD float.
     avg_price: float = 0.0  # 평균 매입가
-    profit_loss: int = 0  # 실현 손익
+    profit_loss: float = 0  # 실현 손익. 해외는 USD float.
     profit_rate: float = 0.0  # 실현 수익률 (%)
 
 
@@ -43,16 +45,17 @@ def format_buy(
     stock_name: str,
     stock_code: str,
     quantity: int,
-    price: int,
+    price: float,
     detail: BuyDetail | None = None,
+    currency: str = "KRW",
 ) -> str:
-    """매수 체결 알림 메시지를 생성한다."""
+    """매수 체결 알림 메시지를 생성한다(통화 인지)."""
     total = detail.total_amount if detail and detail.total_amount else quantity * price
     lines = [
         f"\U0001f4c8 <b>[매수]</b> {stock_name}({stock_code})",
         "─" * 20,
-        f"• 수량: {quantity}주 × {price:,}원",
-        f"• 금액: {total:,}원",
+        f"• 수량: {quantity}주 × {format_money(price, currency)}",
+        f"• 금액: {format_money(total, currency)}",
     ]
     if detail and detail.strategy:
         lines.append(f"• 전략: {detail.strategy}")
@@ -66,11 +69,12 @@ def format_sell(
     stock_name: str,
     stock_code: str,
     quantity: int,
-    price: int,
+    price: float,
     reason: str,
     detail: SellDetail | None = None,
+    currency: str = "KRW",
 ) -> str:
-    """매도 체결 알림 메시지를 생성한다."""
+    """매도 체결 알림 메시지를 생성한다(통화 인지)."""
     if reason == "손절":
         emoji = "\U0001f534"  # 빨간 원
         tag = "손절"
@@ -85,15 +89,16 @@ def format_sell(
     lines = [
         f"{emoji} <b>[{tag}]</b> {stock_name}({stock_code})",
         "─" * 20,
-        f"• 수량: {quantity}주 × {price:,}원",
-        f"• 금액: {total:,}원",
+        f"• 수량: {quantity}주 × {format_money(price, currency)}",
+        f"• 금액: {format_money(total, currency)}",
     ]
     if detail and detail.avg_price > 0:
-        lines.append(f"• 매입가: {detail.avg_price:,.0f}원")
+        lines.append(f"• 매입가: {format_money(detail.avg_price, currency)}")
     if detail and detail.profit_loss != 0:
         sign = "+" if detail.profit_loss > 0 else ""
         lines.append(
-            f"• 손익: {sign}{detail.profit_loss:,}원 ({sign}{detail.profit_rate:.2f}%)"
+            f"• 손익: {sign}{format_money(detail.profit_loss, currency)}"
+            f" ({sign}{detail.profit_rate:.2f}%)"
         )
     if reason not in ("손절", "익절"):
         lines.append(f"• 사유: {reason}")
@@ -133,6 +138,7 @@ def format_daily_summary(
     balance: Balance | None = None,
     version: str | None = None,
     today_bumps: list[tuple[str, str, str]] | None = None,
+    currency: str = "KRW",
 ) -> str:
     """일일 결산 알림 메시지를 생성한다.
 
@@ -166,7 +172,7 @@ def format_daily_summary(
         lines.append(f"• 체결: {count}건")
 
     lines.append(
-        f"• 실현손익: {sign}{profit_loss:,}원 ({sign}{rate:.2f}%)"
+        f"• 실현손익: {sign}{format_money(profit_loss, currency)} ({sign}{rate:.2f}%)"
     )
 
     # 체결 내역 (최대 10건)
@@ -177,7 +183,8 @@ def format_daily_summary(
         for e in display:
             side_emoji = "\U0001f7e2" if e.side == "매수" else "\U0001f534"
             lines.append(
-                f"  {side_emoji} {e.side} {e.stock_name} {e.quantity}주 @ {e.price:,}원"
+                f"  {side_emoji} {e.side} {e.stock_name} {e.quantity}주"
+                f" @ {format_money(e.price, currency)}"
             )
         if len(executions) > 10:
             lines.append(f"  ... 외 {len(executions) - 10}건")
@@ -188,10 +195,14 @@ def format_daily_summary(
         bal_rate = eval_profit_rate(balance)
         lines.append("")
         lines.append("\U0001f4b0 <b>계좌 현황</b>")
-        lines.append(f"  • 예수금: {balance.deposit:,}원")
-        lines.append(f"  • 평가금: {balance.total_eval_amount:,}원")
+        # 잔고는 balance.currency(시장 통화)로 — KRX KRW, US USD.
+        lines.append(f"  • 예수금: {format_money(balance.deposit, balance.currency)}")
         lines.append(
-            f"  • 평가손익: {bal_sign}{balance.total_profit_loss:,}원"
+            f"  • 평가금: {format_money(balance.total_eval_amount, balance.currency)}"
+        )
+        lines.append(
+            f"  • 평가손익: {bal_sign}"
+            f"{format_money(balance.total_profit_loss, balance.currency)}"
             f" ({bal_sign}{bal_rate:.2f}%)"
         )
         if balance.holdings:
@@ -237,11 +248,12 @@ _REJECT_LABELS: dict[str, str] = {
 }
 
 
-def format_diagnostics(diag: dict[str, Any]) -> str:
-    """장 마감 매매 진단 알림 메시지를 생성한다(무음).
+def format_diagnostics(diag: dict[str, Any], currency: str = "KRW") -> str:
+    """장 마감 매매 진단 알림 메시지를 생성한다(무음, 통화 인지).
 
     Args:
         diag: ``build_daily_diagnostics`` 결과 dict.
+        currency: 예수금 표기 통화("KRW"|"USD").
     """
     trade_count = diag["trade_count"]
     emoji = "\U0001f4c8" if trade_count > 0 else "\U0001f6ab"
@@ -276,7 +288,10 @@ def format_diagnostics(diag: dict[str, Any]) -> str:
         lines.append("⛔ 매수게이트: 신호 0이라 도달 전 차단")
 
     lines.append("")
-    lines.append(f"\U0001f4b0 예수금 {diag['deposit']:,}원 · 보유 {diag['holdings']}종목")
+    lines.append(
+        f"\U0001f4b0 예수금 {format_money(diag['deposit'], currency)}"
+        f" · 보유 {diag['holdings']}종목"
+    )
     return "\n".join(lines)
 
 

@@ -114,11 +114,12 @@ class TelegramNotifier:
         stock_name: str,
         stock_code: str,
         quantity: int,
-        price: int,
+        price: float,
         *,
         strategy: str = "",
         reason: str = "",
         confidence: float = 0.0,
+        currency: str = "KRW",
     ) -> None:
         """매수 체결 알림을 전송한다 (무음).
 
@@ -130,6 +131,7 @@ class TelegramNotifier:
             strategy: 전략명
             reason: 시그널 근거
             confidence: 시그널 신뢰도
+            currency: 금액 표기 통화("KRW"|"USD")
         """
         detail = BuyDetail(
             total_amount=quantity * price,
@@ -137,7 +139,9 @@ class TelegramNotifier:
             reason=reason,
             confidence=confidence,
         )
-        await self.send(format_buy(stock_name, stock_code, quantity, price, detail))
+        await self.send(
+            format_buy(stock_name, stock_code, quantity, price, detail, currency)
+        )
 
     # ── 매도 알림 (손절은 긴급) ───────────────────────────
 
@@ -146,10 +150,11 @@ class TelegramNotifier:
         stock_name: str,
         stock_code: str,
         quantity: int,
-        price: int,
+        price: float,
         reason: str,
         *,
         avg_price: float = 0.0,
+        currency: str = "KRW",
     ) -> None:
         """매도 체결 알림을 전송한다. 손절은 긴급.
 
@@ -160,10 +165,13 @@ class TelegramNotifier:
             price: 체결가
             reason: 매도 사유
             avg_price: 평균 매입가 (0이면 손익 미표시)
+            currency: 금액 표기 통화("KRW"|"USD")
         """
         detail: SellDetail | None = None
         if avg_price > 0:
-            profit_loss = int((price - avg_price) * quantity)
+            # KRW는 정수 손익, USD는 센트 보존(float).
+            raw_pl = (price - avg_price) * quantity
+            profit_loss = raw_pl if currency != "KRW" else int(raw_pl)
             profit_rate = ((price - avg_price) / avg_price) * 100
             detail = SellDetail(
                 total_amount=quantity * price,
@@ -174,7 +182,9 @@ class TelegramNotifier:
 
         is_urgent = reason == "손절"
         await self.send(
-            format_sell(stock_name, stock_code, quantity, price, reason, detail),
+            format_sell(
+                stock_name, stock_code, quantity, price, reason, detail, currency
+            ),
             urgent=is_urgent,
         )
 
@@ -191,6 +201,7 @@ class TelegramNotifier:
         sell_count: int = 0,
         executions: list[Execution] | None = None,
         balance: Balance | None = None,
+        currency: str = "KRW",
     ) -> None:
         """일일 결산 알림을 전송한다 (무음).
 
@@ -203,6 +214,7 @@ class TelegramNotifier:
             sell_count: 매도 건수
             executions: 체결 내역 목록
             balance: 잔고 정보
+            currency: 금액 표기 통화("KRW"|"USD")
         """
         version = _safe_read_version()
         today_bumps = _query_today_bumps(trade_date)
@@ -215,6 +227,7 @@ class TelegramNotifier:
                 balance=balance,
                 version=version,
                 today_bumps=today_bumps,
+                currency=currency,
             )
         )
 
@@ -230,9 +243,11 @@ class TelegramNotifier:
         """시스템 알림을 전송한다 (무음)."""
         await self.send(format_system(message))
 
-    async def notify_diagnostics(self, diag: dict[str, Any]) -> None:
+    async def notify_diagnostics(
+        self, diag: dict[str, Any], currency: str = "KRW"
+    ) -> None:
         """장 마감 매매 진단 알림을 전송한다 (무음)."""
-        await self.send(format_diagnostics(diag))
+        await self.send(format_diagnostics(diag, currency))
 
 
 def _safe_read_version() -> str | None:
