@@ -6,6 +6,23 @@
 
 ---
 
+## [2026-06-19] 보유종목 실시간 가격 vs 매수가 비교 차트 (v0.21.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/db/models.py + alembic: 신규 `price_snapshots` 테이블(stock_code·market·currency·price Numeric·captured_at, 복합 인덱스 (stock_code,captured_at)·captured_at). 보유종목 폴링 현재가 시계열.
+  - src/db/repository.py: `PriceSnapshotRepository`(add/get_recent/delete_older_than).
+  - src/worker/handlers.py + main.py: `PriceSnapshotHandler`("price_snapshot" task_type) — 워커가 INSERT.
+  - src/engine.py: `_enqueue_price_snapshot` — _process_stock 보유 분기에서만 현재가를 워커 큐로 적재(추가 API 0, 매매 무영향, priority=0). KRX/US 시장 인지(_norm_price·market_code·currency).
+  - src/scheduler/jobs.py: 일 1회(04:30) 7일 초과 스냅샷 정리 잡(시장 무관 멱등).
+  - dashboard/positions_data.py + pages/positions.py: Altair 차트 — 가격 line + 평단가/손절선/익절선/peak 수평선 + 매수▲/매도▼ 체결마커 + 손익률, 통화 인지(KRX ₩/US $). 데이터 구성은 순수 함수 분리(테스트 가능).
+  - tests: 모델·repository·핸들러·엔진 enqueue·정리잡·차트 데이터 회귀 17건.
+- 배경: 운영 중 "내가 산 가격 대비 지금 어디쯤이고 어디서 팔릴지"를 한눈에 보는 화면 요구. 웹소켓(dead code·US 미지원·차단 위험) 대신 엔진이 이미 폴링하는 현재가를 시계열 적재(폴링 재사용).
+- 영향: **KRX 매매/결산 완전 불변**(신규 테이블·경로, 전체 1262 passed). 보유종목만 스냅샷(범위 한정), 7일 롤링으로 저장량 유계. 대시보드 신규 positions 페이지.
+- 검증 결과: pytest 전체 **1262 passed**(신규 17) | mypy strict ✅(102 files) | ruff ✅(변경분) | 11 TDD 커밋 + 태스크별 스펙·품질 적대검토 + opus 최종 리뷰 GO.
+- 비고: 운영자 액션 — main 머지 후 pull → `alembic upgrade head`(price_snapshots 생성, **DB 변경**) → KRX·US 재시작(스냅샷 수집·정리잡 시작). 대시보드 호스트에 altair 필요(streamlit 번들로 보통 설치됨). 장중 ~10초 단위 누적.
+
+---
+
 ## [2026-06-19] US 실거래 경로 하드닝 5종 — 사이징/손절차단/결산통화/연패정밀도/중복주문 (v0.20.0)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -55,17 +72,3 @@
 - 영향: US는 ET 기준으로 마감 컷오프 판정 → 개장~14:30 ET 매수 허용, 14:30 ET 이후 차단(1.5h 전). **KRX는 tz=Asia/Seoul(시스템 KST 동일)·.hour 동일로 동작 불변**(전체 1228 통과). 마감 청산 게이트·익절 하향(같은 메서드)도 US에서 정합화.
 - 검증 결과: pytest 전체 **1228 passed**(신규 3) | mypy strict ✅ | ruff ✅ | 라이브 발현 확인(BUY_REJECT=MARKET_CLOSE_GUARD).
 - 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 매수 정상화. DB/마이그 불변. US 라이브 활성 중이라 조기 배포 권장. 컷오프 14:30은 KRX/US 공유(US=close 1.5h 전) — 필요 시 US 전용 컷오프 별도.
-
----
-
-## [2026-06-18] 해외 거래량순위 필수 파라미터 누락 수정 — US 스크리너 발굴 0 라이브 블로커 (v0.19.1)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/api/overseas_quote.py: get_ranking params에 PRC1/PRC2(가격범위)·KEYB(연속조회키) 추가 — 빈값이어도 필수. OverseasRankItem.name(ename 영문명) 추가.
-  - src/worker/screener.py: _run_screening_us가 r.name(영문명)으로 stock_name 보강.
-  - tests: get_ranking 필수 파라미터 회귀 가드 + name(ename) 파싱.
-- 배경: US 동적 스크리너(#65) 라이브 활성화(6/18 22:25 KST) 후 발굴 0 관측. 진단 결과 trade-vol 순위 API(HHDFS76310010)가 PRC1 누락으로 OPSQ2001 "ERROR INPUT FIELD NOT FOUND [PRC1]" 반환 → output2 부재 → 빈 결과 → _run_screening_us가 all_items 비어 로그 없이 early return. P2 get_ranking의 잠복 버그(스크리너가 첫 실호출자라 노출). 파라미터 보강 시 output2 100종목 정상(msg_cd MCA00000).
-- 영향: US 스크리너가 거래소별 100종목 순위를 정상 발굴. 응답의 ename(영문명) 활용으로 종목명도 심볼 대신 정식명(예: ADITXT INC). KRX 무관(해외 전용 API). opt-in이라 SCREENING_US_ENABLED=true에서만 경로 활성.
-- 검증 결과: pytest 전체 **1225 passed**(신규 회귀 가드) | mypy strict ✅ | ruff ✅ | 라이브 진단으로 output2 100종목 실측 확인.
-- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 스크리너 발굴 정상화. DB/스키마/마이그 불변. 라이브 활성 중이라 조기 배포 권장.
-

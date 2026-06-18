@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import delete, func, select, tuple_
 from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from src.db.models import (
     OrderStatus,
     OrderType,
     Portfolio,
+    PriceSnapshot,
     Proposal,
     ProposalPriority,
     ProposalState,
@@ -1618,3 +1619,50 @@ class MarketActionRepository:
             processed += 1
         self._session.flush()
         return processed
+
+
+class PriceSnapshotRepository:
+    """보유종목 가격 스냅샷 CRUD."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(
+        self,
+        stock_code: str,
+        market: str,
+        currency: str,
+        price: float,
+        captured_at: datetime | None = None,
+    ) -> PriceSnapshot:
+        """스냅샷 1건을 적재한다."""
+        snap = PriceSnapshot(
+            stock_code=stock_code,
+            market=market,
+            currency=currency,
+            price=price,
+            captured_at=captured_at or datetime.now(UTC),
+        )
+        self._session.add(snap)
+        self._session.flush()
+        return snap
+
+    def get_recent(self, stock_code: str, since: datetime) -> list[PriceSnapshot]:
+        """종목의 since 이후 스냅샷을 captured_at 오름차순으로 반환한다."""
+        stmt = (
+            select(PriceSnapshot)
+            .where(
+                PriceSnapshot.stock_code == stock_code,
+                PriceSnapshot.captured_at >= since,
+            )
+            .order_by(PriceSnapshot.captured_at)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def delete_older_than(self, cutoff: datetime) -> int:
+        """cutoff 이전 스냅샷을 삭제하고 삭제 행 수를 반환한다(7일 롤링 정리)."""
+        result = self._session.execute(
+            delete(PriceSnapshot).where(PriceSnapshot.captured_at < cutoff)
+        )
+        rowcount: int = result.rowcount  # type: ignore[attr-defined]
+        return rowcount if rowcount >= 0 else 0

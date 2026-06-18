@@ -17,7 +17,7 @@
 - **헬스체크** — 경량 HTTP 서버로 프로세스/DB/스케줄러 상태 모니터링
 - **DB 영속성** — PostgreSQL + SQLAlchemy ORM + Alembic 마이그레이션 + 매매 분석 쿼리
 - **종목 스크리닝** — 별도 ScreeningWorker가 거래량 상위 종목 자동 발굴 (Redis Rate Limiter로 API 할당량 분리)
-- **대시보드** — Streamlit 기반 웹 대시보드 (매매 분석, 성과 분석, 시그널 분석, 리스크 분석)
+- **대시보드** — Streamlit 기반 웹 대시보드 (매매 분석, 성과 분석, 시그널 분석, 리스크 분석, 보유종목 실시간 가격 vs 매수가 비교 차트)
 - **프로세스 감시** — watchdog 스크립트로 hang 감지 + 자동 재시작 (휴장일/주말 자동 스킵)
 - **자동 개선 파이프라인** — Cowork(분석/제안) + Claude Code(구현) 스케줄 자동화
 

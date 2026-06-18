@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -402,6 +403,36 @@ class ScreeningResult(Base):
         return (
             f"<ScreeningResult(id={self.id}, {self.stock_code} "
             f"rank={self.screening_rank})>"
+        )
+
+
+class PriceSnapshot(Base):
+    """보유종목 실시간(폴링) 현재가 스냅샷 — 대시보드 가격 vs 매수가 비교용."""
+
+    __tablename__ = "price_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stock_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX"
+    )
+    currency: Mapped[str] = mapped_column(
+        String(8), nullable=False, server_default="KRW"
+    )
+    price: Mapped[float] = mapped_column(Numeric(18, 4, asdecimal=False), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_price_snapshots_code_time", "stock_code", "captured_at"),
+        Index("ix_price_snapshots_captured_at", "captured_at"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PriceSnapshot(id={self.id}, {self.stock_code} {self.price} "
+            f"@{self.captured_at})>"
         )
 
 

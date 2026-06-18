@@ -1305,6 +1305,8 @@ class TradingEngine:
                 stock_code, current.stock_name, signal, action_taken=will_act,
                 skip_reason=skip_reason,
             )
+            # 보유종목 현재가를 대시보드 비교 차트용 시계열로 적재(매매 무영향).
+            self._enqueue_price_snapshot(stock_code, current.current_price)
             await self._process_held_stock(
                 stock_code, current.current_price, holding_info, signal,
                 stock_name=current.stock_name,
@@ -2952,6 +2954,24 @@ class TradingEngine:
             },
             priority=5,
             idempotency_key=f"daily_perf_{self._market.market_code}_{today_str}",
+        )
+
+    def _enqueue_price_snapshot(self, stock_code: str, price: float) -> None:
+        """보유종목 현재가를 price_snapshots에 적재하도록 Worker Queue에 enqueue한다.
+
+        대시보드의 '실시간 가격 vs 매수가' 비교 차트용 시계열. 추가 API 호출 없이
+        매매 사이클이 이미 조회한 현재가를 재사용한다. enqueue는 자체적으로 실패를
+        삼키고 None을 반환하므로(TaskQueueService) 별도 가드가 불필요하다.
+        """
+        self._task_queue.enqueue(
+            task_type="price_snapshot",
+            payload={
+                "stock_code": stock_code,
+                "market": self._market.market_code,
+                "currency": self._market.currency,
+                "price": self._norm_price(price),
+            },
+            priority=0,  # 최저 우선순위 — 매매 태스크에 양보
         )
 
     # ── 레거시 직접 호출 (Worker 미가동 시 폴백) ─────────
