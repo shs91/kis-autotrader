@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
-from src.api.order import ORDER_TYPE_LIMIT, ORDER_TYPE_MARKET, OrderAPI
+from src.api.order import ORDER_TYPE_LIMIT, OrderAPI
 from src.utils.exceptions import OrderError
 
 
@@ -142,3 +142,23 @@ class TestOrderAPI:
         # 모의투자 환경이면 VTTC0802U
         assert call_kwargs.kwargs.get("tr_id") == "VTTC0802U" or \
             call_kwargs[1].get("tr_id") == "VTTC0802U"
+
+    async def test_buy_is_non_idempotent(self) -> None:
+        """매수 주문은 idempotent=False로 전달돼 5xx/타임아웃 재시도 중복주문을 막는다."""
+        mock_client = AsyncMock()
+        mock_client.post.return_value = {
+            "rt_cd": "0", "msg1": "ok", "output": {"ODNO": "1", "ORD_TMD": "100000"},
+        }
+        api = OrderAPI(client=mock_client)
+        await api.buy("005930", quantity=1)
+        assert mock_client.post.call_args.kwargs.get("idempotent") is False
+
+    async def test_sell_is_non_idempotent(self) -> None:
+        """매도 주문도 idempotent=False로 전달된다."""
+        mock_client = AsyncMock()
+        mock_client.post.return_value = {
+            "rt_cd": "0", "msg1": "ok", "output": {"ODNO": "1", "ORD_TMD": "100000"},
+        }
+        api = OrderAPI(client=mock_client)
+        await api.sell("005930", quantity=1)
+        assert mock_client.post.call_args.kwargs.get("idempotent") is False

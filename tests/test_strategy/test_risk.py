@@ -113,6 +113,74 @@ class TestCalculatePositionSize:
         with pytest.raises(RiskLimitError, match="주가"):
             self.rm.calculate_position_size(total_balance=1_000_000.0, price=0.0)
 
+    def test_min_quantity_floor_overseas(self) -> None:
+        """min_quantity=1이면 예산×비율<주가인 고가주도 0 대신 최소 1주를 반환한다.
+
+        US: 예산$1000×0.1=$100 < AAPL $200 → int(100/200)=0이지만 1주 플로어로
+        BUY 신호의 영구 차단(false-block)을 막는다. 실제 상한은 호출부 buyable이 캡.
+        """
+        rm = RiskManager(max_position_ratio=0.1)
+        qty = rm.calculate_position_size(
+            total_balance=1000.0, price=200.0, min_quantity=1
+        )
+        assert qty == 1
+
+    def test_min_quantity_default_zero_unchanged(self) -> None:
+        """min_quantity 기본값(0)이면 고가주는 기존대로 0을 반환한다(KRX 불변)."""
+        rm = RiskManager(max_position_ratio=0.1)
+        qty = rm.calculate_position_size(total_balance=1000.0, price=200.0)
+        assert qty == 0
+
+    def test_min_quantity_floor_does_not_cap_larger_qty(self) -> None:
+        """저가주는 플로어보다 큰 비율 기반 수량을 그대로 반환한다."""
+        rm = RiskManager(max_position_ratio=0.1)
+        # 1000*0.1=100 / 5 = 20주 (플로어 1보다 큼)
+        qty = rm.calculate_position_size(
+            total_balance=1000.0, price=5.0, min_quantity=1
+        )
+        assert qty == 20
+
+
+class TestRecordTradeResultPrecision:
+    """record_trade_result의 손익 정밀도(US 센트) 회귀 — int 절단 제거(H4)."""
+
+    def test_sub_dollar_loss_counts_as_consecutive_loss(self) -> None:
+        """1달러 미만 USD 손실도 연패 카운터를 증가시킨다.
+
+        과거 int() 절단 시 int(-0.50)=0이라 ``< 0`` 분기가 거짓 → 연패 미집계로
+        MAX_CONSECUTIVE_LOSSES 서킷이 US에서 약화됐다.
+        """
+        rm = RiskManager()
+        rm.record_trade_result(-0.50)
+        assert rm.consecutive_losses == 1
+
+    def test_sub_dollar_pnl_accumulates(self) -> None:
+        """센트 단위 손익이 누적PnL에 보존된다(절단 없음)."""
+        rm = RiskManager()
+        rm.record_trade_result(-0.50)
+        rm.record_trade_result(-0.25)
+        assert rm.daily_cumulative_pnl == pytest.approx(-0.75)
+
+    def test_sub_dollar_profit_resets_consecutive(self) -> None:
+        """1달러 미만 USD 이익도 연패를 리셋한다(>0 분기 정상 동작)."""
+        rm = RiskManager()
+        rm.record_trade_result(-1.0)
+        rm.record_trade_result(0.30)
+        assert rm.consecutive_losses == 0
+
+    def test_integer_input_unchanged_for_krx(self) -> None:
+        """정수 손익(KRX)은 정수 타입으로 누적된다(바이트 불변).
+
+        프로덕션 경로처럼 reset_daily_risk()(int 0 시드)가 첫 기록 전에 돌면 KRX
+        누적기가 int로 유지됨을 타입까지 검증(==만으로는 float -10000.0도 통과).
+        """
+        rm = RiskManager()
+        rm.reset_daily_risk()
+        rm.record_trade_result(-10_000)
+        assert rm.daily_cumulative_pnl == -10_000
+        assert isinstance(rm.daily_cumulative_pnl, int)
+        assert rm.consecutive_losses == 1
+
 
 class TestCheckDailyTradeLimit:
     """RiskManager.check_daily_trade_limit 테스트."""

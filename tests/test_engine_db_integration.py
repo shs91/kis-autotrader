@@ -496,6 +496,44 @@ class TestRecordEvalTargets:
 # ── SIGNAL_SUMMARY 메트릭 테스트 (proposal 2026-04-27) ──────
 
 
+class TestDailyLimitProtectiveSell:
+    """B2: 일일 매매 한도 도달 시에도 보유 종목 보호매도는 계속 평가된다.
+
+    과거엔 사이클 진입부 게이트(check_daily_trade_limit)가 통째로 return해
+    보유 포지션의 손절/트레일링/마감청산까지 막혔다(야간 무인 세션 무방비).
+    """
+
+    @pytest.mark.asyncio
+    async def test_limit_reached_still_processes_held_for_sell(self) -> None:
+        """한도 소진 후에도 보유 종목이 _process_stock으로 평가된다(매도 차단 방지)."""
+        engine = _make_engine()
+        engine._cycle_count = 0
+        engine._client.circuit_breaker.is_open = False
+
+        mock_risk = MagicMock()
+        mock_risk.is_portfolio_halted = False
+        mock_risk.check_daily_trade_limit.return_value = True  # 한도 소진
+        engine._risk = mock_risk
+
+        holding = MagicMock()
+        holding.stock_code = "005930"
+        holding.quantity = 10
+        balance = MagicMock()
+        balance.deposit = 10_000_000
+        balance.holdings = [holding]
+        engine._get_balance = AsyncMock(return_value=balance)
+        engine._process_stock = AsyncMock()
+
+        with patch.object(engine._task_queue, "enqueue"):
+            await engine.run_trading_cycle()
+
+        # 보유 종목이 평가됨(보호매도 경로 도달) — 과거엔 게이트가 통째 return해 미평가.
+        engine._process_stock.assert_awaited_once()
+        call = engine._process_stock.await_args
+        assert call.args[0] == "005930"
+        assert call.args[2] is True  # is_held
+
+
 class TestSignalSummaryMetric:
     """사이클 종료 시 SIGNAL_SUMMARY 메트릭 기록 테스트."""
 

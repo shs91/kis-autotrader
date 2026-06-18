@@ -107,18 +107,24 @@ class RiskManager:
         # 포트폴리오 리스크 추적
         self._max_daily_drawdown = settings.trading.max_daily_drawdown
         self._max_consecutive_losses = settings.trading.max_consecutive_losses
-        self._daily_peak_pnl: int = 0
-        self._daily_cumulative_pnl: int = 0
+        # US는 센트 단위 손익(float)을 누적한다(int 절단 시 1달러 미만 손익이
+        # 소실돼 연패/MDD 추적이 약화). KRX 프로세스는 정수 손익만 흐르고, 프로덕션
+        # 에선 첫 기록 전 reset_daily_risk()가 int 0으로 시드(+ int 누적)하므로
+        # 런타임 값이 정수로 유지돼 로그/메트릭이 바이트 불변하다.
+        self._daily_peak_pnl: float = 0.0
+        self._daily_cumulative_pnl: float = 0.0
         self._consecutive_losses: int = 0
         self._portfolio_halted: bool = False
         # halt 발동 사유 — BUY_REJECT 메트릭의 reason 코드 분류용
         self._halt_reason: str | None = None
 
-    def record_trade_result(self, profit_loss_amount: int) -> None:
+    def record_trade_result(self, profit_loss_amount: float) -> None:
         """매도 결과를 기록하여 포트폴리오 리스크를 업데이트한다.
 
         Args:
-            profit_loss_amount: 실현 손익 (원)
+            profit_loss_amount: 실현 손익. KRX는 정수(원), US는 센트 단위 float($).
+                US에서 int 절단을 하면 1달러 미만 손익이 ``< 0``/``> 0`` 분기에서
+                소실돼 연패 카운터·누적PnL이 약화되므로 절단하지 않고 받는다.
         """
         self._daily_cumulative_pnl += profit_loss_amount
 
@@ -173,8 +179,8 @@ class RiskManager:
         return self._consecutive_losses
 
     @property
-    def daily_cumulative_pnl(self) -> int:
-        """당일 누적 손익."""
+    def daily_cumulative_pnl(self) -> float:
+        """당일 누적 손익(KRX 정수값, US 센트 float)."""
         return self._daily_cumulative_pnl
 
     def reset_daily_risk(self) -> None:
@@ -185,7 +191,7 @@ class RiskManager:
         self._portfolio_halted = False
         self._halt_reason = None
 
-    def snapshot(self) -> dict[str, int | bool | str | None]:
+    def snapshot(self) -> dict[str, float | bool | str | None]:
         """현재 포트폴리오 리스크 상태를 직렬화 가능한 dict로 반환한다.
 
         장중 크래시→재시작 시 halt 상태/누적 손익/연패를 복원하기 위한 스냅샷이다.
@@ -202,7 +208,7 @@ class RiskManager:
             "halt_reason": self._halt_reason,
         }
 
-    def restore(self, state: dict[str, int | bool | str | None]) -> None:
+    def restore(self, state: dict[str, float | bool | str | None]) -> None:
         """``snapshot``으로 만든 상태를 복원한다(장중 재시작 복구용).
 
         키가 누락되면 현재 값을 유지한다(부분 복원 안전). 매매 차단 방향으로만
@@ -211,14 +217,15 @@ class RiskManager:
         Args:
             state: ``snapshot()``이 반환한 형태의 dict.
         """
+        # bool은 int의 하위형이라 손익 필드에서 제외(True가 1로 복원되는 오류 방지).
         peak = state.get("daily_peak_pnl")
-        if isinstance(peak, int):
+        if isinstance(peak, (int, float)) and not isinstance(peak, bool):
             self._daily_peak_pnl = peak
         cum = state.get("daily_cumulative_pnl")
-        if isinstance(cum, int):
+        if isinstance(cum, (int, float)) and not isinstance(cum, bool):
             self._daily_cumulative_pnl = cum
         losses = state.get("consecutive_losses")
-        if isinstance(losses, int):
+        if isinstance(losses, int) and not isinstance(losses, bool):
             self._consecutive_losses = losses
         halted = state.get("portfolio_halted")
         if isinstance(halted, bool):
@@ -310,7 +317,9 @@ class RiskManager:
         peak_gain = (peak_price - avg_price) / avg_price
         return peak_gain < self._trailing_activation_ratio
 
-    def calculate_position_size(self, total_balance: float, price: float) -> int:
+    def calculate_position_size(
+        self, total_balance: float, price: float, min_quantity: int = 0
+    ) -> int:
         """포지션 크기(매수 가능 수량)를 계산한다.
 
         계좌 잔고 대비 최대 포지션 비율을 적용하여
@@ -319,6 +328,11 @@ class RiskManager:
         Args:
             total_balance: 총 계좌 잔고
             price: 현재 주가
+            min_quantity: 최소 매수 수량 플로어(기본 0). US처럼 예산×비율이
+                개별 주가보다 작아 ``int(max_investment/price)``가 0이 되는 고가주를
+                영구 차단(false-block)하지 않도록, 호출부가 1을 넘기면 최소 1주를
+                보장한다. 실제 상한은 호출부의 매수가능액(통합증거금)·예수금 게이트가
+                적용한다. KRX는 기본 0이라 기존 동작이 바이트 단위로 불변하다.
 
         Returns:
             매수 가능 수량 (정수)
@@ -332,7 +346,7 @@ class RiskManager:
             raise RiskLimitError("주가는 0보다 커야 합니다.")
 
         max_investment = total_balance * self._max_position_ratio
-        quantity = int(max_investment / price)
+        quantity = max(min_quantity, int(max_investment / price))
 
         logger.info(
             "포지션 사이징: 잔고 %.0f, 주가 %.0f, 최대투자금 %.0f, 수량 %d",

@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-06-19] US 실거래 경로 하드닝 5종 — 사이징/손절차단/결산통화/연패정밀도/중복주문 (v0.20.0)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/strategy/risk.py: **(B1)** calculate_position_size에 min_quantity 플로어(기본 0). US가 1을 넘겨 예산×비율($100)<주가인 고가주(AAPL/NVDA 등)가 0주로 영구 차단되던 false-block 해소. **(H4)** record_trade_result 입력·누적PnL을 float화 — US 센트 손익 보존(int 절단 시 1달러 미만 손익이 연패 카운터에서 소실돼 MAX_CONSECUTIVE_LOSSES 서킷 약화). KRX 프로세스는 정수값만 흘러 누적기·로그 바이트 불변.
+  - src/engine.py: **(B2)** 일일 매매 한도(BUY+SELL 합산) 도달 시 사이클을 통째 return하던 게이트를 신규 매수만 차단하도록 변경 — 보유 종목 손절/트레일링/마감청산 등 보호매도는 계속 평가(야간 무인 세션 포지션 무방비 방지). **(H3)** 일일결산 _load_today_trades에 market 필터 — US 결산이 KRX 매도손익을 FX 없이 정수 합산해 손익/수익률을 오표기하던 누수 격리. **(B1·H4)** 사이징 호출부 US 1주 플로어·손익 절단 제거.
+  - src/api/client.py + order.py + overseas_order.py: **(중복주문)** post에 idempotent 플래그 추가. 주문 체결(매수/매도)은 idempotent=False로 호출 — 5xx/네트워크 타임아웃 시 주문이 접수·체결됐는데 응답만 유실된 경우 재시도가 실자금 중복주문을 내던 위험 차단(재시도 없이 즉시 실패). 429(거부)는 재시도 유지. 주문 실패경로에 잔고캐시 무효화 추가 → 다음 사이클이 fresh 잔고로 팬텀 체결 재조정(60s TTL 안전망 누수 차단). 정정/취소는 미변경.
+  - tests: B1 플로어·H4 센트연패·idempotency(5xx·네트워크 무재시도+429/기본 재시도)·주문 비멱등 전달·B2 한도 도달 보호매도 회귀 15건 추가.
+- 배경: 첫 US 실거래(6/18) 직후 6차원 38에이전트 적대감사에서 확정된 16건 중 첫 실주문 신뢰성 직결 5종. B1=고가주 유니버스 사장, B2=한도 후 손절차단(야간 실자금 무방비), H3=결산 통화혼합 오표기, H4=소액손실 서킷 약화, 중복주문=5xx 재시도 실자금 중복(라이브 로그에 실제 500 발생 확인). 7에이전트 적대 검증 후 운영자 결정으로 B2·중복주문을 KRX에도 적용(아래).
+- 영향: **B1·H3·H4는 KRX 바이트 불변**(B1 min_quantity 기본0·H4 KRX 정수값 유지[reset int 0 시드]·H3 KRX trades만 필터). **B2·중복주문은 운영자 승인하 KRX에도 의도 적용** — 두 변경 다 KRX 실자금에 **더 안전**: B2는 KRX도 한도(10) 후 보호매도 작동(손절차단 해제), 중복주문은 KRX 주문도 5xx/타임아웃 시 fail-fast(중복 방지). KRX 정상 성공경로는 바이트 동일, exit_reason은 'completed' 유지(buy_limit_reached를 CYCLE_END 메트릭에 별도 기록)해 기존 대시보드 무영향. US는 추가로 고가주 매수·결산 통화정확·센트 손익 추적.
+- 검증 결과: pytest 전체 **1245 passed**(신규 15) | mypy strict ✅ | ruff ✅(변경분). 7에이전트 적대 검증(KRX 불변·결함해소·신규회귀) 통과.
+- 비고: 운영자 액션 — main 머지 후 pull → **`com.kis.autotrader`(KRX)·`com.kis.autotrader.us`(US) 둘 다 재시작**(B2·중복주문이 KRX에도 적용되므로). DB/마이그 불변. 남은 감사 medium 4·low 6(결산진단 시장필터·마감컷오프 US전용·재시작 카운터복원 등)은 후속.
+
+---
+
 ## [2026-06-18] 매수가능 통합증거금 필드 우선 파싱 — US 동적매수 buyable=0 라이브 블로커 (v0.19.4)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -54,20 +68,4 @@
 - 영향: US 스크리너가 거래소별 100종목 순위를 정상 발굴. 응답의 ename(영문명) 활용으로 종목명도 심볼 대신 정식명(예: ADITXT INC). KRX 무관(해외 전용 API). opt-in이라 SCREENING_US_ENABLED=true에서만 경로 활성.
 - 검증 결과: pytest 전체 **1225 passed**(신규 회귀 가드) | mypy strict ✅ | ruff ✅ | 라이브 진단으로 output2 100종목 실측 확인.
 - 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 스크리너 발굴 정상화. DB/스키마/마이그 불변. 라이브 활성 중이라 조기 배포 권장.
-
----
-
-## [2026-06-18] US 동적 스크리너 (P3c-5 2/2) — 거래소별 순위 발굴, opt-in 기본 off (v0.19.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/strategy/screener.py: ScreeningFilter/StockScreener is_overseas(540dd6e cherry-pick) — US 알파벳 심볼 ETF 오분류 해소 + min_price_us.
-  - src/worker/screener.py: ScreeningWorker(market_profile=) — US는 OverseasQuoteAPI + StockScreener(is_overseas). _run_screening_us(거래소별 get_ranking[EXCD]→VolumeRankItem 변환+exch_of[symbol]=OVRS_EXCG_CD→필터→해외일봉 분석→스코어→적재). _is_trading_window 시장별(US ET 09:30~16:00+holidays_us). _record_to_db(market, exch_of): record_screening(market) + US는 stocks.market=거래소 upsert. _load_existing_screened_codes 시장필터.
-  - src/engine.py: _screen_stocks가 발굴 US 종목의 stocks.market(거래소)을 읽어 _exchanges 시드(_seed_overseas_exchanges) → 주문 라우팅. _board_label(code, krx_default): US는 _exchange_of(code)(거래소) 우선.
-  - src/scheduler/jobs.py: us_enabled면 US 쿼터 KRX 동형 분할(장전 스크리너100%→장중 80/20→마감후 메인100%), 아니면 메인 100%(현 P5).
-  - main.py: US 스크리너 워커 게이트(is_overseas and screening.us_enabled). src/config.py: ScreeningConfig.us_enabled(SCREENING_US_ENABLED, 기본 false).
-  - tests: 워커 US 거래소 라우팅/변환·board_label 거래소 회귀.
-- 배경: US가 watchlist_us 고정 유니버스만 매매하던 한계 해소. 거래소별 거래량순위 API로 동적 발굴. **거래소 코드 이중체계**(순위/시세 EXCD NAS/NYS/AMS ≠ 주문 OVRS_EXCG_CD NASD/NYSE/AMEX)를 quote_exchange_map으로 변환, stocks.market=거래소로 엔진 주문 라우팅 시드(마이그 회피).
-- 영향: **opt-in 기본 off** — SCREENING_US_ENABLED=false면 US는 watchlist_us 고정+메인 100%(현 P5 무변경). true면 워커 가동+쿼터 분할. **KRX 완전 불변**(is_overseas/us_enabled 기본 false 뒤 분기, 전체 1225 통과). 어댑버설 리뷰(거래소 라우팅 실금 민감) 수행.
-- 검증 결과: pytest 전체 **1225 passed**(신규 3) | mypy strict ✅(103 files) | ruff ✅(변경분).
-- 비고: 운영자 액션 — main 머지 후 pull → 재시작(기본 off라 무변경). 활성화는 config_overrides/env `SCREENING_US_ENABLED=true` + US 재시작. DB/스키마/마이그 불변(stocks.market 재사용). 첫 활성 시 거래소 라우팅·발굴 로그 모니터링 권장.
 

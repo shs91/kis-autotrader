@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from src.api.client import (
@@ -163,6 +164,96 @@ class TestKISClient:
         client, _, _ = self._make_client()
         result = await client.get("/test")
 
+        assert result == {"ok": True}
+        assert mock_http.request.call_count == 2
+
+    @patch("src.api.client.httpx.AsyncClient")
+    async def test_non_idempotent_5xx_no_retry(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """비멱등(idempotent=False) POST는 5xx에서 재시도 없이 즉시 실패한다.
+
+        주문 체결류는 5xx 재시도 시 실자금 중복주문 위험이라 단 1회만 시도한다.
+        """
+        response_500 = MagicMock()
+        response_500.status_code = 500
+        response_500.text = "Internal Server Error"
+        response_500.headers = {}
+
+        mock_http = AsyncMock()
+        mock_http.request.return_value = response_500
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_http
+
+        client, _, _ = self._make_client()
+        with pytest.raises(KISAutoTraderError, match="서버 에러"):
+            await client.post("/order", body={"k": "v"}, idempotent=False)
+        assert mock_http.request.call_count == 1  # 재시도 없음
+
+    @patch("src.api.client.httpx.AsyncClient")
+    async def test_idempotent_post_5xx_still_retries(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """멱등(기본) POST는 5xx에서 기존대로 재시도한다(회귀 가드)."""
+        response_500 = MagicMock()
+        response_500.status_code = 500
+        response_500.text = "err"
+        response_500.headers = {}
+        response_200 = MagicMock()
+        response_200.status_code = 200
+        response_200.json.return_value = {"ok": True}
+
+        mock_http = AsyncMock()
+        mock_http.request.side_effect = [response_500, response_200]
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_http
+
+        client, _, _ = self._make_client()
+        result = await client.post("/read", body={"k": "v"})
+        assert result == {"ok": True}
+        assert mock_http.request.call_count == 2
+
+    @patch("src.api.client.httpx.AsyncClient")
+    async def test_non_idempotent_network_error_no_retry(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """비멱등 요청은 네트워크 오류(타임아웃)에서도 재시도 없이 즉시 실패한다.
+
+        타임아웃은 주문이 도달·체결됐는데 응답만 유실됐을 수 있는 1차 중복 위험경로.
+        """
+        mock_http = AsyncMock()
+        mock_http.request.side_effect = httpx.ConnectError("boom")
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_http
+
+        client, _, _ = self._make_client()
+        with pytest.raises(KISAutoTraderError, match="네트워크 에러"):
+            await client.post("/order", body={"k": "v"}, idempotent=False)
+        assert mock_http.request.call_count == 1  # 재시도 없음
+
+    @patch("src.api.client.httpx.AsyncClient")
+    async def test_non_idempotent_429_still_retries(
+        self, mock_client_cls: AsyncMock
+    ) -> None:
+        """비멱등이어도 429(요청 거부)는 재시도한다 — 주문 미처리라 중복 위험 없음."""
+        response_429 = MagicMock()
+        response_429.status_code = 429
+        response_429.headers = {"Retry-After": "0"}
+        response_200 = MagicMock()
+        response_200.status_code = 200
+        response_200.json.return_value = {"ok": True}
+
+        mock_http = AsyncMock()
+        mock_http.request.side_effect = [response_429, response_200]
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_http
+
+        client, _, _ = self._make_client()
+        result = await client.post("/order", body={"k": "v"}, idempotent=False)
         assert result == {"ok": True}
         assert mock_http.request.call_count == 2
 
