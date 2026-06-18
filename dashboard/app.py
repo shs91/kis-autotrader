@@ -5,13 +5,22 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import httpx
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
+
+# db_config(공용 DB URL 리졸버)를 import할 수 있도록 dashboard/ 를 path에 추가
+_DASHBOARD_DIR = Path(__file__).resolve().parent
+if str(_DASHBOARD_DIR) not in sys.path:
+    sys.path.insert(0, str(_DASHBOARD_DIR))
+
+from db_config import resolve_db_url, secret_get  # noqa: E402 — path 보강 후 import
 
 # ── 페이지 설정 ─────────────────────────────────
 
@@ -23,8 +32,10 @@ st.set_page_config(
 
 # ── DB 연결 ──────────────────────────────────────
 
-DB_URL = st.secrets.get("DATABASE_URL", "postgresql://kis_user:kis_password@localhost:5432/kis_trader_real")
-HEALTH_URL = st.secrets.get("HEALTH_URL", "http://localhost:18923/health")
+# 매매 엔진과 동일한 단일 소스(src.config / KIS_ENV)에서 DB URL을 해석한다.
+# secrets.toml 직접 의존을 제거해 엔진-대시보드 DB 드리프트를 방지한다.
+DB_URL = resolve_db_url()
+HEALTH_URL = secret_get("HEALTH_URL", "http://localhost:18923/health")
 
 
 @st.cache_resource
@@ -42,8 +53,11 @@ def get_session() -> Session:
 def assert_real_db() -> None:
     """연결된 DB가 실전(kis_trader_real)인지 확인하고, 아니면 경고 배너를 띄운다.
 
-    2026-06-01 실전 전면 전환. secrets.toml의 DATABASE_URL이 모의(kis_trader)로 설정돼
-    있으면 대시보드가 조용히 모의 데이터를 표시하므로, 시각적으로 차단한다.
+    2026-06-01 실전 전면 전환. 대시보드는 이제 엔진과 동일한 단일 소스
+    (``src.config`` / ``KIS_ENV``)에서 DB를 해석하므로 실전에서는 항상
+    ``kis_trader_real`` 에 연결된다. 그럼에도 ``KIS_ENV`` 미설정·stale 프로세스
+    등으로 모의 DB에 연결되면 운영자가 모의 데이터를 실데이터로 오인할 수 있으므로
+    배너로 명확히 경고한다.
     """
     try:
         with get_engine().connect() as conn:
@@ -53,8 +67,8 @@ def assert_real_db() -> None:
     if db_name != "kis_trader_real":
         st.warning(
             f"⚠️ 대시보드가 실전 DB(`kis_trader_real`)가 아닌 `{db_name}`에 연결되어 있습니다. "
-            "모의 데이터를 표시 중일 수 있습니다 — `dashboard/.streamlit/secrets.toml`의 "
-            "`DATABASE_URL`을 `.../kis_trader_real`로 설정하세요.",
+            "모의 데이터를 표시 중일 수 있습니다 — `.env`의 `KIS_ENV=real`"
+            "(→ `DATABASE_URL_REAL`)을 확인한 뒤 대시보드를 **재시작**하세요.",
             icon="⚠️",
         )
 

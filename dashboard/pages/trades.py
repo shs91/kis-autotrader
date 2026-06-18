@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
 
+# db_config(공용 DB URL 리졸버)를 import할 수 있도록 dashboard/ 를 path에 추가
+_DASHBOARD_DIR = Path(__file__).resolve().parent.parent
+if str(_DASHBOARD_DIR) not in sys.path:
+    sys.path.insert(0, str(_DASHBOARD_DIR))
+
+from db_config import resolve_db_url  # noqa: E402 — path 보강 후 import
+
 st.set_page_config(page_title="매매 분석", page_icon="\U0001f4b9", layout="wide")
 
-DB_URL = st.secrets.get(
-    "DATABASE_URL",
-    "postgresql://kis_user:kis_password@localhost:5432/kis_trader_real",
-)
+# 매매 엔진과 동일한 단일 소스(src.config / KIS_ENV)에서 DB URL을 해석한다.
+DB_URL = resolve_db_url()
 
 
 @st.cache_resource
