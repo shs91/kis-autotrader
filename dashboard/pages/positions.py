@@ -36,12 +36,12 @@ def load_holdings() -> pd.DataFrame:
     """현재 보유종목(portfolios, 수량>0)을 조회한다."""
     query = text(
         """
-        SELECT p.stock_code, s.name AS stock_name, p.market, p.currency,
+        SELECT s.code AS stock_code, s.name AS stock_name, p.market, p.currency,
                p.quantity, p.avg_price, p.current_price, p.peak_price
         FROM portfolios p
-        LEFT JOIN stocks s ON s.code = p.stock_code
+        LEFT JOIN stocks s ON s.id = p.stock_id
         WHERE p.quantity > 0
-        ORDER BY p.market, p.stock_code
+        ORDER BY p.market, s.code
         """
     )
     with get_engine().connect() as conn:
@@ -169,12 +169,16 @@ if not markers.empty:
         .encode(
             x="traded_at:T",
             y="price:Q",
-            shape=alt.Shape("trade_type:N", title="체결"),
+            shape=alt.Shape(
+                "trade_type:N",
+                scale=alt.Scale(domain=["BUY", "SELL"], range=["triangle-up", "triangle-down"]),
+                title="체결",
+            ),
             color=alt.Color(
                 "trade_type:N",
                 scale=alt.Scale(domain=["BUY", "SELL"], range=["#E53935", "#1E88E5"]),
             ),
-            tooltip=["traded_at:T", "trade_type:N", "price:Q", "quantity:Q"],
+            tooltip=["traded_at:T", "trade_type:N", "marker:N", "price:Q", "quantity:Q"],
         )
     )
     layers.append(marker_chart)
