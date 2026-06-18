@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -88,3 +88,44 @@ def test_price_snapshot_repr(session: Session) -> None:
     result = repr(snap)
     assert "AAPL" in result
     assert str(snap.id) in result
+
+
+def test_repository_add_and_get_recent(session: Session) -> None:
+    from src.db.repository import PriceSnapshotRepository
+
+    repo = PriceSnapshotRepository(session)
+    now = datetime.now(UTC)
+    repo.add("AAPL", "US", "USD", 145.0, captured_at=now - timedelta(hours=2))
+    repo.add("AAPL", "US", "USD", 146.5, captured_at=now - timedelta(hours=1))
+    repo.add("MSFT", "US", "USD", 300.0, captured_at=now)  # 다른 종목
+
+    rows = repo.get_recent("AAPL", since=now - timedelta(days=1))
+    assert len(rows) == 2
+    assert [r.price for r in rows] == [145.0, 146.5]  # captured_at 오름차순
+
+
+def test_repository_get_recent_filters_since(session: Session) -> None:
+    from src.db.repository import PriceSnapshotRepository
+
+    repo = PriceSnapshotRepository(session)
+    now = datetime.now(UTC)
+    repo.add("AAPL", "US", "USD", 100.0, captured_at=now - timedelta(days=10))  # 범위 밖
+    repo.add("AAPL", "US", "USD", 200.0, captured_at=now - timedelta(hours=1))
+
+    rows = repo.get_recent("AAPL", since=now - timedelta(days=7))
+    assert len(rows) == 1
+    assert rows[0].price == 200.0
+
+
+def test_repository_delete_older_than(session: Session) -> None:
+    from src.db.repository import PriceSnapshotRepository
+
+    repo = PriceSnapshotRepository(session)
+    now = datetime.now(UTC)
+    repo.add("AAPL", "US", "USD", 100.0, captured_at=now - timedelta(days=10))
+    repo.add("AAPL", "US", "USD", 200.0, captured_at=now - timedelta(days=1))
+    session.flush()
+
+    deleted = repo.delete_older_than(now - timedelta(days=7))
+    assert deleted == 1
+    assert len(repo.get_recent("AAPL", since=now - timedelta(days=30))) == 1
