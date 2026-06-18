@@ -41,6 +41,7 @@ from src.worker.handlers import (
     CalendarEventHandler,
     DailyPerformanceHandler,
     DailySummaryHandler,
+    PriceSnapshotHandler,
     RecordMetricHandler,
     RecordSignalHandler,
     RecordTradeHandler,
@@ -670,6 +671,7 @@ async def main() -> None:
         worker.register_handler("record_trade", RecordTradeHandler())
         worker.register_handler("record_signal", RecordSignalHandler())
         worker.register_handler("record_metric", RecordMetricHandler())
+        worker.register_handler("price_snapshot", PriceSnapshotHandler())
         worker_task = asyncio.create_task(worker.run())
         logger.info("Worker 프로세스 시작")
 

@@ -309,3 +309,20 @@ class RecordMetricHandler(TaskHandler):
                 recorded_at=recorded_at,
             )
         logger.info("메트릭 기록 완료: %s", payload["metric_type"])
+
+
+class PriceSnapshotHandler(TaskHandler):
+    """보유종목 가격 스냅샷 INSERT 핸들러."""
+
+    async def execute(self, payload: dict[str, Any]) -> None:
+        """payload: stock_code, market, currency, price."""
+        from src.db.repository import PriceSnapshotRepository
+        from src.db.session import get_session
+
+        with get_session() as session:
+            PriceSnapshotRepository(session).add(
+                stock_code=payload["stock_code"],
+                market=payload.get("market", "KRX"),
+                currency=payload.get("currency", "KRW"),
+                price=payload["price"],
+            )
