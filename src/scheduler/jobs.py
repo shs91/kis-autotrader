@@ -233,6 +233,21 @@ class TradingScheduler:
         except Exception:
             logger.exception("일일 요약 집계 실패 (매매에 영향 없음)")
 
+    def cleanup_price_snapshots_job(self) -> None:
+        """7일 초과 가격 스냅샷을 삭제한다(롤링 정리). 시장 무관(공유 테이블)."""
+        try:
+            from datetime import UTC, timedelta
+
+            from src.db.repository import PriceSnapshotRepository
+            from src.db.session import get_session
+
+            cutoff = datetime.now(UTC) - timedelta(days=7)
+            with get_session() as session:
+                deleted = PriceSnapshotRepository(session).delete_older_than(cutoff)
+            logger.info("가격 스냅샷 정리: %d행 삭제 (7일 초과)", deleted)
+        except Exception:
+            logger.exception("가격 스냅샷 정리 실패 (매매에 영향 없음)")
+
     @staticmethod
     def _heartbeat() -> None:
         """스케줄러 쓰레드 keepalive용 heartbeat.
@@ -361,6 +376,17 @@ class TradingScheduler:
             replace_existing=True,
         )
         logger.info("일일 요약 집계 등록: 평일 %02d:%02d (%s)", sum_h, sum_m, mc)
+
+        # 가격 스냅샷 7일 롤링 정리 (매일 04:30, 시장 무관)
+        self._scheduler.add_job(
+            func=self.cleanup_price_snapshots_job,
+            trigger="cron",
+            hour=4,
+            minute=30,
+            id="cleanup_price_snapshots",
+            name="가격 스냅샷 7일 정리",
+            replace_existing=True,
+        )
 
         # API 할당량 시간대 전환 (Redis Rate Limiter). KRX는 항상 메인/스크리너 분할.
         # US는 SCREENING_US_ENABLED=true면 KRX 동형 분할, false면 메인 100%(워커 없음).
