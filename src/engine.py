@@ -287,11 +287,15 @@ class TradingEngine:
         exc = self._exchange_of(code)
         return self._market.quote_exchange_map.get(exc, exc)
 
-    def _board_label(self, krx_default: str) -> str:
+    def _board_label(self, code: str, krx_default: str) -> str:
         """stocks.market(보드 구분) 값. KRX는 기존 리터럴 유지(market_stats의
-        KOSPI/KOSDAQ 필터 호환), US는 시장코드(US 종목이 KRX 통계에 혼입 방지).
+        KOSPI/KOSDAQ 필터 호환), US는 **거래소코드**(NASD/NYSE/AMEX)를 우선 — 워커가
+        쓴 거래소와 일관되게 해 엔진의 주문 라우팅(_exchange_of) 시드를 유지한다.
+        거래소 미상이면 market_code("US")로 폴백(주문 시 _exchange_of 기본거래소).
         """
-        return krx_default if not self._market.is_overseas else self._market.market_code
+        if not self._market.is_overseas:
+            return krx_default
+        return self._exchange_of(code) or self._market.market_code
 
     def _fmt_price(self, value: float) -> str:
         """가격 로그 포맷. 정수값은 천단위(소수점 없음), 소수는 2자리.
@@ -1145,8 +1149,29 @@ class TradingEngine:
             # → _process_stock의 _resolve_stock_name 폴백 경로에서 사용됨
             if name_map:
                 self._upsert_stock_names(name_map)
+            # US: 발굴 종목의 거래소(stocks.market)를 읽어 _exchanges 시드 → 주문 라우팅.
+            if self._market.is_overseas and added:
+                self._seed_overseas_exchanges(added)
         except Exception:
             logger.exception("스크리닝 결과 DB 조회 실패")
+
+    def _seed_overseas_exchanges(self, codes: list[str]) -> None:
+        """US 발굴 종목의 stocks.market(거래소코드)을 읽어 _exchanges를 시드한다.
+
+        워커가 ``stocks.market``=거래소(NASD/NYSE/AMEX)로 upsert한 값을 읽어 주문
+        라우팅(_exchange_of)에 사용한다. 거래소 미상이면 _exchange_of 폴백(첫 거래소).
+        """
+        from src.db.repository import StockRepository
+
+        try:
+            with get_session() as session:
+                repo = StockRepository(session)
+                for code in codes:
+                    stock = repo.get_by_code(code)
+                    if stock and stock.market in self._market.exchanges:
+                        self._exchanges[code] = stock.market
+        except Exception:
+            logger.exception("US 발굴 종목 거래소 시드 실패")
 
     # ── 개별 종목 처리 ────────────────────────────────────
 
@@ -3066,7 +3091,7 @@ class TradingEngine:
                         continue
                     stock = stock_repo.get_by_code(code)
                     if stock is None:
-                        stock_repo.create(code, name, self._board_label("UNKNOWN"))
+                        stock_repo.create(code, name, self._board_label(code, "UNKNOWN"))
                         registered += 1
                     elif stock.name == stock.code or not stock.name:
                         stock_repo.update_name(code, name)
@@ -3122,7 +3147,9 @@ class TradingEngine:
                 stock = stock_repo.get_by_code(stock_code)
                 if stock is None:
                     stock = stock_repo.create(
-                        stock_code, stock_name or stock_code, self._board_label("KOSPI")
+                        stock_code,
+                        stock_name or stock_code,
+                        self._board_label(stock_code, "KOSPI"),
                     )
 
                 order = order_repo.create(stock.id, order_type, quantity, price)

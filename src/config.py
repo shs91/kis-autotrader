@@ -469,6 +469,11 @@ class ScreeningConfig:
     min_price_us: float = field(
         default_factory=lambda: _env_float("SCREENING_MIN_PRICE_US", 1.0)
     )
+    # US 동적 스크리너 스위치(P3c-5 2/2). 기본 false=US는 watchlist_us 고정 유니버스(P5).
+    # true면 US 스크리너 워커 가동 + US 스케줄러 쿼터를 메인/스크리너로 분할(KRX 동형).
+    us_enabled: bool = field(
+        default_factory=lambda: _env("SCREENING_US_ENABLED", "false").lower() == "true"
+    )
     max_price: int = field(
         default_factory=lambda: _env_int("SCREENING_MAX_PRICE", 500000)
     )

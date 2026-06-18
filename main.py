@@ -673,14 +673,23 @@ async def main() -> None:
         worker_task = asyncio.create_task(worker.run())
         logger.info("Worker 프로세스 시작")
 
-    # Screening Worker 시작 (스크리닝 API 분리) — KRX 전용.
-    # US 스크리너 시장화는 P3c-5 보류 → US는 watchlist_us 고정 유니버스로 운영.
+    # Screening Worker 시작 (스크리닝 API 분리).
+    # KRX는 항상, US는 SCREENING_US_ENABLED=true일 때만(P3c-5 동적 스크리닝). false면
+    # US는 watchlist_us 고정 유니버스로 운영(쿼터 메인 100%).
     screener_worker: ScreeningWorker | None = None
     screener_task: asyncio.Task[None] | None = None
     if settings.worker.enabled and not market.is_overseas:
         screener_worker = ScreeningWorker()
         screener_task = asyncio.create_task(screener_worker.run())
         logger.info("Screening Worker 시작")
+    elif (
+        settings.worker.enabled
+        and market.is_overseas
+        and settings.screening.us_enabled
+    ):
+        screener_worker = ScreeningWorker(market_profile=market)
+        screener_task = asyncio.create_task(screener_worker.run())
+        logger.info("US Screening Worker 시작 (동적 스크리닝 활성)")
     elif market.is_overseas:
         logger.info("US 시장 — Screening Worker 미가동(watchlist_us 고정 유니버스)")
 

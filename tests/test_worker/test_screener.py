@@ -69,6 +69,73 @@ class TestScreeningWorker:
         assert worker._cycle_count == 1
 
 
+class TestScreeningWorkerUS:
+    """US 동적 스크리너 경로 — 거래소 라우팅(실금 민감)."""
+
+    def _us_worker(self) -> ScreeningWorker:
+        from src.market.profile import US_PROFILE
+
+        with patch("src.worker.screener.KISAuth"), \
+             patch("src.worker.screener.KISClient"), \
+             patch("src.worker.screener.QuoteAPI"), \
+             patch("src.worker.screener.OverseasQuoteAPI"), \
+             patch("src.worker.screener.HybridRateLimiter"), \
+             patch("src.worker.screener.StrategyRegistry"), \
+             patch("src.worker.screener.StrategySelector"):
+            return ScreeningWorker(market_profile=US_PROFILE)
+
+    def test_us_worker_uses_overseas_quote_and_screener(self) -> None:
+        worker = self._us_worker()
+        assert worker._market.is_overseas
+        assert worker._ovs_quote is not None
+        assert worker._screener._is_overseas is True
+
+    @pytest.mark.asyncio()
+    async def test_run_screening_us_converts_and_routes_exchange(self) -> None:
+        from decimal import Decimal
+
+        from src.api.overseas_quote import OverseasRankItem
+        from src.config import settings
+
+        worker = self._us_worker()
+
+        def _rank(excd: str, top_n: int = 20) -> list[OverseasRankItem]:
+            sym = {"NAS": "AAPL", "NYS": "KO", "AMS": "XYZ"}[excd]
+            return [
+                OverseasRankItem(
+                    symbol=sym, exchange=excd, last=Decimal("190.25"),
+                    change_rate=1.2, volume=1000, rank=1,
+                )
+            ]
+
+        worker._ovs_quote.get_ranking = AsyncMock(side_effect=_rank)  # type: ignore[union-attr]
+        worker._ovs_quote.get_daily_price = AsyncMock(return_value=[])  # type: ignore[union-attr]
+        worker._load_existing_screened_codes = MagicMock(return_value=set())  # type: ignore[method-assign]
+        worker._screener.filter_candidates = MagicMock(  # type: ignore[method-assign]
+            side_effect=lambda items, ex: list(items)
+        )
+        captured: dict = {}
+
+        def _rec(ranked, new, market="KRX", exch_of=None):  # type: ignore[no-untyped-def]
+            captured["market"] = market
+            captured["exch_of"] = exch_of
+            captured["codes"] = [i.stock_code for i in ranked]
+            captured["prices"] = {i.stock_code: i.current_price for i in ranked}
+
+        worker._record_to_db = MagicMock(side_effect=_rec)  # type: ignore[method-assign]
+
+        await worker._run_screening_us(settings.screening)
+
+        assert captured["market"] == "US"
+        # 거래소 라우팅(실금 핵심): EXCD 순위 → OVRS_EXCG_CD로 매핑
+        assert captured["exch_of"]["AAPL"] == "NASD"
+        assert captured["exch_of"]["KO"] == "NYSE"
+        assert captured["exch_of"]["XYZ"] == "AMEX"
+        assert set(captured["codes"]) == {"AAPL", "KO", "XYZ"}
+        # Decimal last → int(round) 변환
+        assert captured["prices"]["AAPL"] == 190
+
+
 class TestRecordToDbMetric:
     """`_record_to_db`에서 SCREENING_CANDIDATE 메트릭이 기록되는지 검증한다.
 

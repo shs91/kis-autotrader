@@ -463,13 +463,18 @@ def test_settlement_idempotency_keys_market_namespaced() -> None:
         assert us_key != krx_key, f"{method}: KRX/US 멱등키 충돌 ({us_key})"
 
 
-def test_board_label_krx_keeps_literal_us_uses_market_code() -> None:
+def test_board_label_krx_literal_us_exchange() -> None:
     krx = TradingEngine(watchlist=["005930"])
-    assert krx._board_label("KOSPI") == "KOSPI"  # market_stats 필터 호환
-    assert krx._board_label("UNKNOWN") == "UNKNOWN"
+    assert krx._board_label("005930", "KOSPI") == "KOSPI"  # market_stats 필터 호환
+    assert krx._board_label("005930", "UNKNOWN") == "UNKNOWN"
     us = _us_engine()
-    assert us._board_label("KOSPI") == "US"  # US는 KRX 보드에 혼입 안 됨
-    assert us._board_label("UNKNOWN") == "US"
+    us._exchanges["AAPL"] = "NASD"
+    us._exchanges["KO"] = "NYSE"
+    # US는 거래소코드 — 워커가 쓴 stocks.market과 일관(주문 라우팅 시드 유지)
+    assert us._board_label("AAPL", "KOSPI") == "NASD"
+    assert us._board_label("KO", "KOSPI") == "NYSE"
+    # 미상 종목 → _exchange_of 폴백(첫 거래소), 'US' 리터럴 아님
+    assert us._board_label("ZZZZ", "KOSPI") == us._market.exchanges[0]
 
 
 # ── P4: 미국 보수 한도 (야간 무인 실전 안전장치) ──────────────
