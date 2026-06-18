@@ -326,3 +326,4 @@ class PriceSnapshotHandler(TaskHandler):
                 currency=payload.get("currency", "KRW"),
                 price=payload["price"],
             )
+            logger.info("가격 스냅샷 기록: %s %s", payload["stock_code"], payload["price"])
