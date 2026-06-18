@@ -362,7 +362,7 @@ class ScreeningWorker:
                     continue
                 merged[r.symbol] = VolumeRankItem(
                     stock_code=r.symbol,
-                    stock_name=r.symbol,  # 순위 API는 종목명 미제공
+                    stock_name=r.name or r.symbol,  # 순위 응답의 영문명(ename)
                     current_price=int(round(r.last)),
                     change_rate=r.change_rate,
                     volume=r.volume,

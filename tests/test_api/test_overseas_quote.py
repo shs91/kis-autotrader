@@ -183,8 +183,10 @@ class TestOverseasRanking:
     async def test_get_ranking_parses_output2(self) -> None:
         response = {
             "output2": [
-                {"symb": "TSLA", "last": "250.10", "rate": "3.2", "tvol": "90000000", "rank": "1"},
-                {"symb": "AAPL", "last": "150.25", "rate": "0.84", "tvol": "50000000", "rank": "2"},
+                {"symb": "TSLA", "ename": "TESLA INC", "last": "250.10",
+                 "rate": "3.2", "tvol": "90000000", "rank": "1"},
+                {"symb": "AAPL", "last": "150.25", "rate": "0.84",
+                 "tvol": "50000000", "rank": "2"},
             ]
         }
         api = self._make_api(response)
@@ -194,9 +196,11 @@ class TestOverseasRanking:
         assert result[0].symbol == "TSLA"
         assert result[0].last == Decimal("250.10")
         assert result[0].rank == 1
+        assert result[0].name == "TESLA INC"  # ename 보강
         assert result[1].symbol == "AAPL"
+        assert result[1].name == "AAPL"  # ename 부재 시 심볼 폴백
 
-    async def test_get_ranking_sends_excd(self) -> None:
+    async def test_get_ranking_sends_required_params(self) -> None:
         mock_client = AsyncMock()
         mock_client.get.return_value = {"output2": []}
         api = OverseasQuoteAPI(client=mock_client)
@@ -207,6 +211,9 @@ class TestOverseasRanking:
         assert call.kwargs.get("tr_id") == TR_ID_OVERSEAS_RANK_VOL
         params = call.kwargs.get("params")
         assert params["EXCD"] == "NYS"
+        # 필수 파라미터 — 누락 시 OPSQ2001(빈 결과)되던 회귀 가드
+        for required in ("PRC1", "PRC2", "VOL_RANG", "KEYB"):
+            assert required in params, f"필수 순위 파라미터 누락: {required}"
 
     async def test_get_ranking_empty_on_missing_output2(self) -> None:
         api = self._make_api({})
