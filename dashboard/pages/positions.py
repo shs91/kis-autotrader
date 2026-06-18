@@ -60,7 +60,9 @@ def load_snapshots(stock_code: str, days: int) -> pd.DataFrame:
         """
     )
     with get_engine().connect() as conn:
-        return pd.read_sql(query, conn, params={"code": stock_code, "since": since})
+        df = pd.read_sql(query, conn, params={"code": stock_code, "since": since})
+    df["price"] = df["price"].astype(float)
+    return df
 
 
 def load_trade_markers(stock_code: str, days: int) -> pd.DataFrame:
@@ -75,7 +77,9 @@ def load_trade_markers(stock_code: str, days: int) -> pd.DataFrame:
         """
     )
     with get_engine().connect() as conn:
-        return pd.read_sql(query, conn, params={"code": stock_code, "since": since})
+        df = pd.read_sql(query, conn, params={"code": stock_code, "since": since})
+    df["price"] = df["price"].astype(float)
+    return df
 
 
 # ── 메인 UI ──────────────────────────────────────────────────────────────────
