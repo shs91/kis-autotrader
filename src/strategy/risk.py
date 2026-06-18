@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src.config import settings
 from src.strategy.base import Signal, SignalType
@@ -34,6 +35,7 @@ class RiskManager:
         stagnation_hours: float | None = None,
         min_profitable_close: float | None = None,
         min_confidence: float | None = None,
+        tz: str | None = None,
     ) -> None:
         """리스크 관리자를 초기화한다.
 
@@ -46,7 +48,11 @@ class RiskManager:
             trailing_drawdown_ratio: 트레일링 매도폭 (기본 5%)
             min_profitable_close: 마감 청산 수익률 임계 (기본 1.5%)
             min_confidence: 최소 신뢰도 임계 (None이면 설정값 사용, 기본 10%)
+            tz: 시장 타임존(IANA, 예 "America/New_York"). 마감 임박 판정의 '현재
+                시각' 기준. None이면 시스템 로컬(KRX=KST). US가 시스템 KST 시각으로
+                마감 컷오프를 판정해 개장 직후에도 매수 차단되던 버그 방지.
         """
+        self._mkt_tz = ZoneInfo(tz) if tz else None
         self._max_loss_rate = (
             max_loss_rate
             if max_loss_rate is not None
@@ -229,12 +235,16 @@ class RiskManager:
         )
 
     def is_near_market_close(self, now: datetime | None = None) -> bool:
-        """장 마감 임박 여부를 판단한다.
+        """장 마감 임박 여부를 판단한다(시장 타임존 기준).
+
+        ``now`` 미지정 시 시장 타임존(self._mkt_tz)의 현재 시각으로 판정한다 —
+        US 엔진이 시스템 KST 시각으로 컷오프(14:30)를 넘겨 개장 직후에도 신규
+        매수가 차단되던 문제를 막는다. KRX는 tz=Asia/Seoul(시스템과 동일)로 불변.
 
         Returns:
-            True이면 MARKET_CLOSE_CUTOFF 이후 (기본 14:30)
+            True이면 MARKET_CLOSE_CUTOFF 이후 (기본 14:30, 시장 타임존)
         """
-        now = now or datetime.now()
+        now = now or datetime.now(self._mkt_tz)
         cutoff_hour = settings.trading.market_close_cutoff_hour
         cutoff_minute = settings.trading.market_close_cutoff_minute
         return (now.hour > cutoff_hour) or (

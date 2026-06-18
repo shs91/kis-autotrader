@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-18] 마감 임박 매수가드 타임존 — US가 개장 직후에도 매수 전면차단되던 라이브 블로커 (v0.19.2)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/strategy/risk.py: RiskManager(tz=) + is_near_market_close가 now 미지정 시 datetime.now(시장 타임존)로 판정. 기존엔 datetime.now()(시스템 KST)로 컷오프(14:30)와 비교.
+  - src/engine.py: RiskManager 생성 시 tz=self._market.timezone(KRX=Asia/Seoul, US=America/New_York).
+  - tests: 마감가드 시장 타임존 회귀 3건(tz저장·ET컷오프·default now가 시장tz 사용).
+- 배경: US 동적 스크리너가 발굴+BUY 신호 생성했으나(6/18 라이브, PBR/A 0.78 등 BUY 10) 전부 BUY_REJECT(MARKET_CLOSE_GUARD). 원인: is_near_market_close가 시스템 KST 시각(22:54)을 US 마감 컷오프(14:30 KRX용)와 비교 → 22>14로 항상 "마감 임박" → US 세션(KST 22:30~05:00) 내내 신규 매수 차단. US 배포 후 잠복(BUY 신호가 처음 나서 노출). settlement date.today() KST 이슈와 동류.
+- 영향: US는 ET 기준으로 마감 컷오프 판정 → 개장~14:30 ET 매수 허용, 14:30 ET 이후 차단(1.5h 전). **KRX는 tz=Asia/Seoul(시스템 KST 동일)·.hour 동일로 동작 불변**(전체 1228 통과). 마감 청산 게이트·익절 하향(같은 메서드)도 US에서 정합화.
+- 검증 결과: pytest 전체 **1228 passed**(신규 3) | mypy strict ✅ | ruff ✅ | 라이브 발현 확인(BUY_REJECT=MARKET_CLOSE_GUARD).
+- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 매수 정상화. DB/마이그 불변. US 라이브 활성 중이라 조기 배포 권장. 컷오프 14:30은 KRX/US 공유(US=close 1.5h 전) — 필요 시 US 전용 컷오프 별도.
+
+---
+
 ## [2026-06-18] 해외 거래량순위 필수 파라미터 누락 수정 — US 스크리너 발굴 0 라이브 블로커 (v0.19.1)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -61,16 +74,4 @@
 - 영향: KRX/US 결산이 (date, market) 복합키로 분리 저장. trades·screening 집계 시장 격리(error/cycle는 system_metrics market 컬럼 부재로 합산 유지=기존과 동일). **KRX는 market=KRX 기본값·dashboard 필터로 동작 불변**(전체 1215 통과). sell_reason는 ADD VALUE IF NOT EXISTS라 재실행 no-op(stamp 불필요).
 - 검증 결과: pytest 전체 **1215 passed**(신규 2) | mypy strict ✅(102 files) | ruff ✅(변경분) | 마이그 오프라인 SQL 검증.
 - 비고: **운영자 액션 — alembic upgrade head**(sell_reason 재실행 no-op + daily 테이블 market 컬럼 추가) → main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. 과거 US 오염 결산 행(6/18 daily_perf 등)은 KRX 라벨 백필 — 필요 시 별도 데이터 정정.
-
----
-
-## [2026-06-18] 결산 멱등키 시장 네임스페이스 — US가 KRX 캘린더/결산을 선점·디듑하던 버그 (v0.17.1)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/engine.py: _today()=datetime.now(self._tz).date()(시장 타임존 날짜, US=ET). post_market·결산 enqueue 5종(calendar/telegram_summary/telegram_diag/daily_summary/daily_perf)의 idempotency_key를 `{type}_{market_code}_{date}`로 시장 네임스페이스(sync_portfolio는 P3c-4에서 이미 적용). 결산/스크리닝/일일성과 날짜를 _today()로 통일.
-  - tests: test_settlement_idempotency_keys_market_namespaced(KRX/US 키 분리·충돌 검증), diagnostics 테스트에 _market/_tz 주입.
-- 배경: 결산 enqueue 멱등키가 시장 네임스페이스 없이 `calendar_{date}`라, US 프로세스가 ET 16:10 결산(=KST 새벽)에 date.today()=KST 다음날로 0건 태스크를 먼저 등록 → 같은 날짜 KRX 결산(15:40)의 실제 enqueue가 멱등 디듑됨. 6/18 KRX 10건(+17,332원)인데 캘린더가 "0건 +0원"(US가 calendar_2026-06-18을 KST 05:10에 선점, 태스크 id 397124 exec_cnt=0). 캘린더 외 telegram_summary·telegram_diag·daily_perf도 동일 선점.
-- 영향: KRX/US가 각자 결산 이벤트/알림을 등록(키 분리). US date.today()의 KST 오인을 _today()로 교정(US=ET 세션 날짜). **KRX는 self._tz=Asia/Seoul·market_code=KRX라 날짜·키 모두 기존과 동일**(동작 불변). daily_summary 테이블 자체 격리(market 컬럼)는 후속(#4). 과거 잘못 등록된 6/18 이벤트는 운영자 수동 정리.
-- 검증 결과: pytest 전체 **1213 passed**(신규 1) | mypy strict ✅(102 files) | ruff ✅(변경분).
-- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. DB/스키마 불변. 오늘(6/18) KRX 캘린더 이벤트는 별도 재생성/정리 필요.
 

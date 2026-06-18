@@ -1,10 +1,40 @@
 """리스크 관리 모듈 테스트."""
 
+from datetime import datetime
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from src.strategy.base import Signal, SignalType
 from src.strategy.risk import RiskManager
 from src.utils.exceptions import RiskLimitError
+
+
+class TestMarketCloseGuardTimezone:
+    """마감 임박 판정이 시장 타임존을 쓰는지 — US 개장 직후 매수 차단 버그 회귀."""
+
+    def test_tz_stored(self) -> None:
+        assert RiskManager(tz="America/New_York")._mkt_tz == ZoneInfo("America/New_York")
+        assert RiskManager()._mkt_tz is None  # 기본(KRX 하위호환)
+
+    def test_explicit_now_cutoff_in_market_tz(self) -> None:
+        rm = RiskManager(tz="America/New_York")  # 컷오프 14:30
+        # ET 09:54 개장 직후 → 컷오프 전 → 차단 아님
+        et_open = datetime(2026, 6, 18, 9, 54, tzinfo=ZoneInfo("America/New_York"))
+        assert rm.is_near_market_close(et_open) is False
+        # ET 15:00 → 컷오프 후 → 마감 임박
+        et_late = datetime(2026, 6, 18, 15, 0, tzinfo=ZoneInfo("America/New_York"))
+        assert rm.is_near_market_close(et_late) is True
+
+    def test_default_now_uses_market_tz_not_system(self) -> None:
+        """now 미지정 시 datetime.now(market_tz) 호출 — 시스템 KST 아닌 ET 기준."""
+        rm = RiskManager(tz="America/New_York")
+        et_open = datetime(2026, 6, 18, 9, 54, tzinfo=ZoneInfo("America/New_York"))
+        with patch("src.strategy.risk.datetime") as mock_dt:
+            mock_dt.now.return_value = et_open
+            assert rm.is_near_market_close() is False
+            mock_dt.now.assert_called_once_with(ZoneInfo("America/New_York"))
 
 
 class TestCheckMaxLoss:
