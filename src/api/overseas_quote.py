@@ -82,6 +82,7 @@ class OverseasRankItem:
     change_rate: float
     volume: int
     rank: int
+    name: str = ""  # 종목명(ename 영문 우선, 없으면 심볼). 표시/로그/캘린더용.
 
 
 class OverseasQuoteAPI:
@@ -173,11 +174,16 @@ class OverseasQuoteAPI:
             top_n: 상위 N개 절단
         """
         logger.info("[해외 거래량순위] EXCD=%s top=%d", exchange, top_n)
+        # PRC1/PRC2(가격범위)·KEYB(연속조회키)는 빈값이어도 **필수**. 누락 시
+        # OPSQ2001 "ERROR INPUT FIELD NOT FOUND [PRC1]"로 output 부재(빈 결과).
         params = {
             "AUTH": "",
             "EXCD": exchange,
             "NDAY": "0",
+            "PRC1": "",
+            "PRC2": "",
             "VOL_RANG": "0",
+            "KEYB": "",
         }
         response = await self._client.get(
             OVERSEAS_RANK_VOL_PATH, params=params, tr_id=TR_ID_OVERSEAS_RANK_VOL
@@ -196,6 +202,8 @@ class OverseasQuoteAPI:
                     change_rate=float(_get(item, "rate", "0") or "0"),
                     volume=int(_get(item, "tvol", "0") or "0"),
                     rank=int(_get(item, "rank", "0") or str(idx)),
+                    # 순위 응답이 영문명(ename)·한글명(name) 제공 → 종목명 보강.
+                    name=_get(item, "ename") or _get(item, "name") or symbol,
                 )
             )
         return results

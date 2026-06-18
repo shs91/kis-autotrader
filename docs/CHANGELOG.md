@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-18] 해외 거래량순위 필수 파라미터 누락 수정 — US 스크리너 발굴 0 라이브 블로커 (v0.19.1)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/api/overseas_quote.py: get_ranking params에 PRC1/PRC2(가격범위)·KEYB(연속조회키) 추가 — 빈값이어도 필수. OverseasRankItem.name(ename 영문명) 추가.
+  - src/worker/screener.py: _run_screening_us가 r.name(영문명)으로 stock_name 보강.
+  - tests: get_ranking 필수 파라미터 회귀 가드 + name(ename) 파싱.
+- 배경: US 동적 스크리너(#65) 라이브 활성화(6/18 22:25 KST) 후 발굴 0 관측. 진단 결과 trade-vol 순위 API(HHDFS76310010)가 PRC1 누락으로 OPSQ2001 "ERROR INPUT FIELD NOT FOUND [PRC1]" 반환 → output2 부재 → 빈 결과 → _run_screening_us가 all_items 비어 로그 없이 early return. P2 get_ranking의 잠복 버그(스크리너가 첫 실호출자라 노출). 파라미터 보강 시 output2 100종목 정상(msg_cd MCA00000).
+- 영향: US 스크리너가 거래소별 100종목 순위를 정상 발굴. 응답의 ename(영문명) 활용으로 종목명도 심볼 대신 정식명(예: ADITXT INC). KRX 무관(해외 전용 API). opt-in이라 SCREENING_US_ENABLED=true에서만 경로 활성.
+- 검증 결과: pytest 전체 **1225 passed**(신규 회귀 가드) | mypy strict ✅ | ruff ✅ | 라이브 진단으로 output2 100종목 실측 확인.
+- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 스크리너 발굴 정상화. DB/스키마/마이그 불변. 라이브 활성 중이라 조기 배포 권장.
+
+---
+
 ## [2026-06-18] US 동적 스크리너 (P3c-5 2/2) — 거래소별 순위 발굴, opt-in 기본 off (v0.19.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -61,31 +74,3 @@
 - 검증 결과: pytest 전체 **1213 passed**(신규 1) | mypy strict ✅(102 files) | ruff ✅(변경분).
 - 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. DB/스키마 불변. 오늘(6/18) KRX 캘린더 이벤트는 별도 재생성/정리 필요.
 
----
-
-## [2026-06-18] US 통화 인지 — present-balance(외화예수금·총손익·환율) + 로그 통화 단위 (v0.17.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/market/profile.py: format_money(amount, currency) — KRW는 기존 로그와 바이트 동일(정수+"원"), USD는 "$"+2자리(센트 보존)·음수는 "-$".
-  - src/api/overseas_account.py: get_present_balance(CTRP6504R) + OverseasPresentBalance — 외화예수금·총평가·총손익·평가수익률·고시환율. 필드명 confidence=medium → _get_any 후보키 폴백 + valid 플래그.
-  - src/api/account.py: Balance/StockHolding 금액 필드 int→float(USD 센트 보존) + currency 필드(기본 KRW).
-  - src/api/protocols.py: OverseasAccountProvider에 get_present_balance 추가.
-  - src/engine.py: _fetch_overseas_balance가 present-balance로 deposit/total_eval/total_pl/환율 보강(실패·무효 시 보유 합산+us_cash_budget 폴백). _money() 통화 인지 포맷으로 잔고확인·결산·체결·매수차단 로그 라우팅. self._fx_rate.
-  - src/config.py: fx_usd_krw(폴백 환율)·us_present_balance_enabled(스위치). .env.example 반영.
-  - tests: format_money 7·present-balance 5·_fetch_overseas_balance 2(신규 13 등).
-- 배경: P3c-2 이후 US 잔고가 deposit=us_cash_budget 하드코딩·total_profit_loss=0 고정이라 실잔고·평가손익 추적 불가, 보유 USD를 int(round)로 절단(센트 손실), 환율 처리 전무, 로그가 USD를 전부 "원"으로 표기해 운영자 통화 혼동(High 1~3).
-- 영향: US는 체결기준현재잔고로 실예수금·총손익·고시환율을 반영하고 로그가 "$"로 표기. present-balance 실패 시 보수 폴백으로 라이브 오표기 방지. **KRX는 format_money(KRW)·currency 기본값으로 동작 불변**(바이트 불변, 전체 1212 통과). 통합증거금 자동환전이라 환율은 표시/환산용(주문 사이징 미사용). Telegram 포맷터 통화 인지화는 태스크큐 페이로드 plumbing 필요로 후속.
-- 검증 결과: pytest 전체 **1212 passed**(신규 13) | mypy strict ✅(102 files) | ruff ✅(변경분).
-- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변. US_PRESENT_BALANCE_ENABLED=false로 비활성(보유합산 폴백), FX_USD_KRW로 폴백 환율 조정.
-
----
-
----
-
----
-
----
-
----
-
----
