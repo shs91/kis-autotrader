@@ -242,14 +242,15 @@ def _us_holding(exchange: str, currency: str = "USD") -> object:
 
 @pytest.mark.asyncio
 async def test_fetch_overseas_balance_uses_present_balance() -> None:
-    """present-balance 유효 시 실예수금·총손익·고시환율을 반영, 보유는 센트 보존."""
+    """present-balance 유효 시 총평가/손익/환율 반영, deposit은 예산 캡 유지(보수 사이징)."""
     from src.api.overseas_account import OverseasPresentBalance
 
     oa = MagicMock()
     oa.get_balance = AsyncMock(side_effect=_us_holding)
     oa.get_present_balance = AsyncMock(
         return_value=OverseasPresentBalance(
-            deposit=Decimal("987.65"), total_eval=Decimal("450.75"),
+            deposit=Decimal("9999.00"),  # 통합증거금 큰 매수여력
+            total_eval=Decimal("450.75"),
             total_profit_loss=Decimal("200.00"), profit_rate=12.5,
             fx_rate=Decimal("1385.20"), currency="USD", valid=True, raw={},
         )
@@ -258,8 +259,10 @@ async def test_fetch_overseas_balance_uses_present_balance() -> None:
     bal = await e._get_balance(force=True)
 
     assert bal.currency == "USD"
-    assert bal.deposit == 987.65  # present-balance 실예수금(예산값 아님)
-    assert bal.total_profit_loss == 200.00  # 보유합산(149.25) 아닌 present-balance
+    # deposit(사이징 기준)은 us_cash_budget 캡 — pb.deposit(9999) 미반영(과대주문 방지)
+    assert bal.deposit == 1000
+    assert bal.total_profit_loss == 200.00  # present-balance 실손익
+    assert bal.total_eval_amount == 450.75
     assert bal.total_profit_rate == 12.5
     assert e._fx_rate == 1385.20  # 고시환율 갱신
     h = next(x for x in bal.holdings if x.stock_code == "AAPL")

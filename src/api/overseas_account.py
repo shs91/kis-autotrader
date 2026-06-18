@@ -210,12 +210,14 @@ class OverseasAccountAPI:
         response = await self._client.get(
             OVERSEAS_PRESENT_BALANCE_PATH, params=params, tr_id=tr_id
         )
+        # 실측(2026-06-18): 이 계좌 응답은 output3(계좌 요약)에 데이터가 있고
+        # output2(통화별)는 부재. 외화예수금/사용가능액·총평가·총손익·수익률을 output3에서
+        # 읽는다. output2가 있는 변형도 대비해 후보키로 방어. 환율은 present-balance에
+        # 미제공 → psamount(exrt)/설정 폴백이 처리.
         out2_list = response.get("output2", []) or []
         out3 = response.get("output3", {}) or {}
         if isinstance(out3, list):
             out3 = out3[0] if out3 else {}
-
-        # 통화별 잔고(output2)에서 해당 통화 행 선택
         cur_row: dict[str, Any] = {}
         for row in out2_list:
             if _get(row, "crcy_cd", "").upper() == currency.upper():
@@ -224,19 +226,23 @@ class OverseasAccountAPI:
         if not cur_row and out2_list:
             cur_row = out2_list[0]
 
+        # 외화 사용가능금액(매수여력) 우선, 없으면 총/외화예수금. output3→output2 폴백.
         deposit = _decimal(
-            _get_any(cur_row, "frcr_dncl_amt_2", "frcr_dncl_amt1", "frcr_dncl_amt")
+            _get_any(
+                out3, "frcr_use_psbl_amt", "tot_dncl_amt", "dncl_amt"
+            )
+            or _get_any(cur_row, "frcr_dncl_amt_2", "frcr_dncl_amt1")
         )
-        fx_rate = _decimal(_get_any(cur_row, "frst_bltn_exrt", "bass_exrt"))
         total_eval = _decimal(
-            _get_any(out3, "frcr_evlu_tota", "evlu_amt_smtl_amt", "ovrs_tot_evlu_amt")
+            _get_any(out3, "frcr_evlu_tota", "evlu_amt_smtl_amt", "tot_frcr_cblc_smtl")
         )
         total_pl = _decimal(
-            _get_any(out3, "tot_evlu_pfls_amt", "ovrs_tot_pfls", "frcr_evlu_pfls_amt")
+            _get_any(out3, "tot_evlu_pfls_amt", "evlu_pfls_amt_smtl", "ovrs_tot_pfls")
         )
         profit_rate = float(
-            _get_any(out3, "evlu_erng_rt", "tot_evlu_pfls_rt", default="0") or "0"
+            _get_any(out3, "evlu_erng_rt1", "evlu_erng_rt", default="0") or "0"
         )
+        fx_rate = _decimal(_get_any(cur_row, "frst_bltn_exrt", "bass_exrt"))
         # 유효성: 예수금/평가 중 하나라도 양수면 신뢰. 둘 다 0이면 무효(폴백 유도).
         valid = deposit > 0 or total_eval > 0
         return OverseasPresentBalance(

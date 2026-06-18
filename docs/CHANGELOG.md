@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-06-18] present-balance output3 파싱 + 통합증거금 과대주문 방지 (v0.19.3)
+- 카테고리: bug_fix
+- 변경 파일:
+  - src/api/overseas_account.py: get_present_balance가 output3(실측 필드: frcr_use_psbl_amt 매수여력·tot_dncl_amt 예수금·frcr_evlu_tota 평가·tot_evlu_pfls_amt 손익·evlu_erng_rt1 수익률)에서 파싱. 기존엔 output2(부재)에서 찾아 valid=False였음.
+  - src/engine.py: _fetch_overseas_balance가 deposit(사이징 기준)을 us_cash_budget 캡으로 유지 — pb.deposit(통합증거금 매수여력, 클 수 있음)으로 덮지 않음(과대주문 방지). 평가/손익/환율만 present-balance 실값 반영 + 매수여력 로깅.
+  - tests: present-balance output3 파싱·환율 output2 폴백·deposit 캡 유지 회귀.
+- 배경: US 라이브 진단 결과 present-balance(CTRP6504R) 데이터가 output2 아닌 output3에 있어 #61 파싱이 항상 valid=False→us_cash_budget 폴백. 우연히 안전(보수 사이징)했으나 표시 부정확. 또한 통합증거금 활성 시 매수여력(원화담보 환산, 클 수 있음)을 deposit으로 쓰면 사이징 과대 → us_cash_budget($1000) 캡 명시.
+- 영향: 계좌 충전(통합증거금) 후 평가/손익을 실값으로 표시하되 사이징은 us_cash_budget 캡 유지(실주문은 _get_buyable_qty가 별도 캡). KRX 무관. US 매수 블로커는 계좌 매수여력 $0(통합증거금 미활성)이라 본 수정과 별개(코드는 준비됨).
+- 검증 결과: pytest 전체 **1229 passed**(신규 회귀) | mypy strict ✅ | ruff ✅ | 라이브 진단 실측 필드 확인.
+- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 반영. DB/마이그 불변. 통합증거금 활성 후 평가/손익 정확표시.
+
+---
+
 ## [2026-06-18] 마감 임박 매수가드 타임존 — US가 개장 직후에도 매수 전면차단되던 라이브 블로커 (v0.19.2)
 - 카테고리: bug_fix
 - 변경 파일:
@@ -59,19 +72,4 @@
 - 영향: US 알림이 "$"+센트로 표기. **KRX는 currency=KRW 기본값·format_money(KRW) 정수+"원"으로 바이트 동일**(전체 1219 통과, notify 기존 테스트 무회귀). 멀티마켓 통화 인지화 3층(로그 #61·결산테이블 #63·알림 #이번) 완결.
 - 검증 결과: pytest 전체 **1219 passed**(신규 4) | mypy strict ✅(102 files) | ruff ✅(변경분).
 - 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변.
-
----
-
-## [2026-06-18] 결산 테이블 시장 격리 — daily_summary/daily_performances market 컬럼 + alembic 중복 head 복구 (v0.18.0)
-- 카테고리: enhancement
-- 변경 파일:
-  - src/db/models.py: DailySummary/DailyPerformance에 market 컬럼(server_default KRX) + 복합 unique(date, market). 기존 단일 date unique 해제.
-  - alembic: c3d4e5f6a7b8 중복 revision 해소 — sell_reason 마이그를 고유 ID d4e5f6a7b8c9로 rename + Numeric(c3d4e5f6a7b8) 뒤로 재연결(선형화). 신규 e5f6a7b8c9d0: market 컬럼 추가 + unique 인덱스→복합 제약, 기존 행 KRX 백필.
-  - src/db/repository.py: upsert_daily_summary(date, market)·get_by_date(date, market) — trades·screening_results 시장 필터 + (date,market) upsert. DailyPerformanceRepository.create/get_by_date에 market.
-  - src/worker/handlers.py: DailySummary/DailyPerformance 핸들러가 payload market 전달. src/engine.py: 결산 enqueue payload + 레거시 경로 market 배선. src/scheduler/jobs.py·src/db/analytics.py: market 전달. dashboard: daily_summary/perf 쿼리 market='KRX' 필터(복합키 후 더블카운트 방지).
-  - tests: 결산 시장 격리 회귀 2건(summary·performance).
-- 배경: #62가 결산 enqueue 멱등키를 시장 분리했으나, daily_summary/daily_performances 테이블 자체는 date 단일 unique라 KRX/US가 같은 날짜 행을 덮어쓰던 잔여(#4). 또한 sell_reason 마이그(v0.16.1)가 Numeric 마이그와 동일 revision ID(c3d4e5f6a7b8)를 잘못 써 alembic head가 갈라진 사전존재 결함을 발견 — 새 마이그 생성을 막아 동반 복구.
-- 영향: KRX/US 결산이 (date, market) 복합키로 분리 저장. trades·screening 집계 시장 격리(error/cycle는 system_metrics market 컬럼 부재로 합산 유지=기존과 동일). **KRX는 market=KRX 기본값·dashboard 필터로 동작 불변**(전체 1215 통과). sell_reason는 ADD VALUE IF NOT EXISTS라 재실행 no-op(stamp 불필요).
-- 검증 결과: pytest 전체 **1215 passed**(신규 2) | mypy strict ✅(102 files) | ruff ✅(변경분) | 마이그 오프라인 SQL 검증.
-- 비고: **운영자 액션 — alembic upgrade head**(sell_reason 재실행 no-op + daily 테이블 market 컬럼 추가) → main 머지 후 pull → `com.kis.autotrader`·`com.kis.autotrader.us` 재시작. 과거 US 오염 결산 행(6/18 daily_perf 등)은 KRX 라벨 백필 — 필요 시 별도 데이터 정정.
 

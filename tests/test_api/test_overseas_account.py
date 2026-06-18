@@ -104,29 +104,34 @@ class TestGetPresentBalance:
         api._env = "real"  # CTRP6504R는 실전 전용
         return api
 
-    async def test_parses_deposit_eval_pl_fx(self) -> None:
+    async def test_parses_output3_real_fields(self) -> None:
+        # 실측(2026-06-18): 데이터는 output3에. 매수여력(frcr_use_psbl_amt)·
+        # 외화평가총액·총손익·수익률(evlu_erng_rt1). output2(환율)는 부재 변형.
         response = {
-            "output2": [
-                {
-                    "crcy_cd": "USD",
-                    "frcr_dncl_amt_2": "1000.50",
-                    "frst_bltn_exrt": "1385.20",
-                },
-            ],
             "output3": {
+                "frcr_use_psbl_amt": "1000.50",
+                "tot_dncl_amt": "999.00",
                 "frcr_evlu_tota": "2502.50",
                 "tot_evlu_pfls_amt": "120.30",
-                "evlu_erng_rt": "5.04",
+                "evlu_erng_rt1": "5.04",
             },
         }
         pb = await self._real_api(response).get_present_balance("USD")
         assert pb.valid is True
-        assert pb.deposit == Decimal("1000.50")
+        assert pb.deposit == Decimal("1000.50")  # 매수여력 우선
         assert pb.total_eval == Decimal("2502.50")
         assert pb.total_profit_loss == Decimal("120.30")
         assert pb.profit_rate == 5.04
-        assert pb.fx_rate == Decimal("1385.20")
         assert pb.currency == "USD"
+
+    async def test_fx_from_output2_when_present(self) -> None:
+        response = {
+            "output2": [{"crcy_cd": "USD", "frst_bltn_exrt": "1385.20"}],
+            "output3": {"frcr_use_psbl_amt": "500.00"},
+        }
+        pb = await self._real_api(response).get_present_balance("USD")
+        assert pb.fx_rate == Decimal("1385.20")
+        assert pb.deposit == Decimal("500.00")
 
     async def test_sends_present_balance_params(self) -> None:
         c = AsyncMock()

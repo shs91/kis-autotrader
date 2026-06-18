@@ -414,14 +414,23 @@ class TradingEngine:
             try:
                 pb = await self._ovs_account.get_present_balance(cur)
                 if pb.valid:
-                    if pb.deposit > 0:
-                        deposit = float(pb.deposit)
+                    # 사이징 기준 deposit은 us_cash_budget 캡 유지(보수). 통합증거금
+                    # 매수여력(pb.deposit)은 크게 잡힐 수 있어 사이징에 쓰면 과대주문
+                    # 위험 → 실주문은 _get_buyable_qty(브로커 매수가능)가 별도 캡.
+                    # present-balance는 평가/손익/환율 등 표시·추적용으로만 반영.
                     if pb.total_eval > 0:
                         total_eval = float(pb.total_eval)
                     total_pl = float(pb.total_profit_loss)
                     total_rate = pb.profit_rate
                     if pb.fx_rate > 0:
                         self._fx_rate = float(pb.fx_rate)
+                    logger.info(
+                        "해외 현재잔고: 매수여력 %s, 평가 %s, 손익 %s (사이징 기준 예산 %s)",
+                        self._money(float(pb.deposit)),
+                        self._money(total_eval),
+                        self._money(total_pl),
+                        self._money(deposit),
+                    )
                 else:
                     logger.info(
                         "해외 현재잔고 무효 — 보유 합산/예산값으로 폴백"
