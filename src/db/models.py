@@ -210,9 +210,16 @@ class DailyPerformance(Base):
     """일일 성과 테이블."""
 
     __tablename__ = "daily_performances"
+    # 멀티마켓: (날짜, 시장)로 유일. KRX/US 성과가 같은 날짜 행을 덮어쓰지 않도록.
+    __table_args__ = (
+        UniqueConstraint("date", "market", name="uq_daily_perf_date_market"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    date: Mapped[date] = mapped_column(unique=True, index=True, nullable=False)
+    date: Mapped[date] = mapped_column(index=True, nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
+    )
     total_profit_loss: Mapped[float] = mapped_column(Float, nullable=False)
     profit_rate: Mapped[float] = mapped_column(Float, nullable=False)
     execution_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -639,10 +646,15 @@ class DailySummary(Base):
     """일일 요약 테이블 (리포트용 집계)."""
 
     __tablename__ = "daily_summary"
+    # 멀티마켓: (날짜, 시장)로 유일. KRX/US 결산이 같은 날짜 행을 덮어쓰지 않도록.
+    __table_args__ = (
+        UniqueConstraint("report_date", "market", name="uq_daily_summary_date_market"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    report_date: Mapped[date] = mapped_column(
-        Date, unique=True, index=True, nullable=False
+    report_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX", index=True
     )
     total_buy_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_sell_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

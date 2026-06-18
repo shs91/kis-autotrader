@@ -98,7 +98,7 @@ def load_daily_performance(days: int = 30) -> pd.DataFrame:
     query = text("""
         SELECT date, total_profit_loss, profit_rate, execution_count, details
         FROM daily_performances
-        WHERE date >= :since
+        WHERE date >= :since AND market = 'KRX'
         ORDER BY date
     """)
     with get_engine().connect() as conn:
@@ -131,7 +131,7 @@ def load_today_summary() -> pd.Series | None:
                screening_count, screening_conversion_count,
                error_count, cycle_count
         FROM daily_summary
-        WHERE report_date = :today
+        WHERE report_date = :today AND market = 'KRX'
     """)
     with get_engine().connect() as conn:
         df = pd.read_sql(query, conn, params={"today": today})

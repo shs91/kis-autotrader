@@ -286,6 +286,22 @@ class TestDailyPerformanceRepository:
         repo = DailyPerformanceRepository(session)
         assert repo.get_by_date(date(2020, 1, 1)) is None
 
+    def test_create_get_isolated_by_market(self, session: Session) -> None:
+        """(날짜, 시장) 복합키 — 같은 날짜라도 KRX/US 성과를 분리 저장·조회한다."""
+        repo = DailyPerformanceRepository(session)
+        repo.create(perf_date=date(2026, 6, 18), total_pl=17332.0, rate=0.0092, count=10)
+        repo.create(
+            perf_date=date(2026, 6, 18), total_pl=-5.0, rate=-0.01, count=1, market="US"
+        )
+        session.commit()
+
+        krx = repo.get_by_date(date(2026, 6, 18))  # 기본 KRX
+        us = repo.get_by_date(date(2026, 6, 18), "US")
+        assert krx is not None and us is not None
+        assert krx.id != us.id
+        assert krx.market == "KRX" and krx.execution_count == 10
+        assert us.market == "US" and us.execution_count == 1
+
     def test_get_recent(self, session: Session) -> None:
         """최근 N일간 성과를 조회한다."""
         repo = DailyPerformanceRepository(session)
@@ -683,6 +699,38 @@ class TestDailySummaryRepository:
         assert summary.win_rate == 0.5  # 1 win / 2 sells
         assert summary.take_profit_count == 1
         assert summary.stop_loss_count == 1
+
+    def test_upsert_daily_summary_isolates_by_market(self, session: Session) -> None:
+        """공유 trades를 시장별로 격리 집계 — KRX/US가 같은 날짜 행을 안 덮어쓴다."""
+        trade_repo = TradeRepository(session)
+        trade_repo.record_trade(
+            stock_code="005930", stock_name="삼성전자",
+            trade_type=TradeType.SELL, quantity=10, price=72000,
+            total_amount=720000, traded_at=datetime(2026, 6, 18, 14, 0),
+            sell_reason=SellReason.TAKE_PROFIT, profit_loss_amount=17332,
+        )  # KRX 기본
+        trade_repo.record_trade(
+            stock_code="AAPL", stock_name="Apple",
+            trade_type=TradeType.SELL, quantity=2, price=190,
+            total_amount=380, traded_at=datetime(2026, 6, 18, 20, 0),
+            sell_reason=SellReason.STOP_LOSS, profit_loss_amount=-5,
+            market="US", currency="USD",
+        )
+        session.flush()
+
+        repo = DailySummaryRepository(session)
+        krx = repo.upsert_daily_summary(date(2026, 6, 18), "KRX")
+        us = repo.upsert_daily_summary(date(2026, 6, 18), "US")
+        session.commit()
+
+        # 별도 행(복합키), 시장별 집계 격리
+        assert krx.id != us.id
+        assert krx.market == "KRX"
+        assert krx.total_sell_count == 1
+        assert krx.total_profit_loss == 17332  # US 누수 없음
+        assert us.market == "US"
+        assert us.total_sell_count == 1
+        assert us.total_profit_loss == -5  # KRX 누수 없음
 
     def test_upsert_updates_existing(self, session: Session) -> None:
         """기존 요약이 있으면 갱신한다."""

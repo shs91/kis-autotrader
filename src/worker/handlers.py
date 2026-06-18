@@ -88,18 +88,21 @@ class DailySummaryHandler(TaskHandler):
 
         payload:
             report_date: 집계 대상 날짜 (ISO 문자열).
+            market: 시장 코드 (KRX/US, 기본 KRX).
         """
         from src.db.repository import DailySummaryRepository
         from src.db.session import get_session
 
         report_date = date.fromisoformat(payload["report_date"])
+        market = payload.get("market", "KRX")
 
         with get_session() as session:
             repo = DailySummaryRepository(session)
-            summary = repo.upsert_daily_summary(report_date)
+            summary = repo.upsert_daily_summary(report_date, market)
             logger.info(
-                "일일 요약 집계 완료: %s (매수=%d, 매도=%d)",
+                "일일 요약 집계 완료: %s [%s] (매수=%d, 매도=%d)",
                 report_date,
+                market,
                 summary.total_buy_count,
                 summary.total_sell_count,
             )
@@ -162,17 +165,19 @@ class DailyPerformanceHandler(TaskHandler):
             profit_rate: 수익률 (비율, 예: 2.5% → 0.025).
             execution_count: 체결 건수.
             details: 상세 JSON 문자열 (nullable).
+            market: 시장 코드 (KRX/US, 기본 KRX).
         """
         from src.db.repository import DailyPerformanceRepository
         from src.db.session import get_session
 
         trade_date = date.fromisoformat(payload["trade_date"])
+        market = payload.get("market", "KRX")
 
         with get_session() as session:
             repo = DailyPerformanceRepository(session)
-            existing = repo.get_by_date(trade_date)
+            existing = repo.get_by_date(trade_date, market)
             if existing:
-                logger.debug("일일 성과 이미 존재: %s", trade_date)
+                logger.debug("일일 성과 이미 존재: %s [%s]", trade_date, market)
                 return
 
             repo.create(
@@ -181,8 +186,9 @@ class DailyPerformanceHandler(TaskHandler):
                 rate=payload["profit_rate"],
                 count=payload["execution_count"],
                 details=payload.get("details"),
+                market=market,
             )
-            logger.info("일일 성과 저장 완료: %s", trade_date)
+            logger.info("일일 성과 저장 완료: %s [%s]", trade_date, market)
 
 
 class RecordTradeHandler(TaskHandler):

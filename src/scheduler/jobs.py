@@ -219,10 +219,13 @@ class TradingScheduler:
             today = datetime.now(self._tz).date()
             with get_session() as session:
                 repo = DailySummaryRepository(session)
-                summary = repo.upsert_daily_summary(today)
+                summary = repo.upsert_daily_summary(
+                    today, self._market.market_code
+                )
                 logger.info(
-                    "일일 요약 집계 완료: %s (매수=%d, 매도=%d, 손익=%d)",
+                    "일일 요약 집계 완료: %s [%s] (매수=%d, 매도=%d, 손익=%d)",
                     today,
+                    self._market.market_code,
                     summary.total_buy_count,
                     summary.total_sell_count,
                     summary.total_profit_loss,

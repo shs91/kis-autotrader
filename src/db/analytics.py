@@ -321,20 +321,23 @@ def get_daily_errors(session: Session, target_date: date) -> dict[str, Any]:
     }
 
 
-def get_daily_summary(session: Session, target_date: date) -> dict[str, Any]:
-    """해당일 요약을 반환한다. 없으면 집계 후 생성한다.
+def get_daily_summary(
+    session: Session, target_date: date, market: str = "KRX"
+) -> dict[str, Any]:
+    """해당일·시장 요약을 반환한다. 없으면 집계 후 생성한다.
 
     Args:
         session: DB 세션
         target_date: 조회 날짜
+        market: 시장 코드("KRX"|"US"). 기본 KRX(기존 동작 보존).
 
     Returns:
         일일 요약 딕셔너리
     """
     repo = DailySummaryRepository(session)
-    summary = repo.get_by_date(target_date)
+    summary = repo.get_by_date(target_date, market)
     if summary is None:
-        summary = repo.upsert_daily_summary(target_date)
+        summary = repo.upsert_daily_summary(target_date, market)
 
     return {
         "report_date": summary.report_date.isoformat(),

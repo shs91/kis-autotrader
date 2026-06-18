@@ -1,16 +1,21 @@
 """add SellReason BREAKEVEN/STAGNATION (v0.16.0 청산 사유)
 
-Revision ID: c3d4e5f6a7b8
-Revises: a1b2c3d4e5f6
+Revision ID: d4e5f6a7b8c9
+Revises: c3d4e5f6a7b8
 Create Date: 2026-06-17
+
+수정(2026-06-18): 본 마이그가 Numeric 마이그와 동일한 revision ID(c3d4e5f6a7b8)를
+잘못 사용해 alembic head가 갈라지던 사전존재 결함을 해소한다. revision을 고유
+ID(d4e5f6a7b8c9)로, down_revision을 실제 선행(Numeric c3d4e5f6a7b8)으로 교정한다.
+ADD VALUE IF NOT EXISTS라 라이브 DB(이미 적용)에서 재실행해도 no-op.
 
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "c3d4e5f6a7b8"
-down_revision = "a1b2c3d4e5f6"
+revision = "d4e5f6a7b8c9"
+down_revision = "c3d4e5f6a7b8"
 branch_labels = None
 depends_on = None
 
