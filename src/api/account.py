@@ -40,28 +40,38 @@ def _get(data: dict[str, Any], key: str, default: str = "") -> str:
 
 @dataclass
 class StockHolding:
-    """보유 종목 정보."""
+    """보유 종목 정보.
+
+    금액 필드는 float — 해외(USD) 센트 보존용. 국내(KRW)는 정수값이 그대로
+    들어가 무손실이며, 표시는 ``format_money``가 통화별로 처리한다.
+    """
 
     stock_code: str
     stock_name: str
     quantity: int
     avg_price: float
-    current_price: int
-    eval_amount: int
-    profit_loss: int
+    current_price: float
+    eval_amount: float
+    profit_loss: float
     profit_rate: float
+    currency: str = "KRW"
 
 
 @dataclass
 class Balance:
-    """잔고 정보."""
+    """잔고 정보.
 
-    deposit: int
-    total_eval_amount: int
-    total_profit_loss: int
+    금액 필드는 float(해외 USD 센트 보존). 국내(KRW)는 정수값 그대로라 무손실.
+    ``currency``로 통화를 명시해 로그/알림/집계의 통화 혼동을 방지한다.
+    """
+
+    deposit: float
+    total_eval_amount: float
+    total_profit_loss: float
     total_profit_rate: float
     holdings: list[StockHolding]
     raw_response: dict[str, Any]
+    currency: str = "KRW"
 
 
 @dataclass

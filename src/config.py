@@ -287,6 +287,17 @@ class TradingConfig:
     us_max_daily_trades_per_stock: int = field(
         default_factory=lambda: _env_int("US_MAX_DAILY_TRADES_PER_STOCK", 1)
     )
+    # USD→KRW 폴백 환율 — present-balance(CTRP6504R) 고시환율 조회 실패 시 사용.
+    # 표시/원화 환산용(통합증거금 자동환전이라 주문 사이징엔 불필요). 0이면 환산 생략.
+    fx_usd_krw: float = field(
+        default_factory=lambda: _env_float("FX_USD_KRW", 1380.0)
+    )
+    # present-balance(외화예수금·총손익·환율) 조회 스위치 — 오작동 시 운영자가 끄면
+    # 보수 폴백(보유 합산 + us_cash_budget)으로 동작. 기본 활성.
+    us_present_balance_enabled: bool = field(
+        default_factory=lambda: _env("US_PRESENT_BALANCE_ENABLED", "true").lower()
+        == "true"
+    )
 
     # 장중 매매 사이클 최소 간격(초). 종목 수 기반 산출값과 0종목 폴백 모두 이 하한을 따른다.
     # 1초 폭주(일일 API 한도 조기 소진 + KIS EGW00201 초당한도 거부) 방지용.

@@ -222,6 +222,75 @@ async def test_get_balance_us_normalizes_and_seeds_exchange() -> None:
     assert called == {"NASD", "NYSE", "AMEX"}
 
 
+def _us_holding(exchange: str, currency: str = "USD") -> object:
+    from src.api.overseas_account import OverseasBalance, OverseasHolding
+
+    holdings = (
+        [
+            OverseasHolding(
+                symbol="AAPL", exchange=exchange, quantity=3,
+                avg_price=Decimal("100.50"), current_price=Decimal("150.25"),
+                eval_amount=Decimal("450.75"), profit_loss=Decimal("149.25"),
+                profit_rate=49.5, currency=currency,
+            )
+        ]
+        if exchange == "NASD"
+        else []
+    )
+    return OverseasBalance(holdings=holdings, currency=currency, raw_response={})
+
+
+@pytest.mark.asyncio
+async def test_fetch_overseas_balance_uses_present_balance() -> None:
+    """present-balance 유효 시 실예수금·총손익·고시환율을 반영, 보유는 센트 보존."""
+    from src.api.overseas_account import OverseasPresentBalance
+
+    oa = MagicMock()
+    oa.get_balance = AsyncMock(side_effect=_us_holding)
+    oa.get_present_balance = AsyncMock(
+        return_value=OverseasPresentBalance(
+            deposit=Decimal("987.65"), total_eval=Decimal("450.75"),
+            total_profit_loss=Decimal("200.00"), profit_rate=12.5,
+            fx_rate=Decimal("1385.20"), currency="USD", valid=True, raw={},
+        )
+    )
+    e = _us_engine(oa=oa)
+    bal = await e._get_balance(force=True)
+
+    assert bal.currency == "USD"
+    assert bal.deposit == 987.65  # present-balance 실예수금(예산값 아님)
+    assert bal.total_profit_loss == 200.00  # 보유합산(149.25) 아닌 present-balance
+    assert bal.total_profit_rate == 12.5
+    assert e._fx_rate == 1385.20  # 고시환율 갱신
+    h = next(x for x in bal.holdings if x.stock_code == "AAPL")
+    assert h.current_price == 150.25  # int(round) 제거 → 센트 보존
+    assert h.eval_amount == 450.75
+    assert h.currency == "USD"
+
+
+@pytest.mark.asyncio
+async def test_fetch_overseas_balance_falls_back_when_invalid() -> None:
+    """present-balance 무효 시 보유 합산 + us_cash_budget 폴백(라이브 오표기 방지)."""
+    from src.api.overseas_account import OverseasPresentBalance
+
+    oa = MagicMock()
+    oa.get_balance = AsyncMock(side_effect=_us_holding)
+    oa.get_present_balance = AsyncMock(
+        return_value=OverseasPresentBalance(
+            deposit=Decimal("0"), total_eval=Decimal("0"),
+            total_profit_loss=Decimal("0"), profit_rate=0.0,
+            fx_rate=Decimal("0"), currency="USD", valid=False, raw={},
+        )
+    )
+    e = _us_engine(oa=oa)
+    bal = await e._get_balance(force=True)
+
+    assert bal.deposit == 1000  # us_cash_budget 폴백
+    assert bal.total_eval_amount == 450.75  # 보유 합산
+    assert bal.total_profit_loss == 149.25  # 보유 합산
+    assert e._fx_rate == cfg.settings.trading.fx_usd_krw  # 환율 미갱신(설정 폴백)
+
+
 @pytest.mark.asyncio
 async def test_get_buyable_qty_us() -> None:
     from src.api.overseas_account import OverseasBuyable
