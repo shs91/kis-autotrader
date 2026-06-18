@@ -37,6 +37,7 @@ class _FakeBalance:
     total_profit_rate: float = 2.92
     holdings: list[_FakeHolding] | None = None
     raw_response: dict | None = None
+    currency: str = "KRW"
 
     def __post_init__(self) -> None:
         if self.holdings is None:
@@ -93,6 +94,35 @@ class TestFormatBuy:
         result = format_buy("삼성전자", "005930", 10, 72000)
         assert "전략" not in result
         assert "근거" not in result
+
+
+class TestCurrencyAware:
+    """통화 인지 — USD는 '$'+센트, KRW는 '원'(기존 바이트 동일)."""
+
+    def test_buy_usd_shows_dollar_no_won(self) -> None:
+        result = format_buy("Apple", "AAPL", 2, 298.53, currency="USD")
+        assert "$298.53" in result
+        assert "$597.06" in result  # 2 × 298.53
+        assert "원" not in result
+
+    def test_buy_krw_byte_invariant(self) -> None:
+        result = format_buy("삼성전자", "005930", 10, 72000, currency="KRW")
+        assert "72,000원" in result
+        assert "720,000원" in result
+
+    def test_sell_usd_shows_dollar_no_won(self) -> None:
+        detail = SellDetail(
+            total_amount=380.5, avg_price=185.0, profit_loss=11.0, profit_rate=2.97
+        )
+        result = format_sell("Apple", "AAPL", 2, 190.25, "익절", detail, currency="USD")
+        assert "$190.25" in result  # 체결가
+        assert "$11.00" in result  # 손익
+        assert "원" not in result
+
+    def test_daily_summary_usd_shows_dollar_no_won(self) -> None:
+        result = format_daily_summary("2026-06-18", 1, 200, 1.5, currency="USD")
+        assert "$200.00" in result
+        assert "원" not in result
 
 
 # ── format_sell ───────────────────────────────────────────

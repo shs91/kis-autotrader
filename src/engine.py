@@ -1785,6 +1785,7 @@ class TradingEngine:
                         "strategy": strategy_name,
                         "reason": signal.reason if signal else "",
                         "confidence": signal.confidence if signal else 0.0,
+                        "currency": self._market.currency,
                     },
                 },
                 priority=3,
@@ -1910,6 +1911,7 @@ class TradingEngine:
                         "price": fill_price,
                         "reason": reason,
                         "avg_price": avg_price or 0.0,
+                        "currency": self._market.currency,
                     },
                 },
                 priority=3,
@@ -2165,6 +2167,7 @@ class TradingEngine:
                         "stock_name": pending.stock_name, "stock_code": stock_code,
                         "quantity": filled, "price": fill_price,
                         "strategy": "", "reason": "지연체결 회수", "confidence": 0.0,
+                        "currency": self._market.currency,
                     },
                 },
                 priority=3,
@@ -2183,6 +2186,7 @@ class TradingEngine:
                         "stock_name": pending.stock_name, "stock_code": stock_code,
                         "quantity": filled, "price": fill_price,
                         "reason": "지연체결 회수", "avg_price": pending.avg_price or 0.0,
+                        "currency": self._market.currency,
                     },
                 },
                 priority=3,
@@ -2753,6 +2757,7 @@ class TradingEngine:
                     "rate": float(realized_rate),
                     "buy_count": buy_count,
                     "sell_count": sell_count,
+                    "currency": self._market.currency,
                 },
             },
             priority=3,
@@ -2766,7 +2771,10 @@ class TradingEngine:
         today_str = self._today().isoformat()
         self._task_queue.enqueue(
             task_type="telegram_notify",
-            payload={"notify_type": "diagnostics", "message_data": {"diag": diag}},
+            payload={
+                "notify_type": "diagnostics",
+                "message_data": {"diag": diag, "currency": self._market.currency},
+            },
             priority=3,
             idempotency_key=f"telegram_diag_{self._market.market_code}_{today_str}",
         )
