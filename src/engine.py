@@ -712,7 +712,11 @@ class TradingEngine:
                 return
             self._risk.reset_daily_risk()
             for t in sells:
-                self._risk.record_trade_result(int(t.profit_loss_amount or 0))
+                # KRX(정수 정밀도)는 기존대로 int, US는 센트 보존(float)으로 재생.
+                _pl = t.profit_loss_amount or 0
+                self._risk.record_trade_result(
+                    _pl if self._market.is_overseas else int(_pl)
+                )
             # 당일 매매 카운트도 근사 복원(일일 한도 정확도)
             self._today_trade_count = len(trades)
             self._peak_prices = self._load_peak_prices()
@@ -842,6 +846,7 @@ class TradingEngine:
         exit_reason: str = "completed"
         held_codes: set[str] = set()
         targets: list[str] = []
+        buy_limit_reached: bool = False  # finally의 CYCLE_END 메트릭 기본값
         try:
             # 서킷 브레이커가 열려있으면 사이클 즉시 스킵
             if self._client.circuit_breaker.is_open:
@@ -852,13 +857,26 @@ class TradingEngine:
             # 타임아웃 넘긴 미체결 주문 정리 (시그널 없는 종목도 포함)
             await self._cleanup_stale_pending_orders()
 
-            if self._risk.check_daily_trade_limit(self._today_trade_count):
-                logger.warning("일일 매매 횟수 한도 도달, 사이클 스킵")
-                exit_reason = "trade_limit"
-                return
+            # 일일 매매 한도 도달 시에도 사이클을 종료하지 않는다(과거엔 즉시 return).
+            # 한도는 BUY+SELL 합산이라 소진 후 사이클을 통째로 스킵하면 보유 종목의
+            # 손절/트레일링/마감청산 등 **보호매도까지 차단**돼 야간 무인 세션의
+            # 실자금 포지션이 무방비가 된다. 따라서 신규 매수만 차단하고(per-stock
+            # 매수 게이트가 _process_stock에서 차단) 보유 종목 보호매도는 계속 평가한다.
+            # 운영자 승인하 KRX에도 동일 적용(한도 후 보호매도 = 더 안전). exit_reason은
+            # 'completed' 유지(사이클은 완주) + buy_limit_reached를 CYCLE_END 메트릭에
+            # 별도 기록해 기존 'trade_limit' 대시보드/관측을 깨지 않는다.
+            buy_limit_reached = self._risk.check_daily_trade_limit(
+                self._today_trade_count
+            )
+            if buy_limit_reached:
+                logger.warning(
+                    "일일 매매 횟수 한도 도달 — 신규 매수 중단(보유 종목 보호매도는 계속)"
+                )
 
-            # 주기적 스크리닝 (N사이클마다)
-            if self._cycle_count % self._screener.config.interval_cycles == 0:
+            # 주기적 스크리닝 (N사이클마다) — 한도 도달 시 신규 발굴 불필요하므로 스킵
+            if not buy_limit_reached and (
+                self._cycle_count % self._screener.config.interval_cycles == 0
+            ):
                 try:
                     await self._screen_stocks()
                 except DailyLimitExceededError:
@@ -880,7 +898,12 @@ class TradingEngine:
 
             held_codes = {h.stock_code for h in balance.holdings if h.quantity > 0}
             watchlist_codes = self._get_watchlist_codes()
-            targets = self._build_monitor_targets(held_codes)
+            if buy_limit_reached:
+                # 신규 매수 차단 상태 — 보유 종목만 평가(보호매도). 관심/발굴 종목은
+                # 어차피 매수 게이트에서 막히므로 시세 조회 API를 아낀다.
+                targets = sorted(held_codes)
+            else:
+                targets = self._build_monitor_targets(held_codes)
             logger.info(
                 "모니터링 대상: %d종목 (보유 %d + 관심 %d + 발굴 %d)",
                 len(targets),
@@ -963,6 +986,7 @@ class TradingEngine:
             self._record_metric("CYCLE_END", {
                 "cycle": self._cycle_count,
                 "exit_reason": exit_reason,
+                "buy_limit_reached": buy_limit_reached,
                 "trade_count": self._today_trade_count,
                 "api_calls": limiter.daily_count,
                 "api_limit": limiter.daily_limit,
@@ -999,7 +1023,10 @@ class TradingEngine:
             # 용도로만 사용.
             kis_executions = await self._get_executions()
             today = self._today()  # 시장 타임존 기준(US=ET 세션 날짜)
-            trades = self._load_today_trades(today)
+            # 시장별 격리 — 공유 trades 테이블에서 당일 체결을 현재 시장으로 필터.
+            # 미적용 시 US 결산이 같은 날 KRX 매도손익을 FX 없이 정수 합산해
+            # 실현손익/수익률/건수가 Telegram·캘린더에 전면 오표기됨(원화가 USD를 가림).
+            trades = self._load_today_trades(today, market=self._market.market_code)
 
             buy_count = sum(1 for t in trades if t.trade_type == TradeType.BUY)
             sell_count = sum(1 for t in trades if t.trade_type == TradeType.SELL)
@@ -1017,10 +1044,10 @@ class TradingEngine:
                 (realized_pl / sell_total * 100.0) if sell_total > 0 else 0.0
             )
 
-            # 통화 단위는 _money(시장 통화)로 표기. 단, realized_pl은 결산 trades가
-            # 아직 전 시장 합산(daily_summary/_performances market 컬럼 부재로 격리는
-            # 후속)이라 US에서는 합산값일 수 있다 — 평가손익(balance)은 present-balance
-            # 기준으로 통화 정확.
+            # 통화 단위는 _money(시장 통화)로 표기. realized_pl은 위 _load_today_trades
+            # market 필터로 현재 시장(US/KRX) 체결만 합산하므로 통화 혼합 없이 정확하다
+            # (과거 전 시장 합산으로 KRW가 USD를 가리던 오표기 제거). 평가손익(balance)은
+            # present-balance 기준으로 통화 정확.
             logger.info(
                 "당일 체결 건수(DB): %d (매수 %d / 매도 %d), "
                 "실현손익: %s (%.2f%%) | "
@@ -1377,8 +1404,14 @@ class TradingEngine:
         # check_buy_gates가 halt(MAX_CONSECUTIVE_LOSSES/MAX_DAILY_DRAWDOWN) +
         # MARKET_CLOSE_GUARD + INSUFFICIENT_CASH + LOW_CONFIDENCE 모두 잡으므로
         # validate_order 호출은 잉여. POSITION_RATIO만 quantity ≤ 0 분기에서 분류.
+        # US: 1주 플로어 — 예산($1000)×비율(0.1)=$100가 개별 주가보다 작아
+        # int(100/price)가 0이 되는 고가주(AAPL/NVDA 등)를 BUY 신호가 있어도
+        # POSITION_RATIO로 영구 차단하던 false-block 해소. 실제 상한은 아래
+        # _get_buyable_qty(통합증거금 매수여력)·check_buy_gates(예수금)가 적용.
+        # KRX는 min_quantity=0(기본)이라 동작 불변.
+        min_qty = 1 if self._market.is_overseas else 0
         quantity = self._risk.calculate_position_size(
-            float(deposit), float(current.current_price)
+            float(deposit), float(current.current_price), min_quantity=min_qty
         )
         if quantity <= 0:
             skip_reason = "zero_quantity"
@@ -1736,10 +1769,18 @@ class TradingEngine:
                 self._record_buy_outcome(stock_code, "ORDER_UNTRADABLE")
                 return
             logger.exception("[매수 주문 실패] %s(%s)", stock_name, stock_code)
+            # 주문이 서버에 접수·체결됐는데 응답만 유실됐을 수 있어(비멱등 fail-fast
+            # 포함), 잔고 캐시를 무효화해 다음 사이클이 fresh 잔고로 팬텀 체결을
+            # 반영·재조정하게 한다(60s TTL 캐시 안전망 누수 차단).
+            self._invalidate_balance_cache()
             self._record_buy_outcome(stock_code, "ORDER_FAIL")
             return
         except Exception:
             logger.exception("[매수 주문 실패] %s(%s)", stock_name, stock_code)
+            # 주문이 서버에 접수·체결됐는데 응답만 유실됐을 수 있어(비멱등 fail-fast
+            # 포함), 잔고 캐시를 무효화해 다음 사이클이 fresh 잔고로 팬텀 체결을
+            # 반영·재조정하게 한다(60s TTL 캐시 안전망 누수 차단).
+            self._invalidate_balance_cache()
             self._record_buy_outcome(stock_code, "ORDER_FAIL")
             return
 
@@ -1866,6 +1907,9 @@ class TradingEngine:
             result = await self._place_sell(stock_code, quantity, price)
         except Exception:
             logger.exception("[매도 주문 실패] %s", stock_code)
+            # 비멱등 fail-fast 등으로 매도가 서버 체결됐는데 응답만 유실되면 다음
+            # 사이클이 stale 잔고로 over-sell할 수 있어 잔고 캐시를 무효화한다.
+            self._invalidate_balance_cache()
             return
 
         # 주문 접수 이후 처리(체결 확인·기록·알림)는 DB/Queue 장애에도 사이클을
@@ -2325,7 +2369,8 @@ class TradingEngine:
 
         비즈니스 로직(buy_reason 판별, profit_loss 계산)은 엔진에서 처리하고,
         DB INSERT만 Worker에게 위임한다. price/profit_loss_amount는 시장별로 정규화한다
-        (KRX int·US round). RiskManager 입력은 int 유지(연패/MDD 게이트 KRX 불변).
+        (KRX int·US round). RiskManager 입력도 정규화값(KRX 정수·US 센트 float) —
+        KRX는 정수라 연패/MDD 게이트 바이트 불변, US는 센트 손익 보존.
         """
         try:
             # DB/payload 경계 가격 정규화 — KRX는 int로 기존 저장 바이트 불변.
@@ -2344,9 +2389,12 @@ class TradingEngine:
                 if avg_price and avg_price > 0:
                     avg_price = float(avg_price)
                     profit_loss_pct = float(((price - avg_price) / avg_price) * 100)
-                    # DB(Numeric)엔 정규화값(KRX int·US 센트), RiskManager엔 int 유지.
+                    # DB(Numeric)·RiskManager 모두 정규화값. profit_loss_amount는
+                    # _norm_price 결과라 KRX는 정수값(연패/MDD 게이트 바이트 불변),
+                    # US는 센트 보존 float. int() 절단 시 1달러 미만 손익이 연패
+                    # 카운터에서 소실돼 서킷이 약화되므로 절단하지 않고 전달한다.
                     profit_loss_amount = self._norm_price((price - avg_price) * quantity)
-                    self._risk.record_trade_result(int(profit_loss_amount))
+                    self._risk.record_trade_result(profit_loss_amount)
                     sell_reason = self._reconcile_sell_reason(
                         sell_reason, profit_loss_pct, stock_code,
                     )
@@ -2736,7 +2784,7 @@ class TradingEngine:
         self,
         *,
         trades: list[Any],
-        realized_profit_loss: int,
+        realized_profit_loss: float,
         realized_rate: float,
     ) -> None:
         """캘린더 이벤트 등록을 Worker Queue에 적재한다.
@@ -2754,7 +2802,11 @@ class TradingEngine:
             task_type="calendar_event",
             payload={
                 "trade_date": today.isoformat(),
-                "total_profit_loss": int(realized_profit_loss),
+                # KRX는 정수(원), US는 센트 보존(USD). int() 절단 시 US $12.47→$12.
+                "total_profit_loss": (
+                    realized_profit_loss if self._market.is_overseas
+                    else int(realized_profit_loss)
+                ),
                 "profit_rate": float(realized_rate),
                 "execution_count": len(trades),
                 "details_json": details_json,
@@ -2771,7 +2823,7 @@ class TradingEngine:
         balance: Balance,
         buy_count: int,
         sell_count: int,
-        realized_profit_loss: int,
+        realized_profit_loss: float,
         realized_rate: float,
     ) -> None:
         """Telegram 일일 결산 알림을 Worker Queue에 적재한다.
@@ -2789,7 +2841,11 @@ class TradingEngine:
                 "message_data": {
                     "trade_date": today_str,
                     "count": buy_count + sell_count,
-                    "profit_loss": int(realized_profit_loss),
+                    # KRX 정수(원)·US 센트 보존(USD) — int() 절단 방지.
+                    "profit_loss": (
+                        realized_profit_loss if self._market.is_overseas
+                        else int(realized_profit_loss)
+                    ),
                     "rate": float(realized_rate),
                     "buy_count": buy_count,
                     "sell_count": sell_count,
@@ -2954,10 +3010,12 @@ class TradingEngine:
     def _load_today_trades(today: date, market: str | None = None) -> list[Any]:
         """오늘 체결된 매매 내역을 DB에서 조회한다.
 
-        ``market`` 지정 시 해당 시장만(시장별 캘린더 이벤트용). 결산 집계 경로는
-        daily_summary/daily_performances에 market 컬럼이 없어 시장별 분리 시
-        같은 날짜 행을 덮어쓰므로, 마이그레이션 전까지 market=None(전 시장 합산)을
-        유지한다.
+        ``market`` 지정 시 해당 시장 체결만 반환한다. 결산·캘린더 경로는 반드시
+        ``market=self._market.market_code``로 호출해 공유 trades 테이블에서 현재
+        시장만 집계해야 한다(미지정 시 US 결산이 같은 날 KRX 손익을 FX 없이 합산해
+        통화 혼합 오표기). daily_summary/daily_performances도 P3c 마이그레이션
+        (e5f6a7b8c9d0)으로 market 컬럼+복합 unique가 추가돼 시장별 분리 안전하다.
+        ``market=None``은 전 시장 합산(하위호환·시장 무관 호출용)이다.
         """
         try:
             with get_session() as session:

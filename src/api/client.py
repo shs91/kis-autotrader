@@ -172,6 +172,7 @@ class KISClient:
         body: dict[str, Any] | None = None,
         tr_id: str = "",
         use_hashkey: bool = False,
+        idempotent: bool = True,
     ) -> dict[str, Any]:
         """POST 요청을 보낸다.
 
@@ -181,6 +182,12 @@ class KISClient:
             body: 요청 본문
             tr_id: 거래 ID
             use_hashkey: hashkey 사용 여부
+            idempotent: 재시도 안전 여부. 주문 체결(매수/매도)처럼 **비멱등**인
+                요청은 ``False``로 호출한다 — 5xx/네트워크 타임아웃은 주문이
+                서버에 접수·체결됐는데 응답만 유실됐을 수 있어, 재시도하면
+                **실자금 중복주문**이 발생할 수 있다. ``False``면 5xx/네트워크
+                오류 시 재시도하지 않고 즉시 예외를 던져 호출부가 다음 사이클에
+                잔고로 재조정하게 한다(429는 요청이 거부된 것이라 재시도 안전).
 
         Returns:
             응답 JSON 딕셔너리
@@ -189,7 +196,8 @@ class KISClient:
             KISAutoTraderError: API 호출 실패 시
         """
         return await self._request(
-            "POST", path, headers=headers, body=body, tr_id=tr_id, use_hashkey=use_hashkey
+            "POST", path, headers=headers, body=body, tr_id=tr_id,
+            use_hashkey=use_hashkey, idempotent=idempotent,
         )
 
     async def _request(
@@ -201,6 +209,7 @@ class KISClient:
         body: dict[str, Any] | None = None,
         tr_id: str = "",
         use_hashkey: bool = False,
+        idempotent: bool = True,
     ) -> dict[str, Any]:
         """HTTP 요청을 실행한다. 재시도와 서킷 브레이커가 적용된다.
 
@@ -282,15 +291,24 @@ class KISClient:
 
                 # 5xx 서버 에러
                 if response.status_code >= 500:
+                    self._circuit_breaker.record_failure()
+                    server_error = KISAutoTraderError(
+                        f"서버 에러 (status={response.status_code}): {response.text}"
+                    )
+                    # 비멱등(주문 체결류): 5xx는 주문이 접수·체결됐을 수 있어
+                    # 재시도하면 실자금 중복주문 위험 → 재시도 없이 즉시 실패.
+                    if not idempotent:
+                        logger.warning(
+                            "서버 에러 %d (비멱등 요청) — 재시도 없이 실패",
+                            response.status_code,
+                        )
+                        raise server_error
                     delay = RETRY_BASE_DELAY * (2**attempt)
                     logger.warning(
                         "서버 에러 %d: %.1f초 후 재시도", response.status_code, delay
                     )
-                    self._circuit_breaker.record_failure()
                     await asyncio.sleep(delay)
-                    last_error = KISAutoTraderError(
-                        f"서버 에러 (status={response.status_code}): {response.text}"
-                    )
+                    last_error = server_error
                     continue
 
                 # 기타 에러
@@ -305,10 +323,16 @@ class KISClient:
                 return response.json()  # type: ignore[no-any-return]
 
             except httpx.HTTPError as e:
+                self._circuit_breaker.record_failure()
+                network_error = KISAutoTraderError(f"네트워크 에러: {e}")
+                # 비멱등(주문 체결류): 타임아웃은 주문이 서버에 도달·체결됐는데
+                # 응답만 유실됐을 수 있어 재시도 시 중복주문 위험 → 즉시 실패.
+                if not idempotent:
+                    logger.warning("네트워크 에러(비멱등 요청) — 재시도 없이 실패: %s", e)
+                    raise network_error from e
                 delay = RETRY_BASE_DELAY * (2**attempt)
                 logger.error("네트워크 에러: %s (%.1f초 후 재시도)", e, delay)
-                self._circuit_breaker.record_failure()
-                last_error = KISAutoTraderError(f"네트워크 에러: {e}")
+                last_error = network_error
                 await asyncio.sleep(delay)
 
         # 최대 재시도 초과

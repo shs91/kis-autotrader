@@ -85,8 +85,11 @@ class OverseasOrderAPI:
         }
         if side == "sell":
             body["SLL_TYPE"] = "00"
+        # 주문 체결은 비멱등 — 5xx/타임아웃 재시도 시 실자금 중복주문 위험이라
+        # 재시도하지 않는다(실패 시 다음 사이클이 잔고로 재조정).
         response = await self._client.post(
-            OVERSEAS_ORDER_PATH, body=body, tr_id=tr_id, use_hashkey=True
+            OVERSEAS_ORDER_PATH, body=body, tr_id=tr_id, use_hashkey=True,
+            idempotent=False,
         )
         return self._parse(response)
 
