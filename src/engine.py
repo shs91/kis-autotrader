@@ -2960,22 +2960,19 @@ class TradingEngine:
         """보유종목 현재가를 price_snapshots에 적재하도록 Worker Queue에 enqueue한다.
 
         대시보드의 '실시간 가격 vs 매수가' 비교 차트용 시계열. 추가 API 호출 없이
-        매매 사이클이 이미 조회한 현재가를 재사용한다. enqueue 실패는 매매 흐름에
-        영향을 주지 않도록 삼킨다(시계열 누락만 발생).
+        매매 사이클이 이미 조회한 현재가를 재사용한다. enqueue는 자체적으로 실패를
+        삼키고 None을 반환하므로(TaskQueueService) 별도 가드가 불필요하다.
         """
-        try:
-            self._task_queue.enqueue(
-                task_type="price_snapshot",
-                payload={
-                    "stock_code": stock_code,
-                    "market": self._market.market_code,
-                    "currency": self._market.currency,
-                    "price": self._norm_price(price),
-                },
-                priority=0,  # 최저 우선순위 — 매매 태스크에 양보
-            )
-        except Exception:
-            logger.exception("가격 스냅샷 enqueue 실패 %s (매매 무영향)", stock_code)
+        self._task_queue.enqueue(
+            task_type="price_snapshot",
+            payload={
+                "stock_code": stock_code,
+                "market": self._market.market_code,
+                "currency": self._market.currency,
+                "price": self._norm_price(price),
+            },
+            priority=0,  # 최저 우선순위 — 매매 태스크에 양보
+        )
 
     # ── 레거시 직접 호출 (Worker 미가동 시 폴백) ─────────
 
