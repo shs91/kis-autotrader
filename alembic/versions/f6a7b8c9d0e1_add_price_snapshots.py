@@ -37,7 +37,7 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
-        "ix_price_snapshots_time",
+        "ix_price_snapshots_captured_at",
         "price_snapshots",
         ["captured_at"],
         unique=False,
@@ -45,6 +45,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_price_snapshots_time", table_name="price_snapshots")
+    op.drop_index("ix_price_snapshots_captured_at", table_name="price_snapshots")
     op.drop_index("ix_price_snapshots_code_time", table_name="price_snapshots")
     op.drop_table("price_snapshots")

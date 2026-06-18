@@ -426,12 +426,12 @@ class PriceSnapshot(Base):
 
     __table_args__ = (
         Index("ix_price_snapshots_code_time", "stock_code", "captured_at"),
-        Index("ix_price_snapshots_time", "captured_at"),
+        Index("ix_price_snapshots_captured_at", "captured_at"),
     )
 
     def __repr__(self) -> str:
         return (
-            f"<PriceSnapshot({self.stock_code} {self.price} "
+            f"<PriceSnapshot(id={self.id}, {self.stock_code} {self.price} "
             f"@{self.captured_at})>"
         )
 
