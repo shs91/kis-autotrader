@@ -34,6 +34,7 @@ import pandas as pd
 
 from src.api.auth import KISAuth
 from src.api.client import KISClient
+from src.api.overseas_quote import OverseasQuoteAPI
 from src.api.quote import QuoteAPI, RankItem, VolumeRankItem
 from src.api.rate_limiter import HybridRateLimiter, RateLimiter
 from src.config import ScreeningConfig, settings
@@ -41,9 +42,11 @@ from src.db.repository import (
     MarketActionRepository,
     NewsChunkRepository,
     ScreeningResultRepository,
+    StockRepository,
     SystemMetricRepository,
 )
 from src.db.session import get_session
+from src.market.profile import KRX_PROFILE, MarketProfile
 from src.scheduler.holidays import is_market_closed
 from src.strategy.disclosure_risk import match_critical_disclosure
 from src.strategy.flow_filter import features_from_structured, flow_score
@@ -65,6 +68,9 @@ DEFAULT_SCREENING_INTERVAL: int = 300  # 5분
 _KST = ZoneInfo("Asia/Seoul")
 _MARKET_OPEN_KST = time(9, 0)
 _MARKET_CLOSE_KST = time(15, 30)
+# US 정규장(ET) — 스크리닝 윈도우. 엔진 사이클(15:50 종료)과 달리 발굴은 정규장 전체.
+_US_REGULAR_OPEN_ET = time(9, 30)
+_US_REGULAR_CLOSE_ET = time(16, 0)
 
 
 class ScreeningWorker:
@@ -78,12 +84,16 @@ class ScreeningWorker:
     def __init__(
         self,
         interval: int = DEFAULT_SCREENING_INTERVAL,
+        market_profile: MarketProfile | None = None,
     ) -> None:
         """ScreeningWorker를 초기화한다.
 
         Args:
             interval: 스크리닝 실행 주기 (초).
+            market_profile: 시장 프로파일(None이면 KRX). US면 해외 시세 API 사용.
         """
+        self._market = market_profile or KRX_PROFILE
+        self._tz = ZoneInfo(self._market.timezone)
         self._auth = KISAuth()
         self._limiter = HybridRateLimiter(role="screener")
         # HybridRateLimiter는 RateLimiter와 구조적으로 호환(async acquire 동일).
@@ -92,7 +102,13 @@ class ScreeningWorker:
             auth=self._auth, limiter=cast("RateLimiter", self._limiter)
         )
         self._quote = QuoteAPI(client=self._client)
-        self._screener = StockScreener()
+        # US는 해외 시세 API(거래소별 순위·해외 일봉). KRX는 None(미사용).
+        self._ovs_quote: OverseasQuoteAPI | None = (
+            OverseasQuoteAPI(client=self._client)
+            if self._market.is_overseas
+            else None
+        )
+        self._screener = StockScreener(is_overseas=self._market.is_overseas)
 
         registry = StrategyRegistry.create_default()
         self._selector = StrategySelector.from_config(registry)
@@ -131,9 +147,17 @@ class ScreeningWorker:
         self._running = False
         logger.info("ScreeningWorker 종료")
 
-    @staticmethod
-    def _is_trading_window() -> bool:
-        """현재 시각이 한국 증시 매매시간(평일 09:00~15:30 KST)인지 판정한다."""
+    def _is_trading_window(self) -> bool:
+        """현재 시각이 해당 시장 매매시간인지 판정한다(시장별).
+
+        KRX는 기존 그대로 평일 09:00~15:30 KST. US는 ET 정규장 09:30~16:00 +
+        미국 휴장일(holidays_us). 시장 타임존·휴장일 모두 self._market 기준.
+        """
+        if self._market.is_overseas:
+            now = datetime.now(self._tz)
+            if is_market_closed(now.date(), self._market.market_code):
+                return False
+            return _US_REGULAR_OPEN_ET <= now.time() <= _US_REGULAR_CLOSE_ET
         now_kst = datetime.now(_KST)
         if is_market_closed(now_kst.date()):
             return False
@@ -147,6 +171,10 @@ class ScreeningWorker:
             return
         self._cycle_count += 1
         scfg = settings.screening
+
+        if self._market.is_overseas:
+            await self._run_screening_us(scfg)
+            return
 
         if scfg.multisource_enabled:
             await self._run_screening_multisource(scfg)
@@ -308,6 +336,90 @@ class ScreeningWorker:
             len(new_codes),
         )
 
+    async def _run_screening_us(self, scfg: ScreeningConfig) -> None:
+        """미국 동적 스크리닝 1회 (거래소별 순위 → 필터 → 일봉분석 → 스코어 → 적재).
+
+        거래소(OVRS_EXCG_CD NASD/NYSE/AMEX)별 거래량순위(EXCD NAS/NYS/AMS)를 조회해
+        VolumeRankItem으로 변환·병합하고, ``exch_of[symbol]``에 주문용 거래소코드를
+        기록한다. 일봉은 해외 일봉(EXCD)으로 분석한다. 적재 시 market="US" +
+        stocks.market=거래소(엔진이 _exchanges 시드 → 올바른 거래소로 주문).
+        """
+        ovs = self._ovs_quote
+        if ovs is None:  # 방어 (US 프로파일이면 항상 존재)
+            return
+
+        merged: dict[str, VolumeRankItem] = {}
+        exch_of: dict[str, str] = {}  # symbol → OVRS_EXCG_CD (주문/stocks.market)
+        for exch_ovrs in self._market.exchanges:  # NASD, NYSE, AMEX
+            excd = self._market.quote_exchange_map.get(exch_ovrs, exch_ovrs)
+            try:
+                ranking = await ovs.get_ranking(excd, top_n=scfg.top_n)
+            except Exception:
+                logger.exception("해외 거래량순위 조회 실패: %s", exch_ovrs)
+                continue
+            for r in ranking:
+                if r.symbol in merged:  # 거래소 중복(드묾) — 첫 거래소 유지
+                    continue
+                merged[r.symbol] = VolumeRankItem(
+                    stock_code=r.symbol,
+                    stock_name=r.symbol,  # 순위 API는 종목명 미제공
+                    current_price=int(round(r.last)),
+                    change_rate=r.change_rate,
+                    volume=r.volume,
+                    market_cap=0,  # 미제공 → US는 시총 필터 스킵(is_overseas)
+                )
+                exch_of[r.symbol] = exch_ovrs
+
+        all_items = list(merged.values())
+        if not all_items:
+            return
+
+        exclude_codes: set[str] = set()
+        try:
+            exclude_codes = self._load_existing_screened_codes()
+        except Exception:
+            logger.debug("기존 스크리닝 코드 로드 실패")
+
+        filtered = self._screener.filter_candidates(all_items, exclude_codes)
+
+        scored: list[ScoredCandidate] = []
+        for rank_idx, item in enumerate(filtered):
+            excd = self._market.quote_exchange_map.get(
+                exch_of.get(item.stock_code, ""), ""
+            )
+            if not excd:
+                continue
+            try:
+                daily = await ovs.get_daily_price(item.stock_code, excd)
+                if len(daily) < 36:
+                    continue
+                df = pd.DataFrame(
+                    [
+                        {"close": float(p.close), "date": p.date}
+                        for p in reversed(daily)
+                    ]
+                )
+                strategy = self._selector.get_strategy(item.stock_code)
+                signal = strategy.analyze(df)
+                scored.append(
+                    self._screener.score_candidate(
+                        item, rank_idx, len(filtered), signal
+                    )
+                )
+            except Exception:
+                logger.debug("US 스크리닝 분석 실패: %s", item.stock_code)
+
+        top_candidates = self._screener.rank_candidates(scored)
+        remaining_slots = scfg.max_screened - len(exclude_codes)
+        new_codes = [c.stock_code for c in top_candidates[: max(remaining_slots, 0)]]
+
+        self._record_to_db(all_items, new_codes, market="US", exch_of=exch_of)
+
+        logger.info(
+            "=== US 스크리닝 완료 (#%d): 조회 %d종목, 필터 %d, 발굴 %d ===",
+            self._cycle_count, len(all_items), len(filtered), len(new_codes),
+        )
+
     async def _fetch_rank_sources(
         self, scfg: ScreeningConfig
     ) -> dict[str, list[RankItem]]:
@@ -401,10 +513,15 @@ class ScreeningWorker:
         return score
 
     def _load_existing_screened_codes(self) -> set[str]:
-        """오늘 이미 스크리닝된 종목코드를 DB에서 조회한다."""
+        """오늘(시장 타임존) 이미 스크리닝된 종목코드를 시장별로 조회한다."""
+        today = datetime.now(self._tz).date()
         with get_session() as session:
             repo = ScreeningResultRepository(session)
-            results = repo.get_by_date(date.today())
+            results = repo.get_by_date(
+                today,
+                market=self._market.market_code,
+                tz=self._market.timezone,
+            )
             return {r.stock_code for r in results if r.converted_to_trade}
 
     def _load_risk_blocked_codes(self, codes: set[str]) -> dict[str, str]:
@@ -459,15 +576,27 @@ class ScreeningWorker:
         self,
         ranked: Sequence[VolumeRankItem | MergedCandidate],
         new_candidates: list[str],
+        market: str = "KRX",
+        exch_of: dict[str, str] | None = None,
     ) -> None:
-        """스크리닝 결과를 screening_results 테이블에 배치 기록한다(단일·멀티소스 공통)."""
+        """스크리닝 결과를 screening_results 테이블에 배치 기록한다(KRX·US·멀티소스 공통).
+
+        US는 ``market="US"`` + ``exch_of[code]``(주문용 거래소코드)로 ``stocks.market``을
+        거래소로 upsert해, 엔진 ``_screen_stocks``가 이를 읽어 ``_exchanges``를 시드하고
+        올바른 거래소로 주문하게 한다. ETF 판별은 시장별(US는 심볼셋/이름 키워드).
+        """
+        is_overseas = self._market.is_overseas
+        exch_of = exch_of or {}
         try:
             candidate_set = set(new_candidates)
             etf_blocked = 0
             with get_session() as session:
                 repo = ScreeningResultRepository(session)
+                stock_repo = StockRepository(session) if is_overseas else None
                 for rank_idx, item in enumerate(ranked, start=1):
-                    if ScreeningFilter._is_etf_etn(item.stock_code, item.stock_name):
+                    if ScreeningFilter._is_etf_etn(
+                        item.stock_code, item.stock_name, is_overseas
+                    ):
                         etf_blocked += 1
                         continue
                     repo.record_screening(
@@ -479,7 +608,19 @@ class ScreeningWorker:
                         screened_at=datetime.now(UTC),
                         cycle_number=self._cycle_count,
                         converted_to_trade=item.stock_code in candidate_set,
+                        market=market,
                     )
+                    # US: stocks.market=거래소코드 upsert (엔진 거래소 라우팅 시드).
+                    if stock_repo is not None:
+                        exch = exch_of.get(item.stock_code)
+                        if exch:
+                            existing = stock_repo.get_by_code(item.stock_code)
+                            if existing is None:
+                                stock_repo.create(
+                                    item.stock_code, item.stock_name, exch
+                                )
+                            elif existing.market != exch:
+                                existing.market = exch
                 try:
                     SystemMetricRepository(session).record_metric(
                         metric_type="SCREENING_CANDIDATE",

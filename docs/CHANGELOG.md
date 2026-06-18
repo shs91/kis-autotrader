@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-06-18] US 동적 스크리너 (P3c-5 2/2) — 거래소별 순위 발굴, opt-in 기본 off (v0.19.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/strategy/screener.py: ScreeningFilter/StockScreener is_overseas(540dd6e cherry-pick) — US 알파벳 심볼 ETF 오분류 해소 + min_price_us.
+  - src/worker/screener.py: ScreeningWorker(market_profile=) — US는 OverseasQuoteAPI + StockScreener(is_overseas). _run_screening_us(거래소별 get_ranking[EXCD]→VolumeRankItem 변환+exch_of[symbol]=OVRS_EXCG_CD→필터→해외일봉 분석→스코어→적재). _is_trading_window 시장별(US ET 09:30~16:00+holidays_us). _record_to_db(market, exch_of): record_screening(market) + US는 stocks.market=거래소 upsert. _load_existing_screened_codes 시장필터.
+  - src/engine.py: _screen_stocks가 발굴 US 종목의 stocks.market(거래소)을 읽어 _exchanges 시드(_seed_overseas_exchanges) → 주문 라우팅. _board_label(code, krx_default): US는 _exchange_of(code)(거래소) 우선.
+  - src/scheduler/jobs.py: us_enabled면 US 쿼터 KRX 동형 분할(장전 스크리너100%→장중 80/20→마감후 메인100%), 아니면 메인 100%(현 P5).
+  - main.py: US 스크리너 워커 게이트(is_overseas and screening.us_enabled). src/config.py: ScreeningConfig.us_enabled(SCREENING_US_ENABLED, 기본 false).
+  - tests: 워커 US 거래소 라우팅/변환·board_label 거래소 회귀.
+- 배경: US가 watchlist_us 고정 유니버스만 매매하던 한계 해소. 거래소별 거래량순위 API로 동적 발굴. **거래소 코드 이중체계**(순위/시세 EXCD NAS/NYS/AMS ≠ 주문 OVRS_EXCG_CD NASD/NYSE/AMEX)를 quote_exchange_map으로 변환, stocks.market=거래소로 엔진 주문 라우팅 시드(마이그 회피).
+- 영향: **opt-in 기본 off** — SCREENING_US_ENABLED=false면 US는 watchlist_us 고정+메인 100%(현 P5 무변경). true면 워커 가동+쿼터 분할. **KRX 완전 불변**(is_overseas/us_enabled 기본 false 뒤 분기, 전체 1225 통과). 어댑버설 리뷰(거래소 라우팅 실금 민감) 수행.
+- 검증 결과: pytest 전체 **1225 passed**(신규 3) | mypy strict ✅(103 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → 재시작(기본 off라 무변경). 활성화는 config_overrides/env `SCREENING_US_ENABLED=true` + US 재시작. DB/스키마/마이그 불변(stocks.market 재사용). 첫 활성 시 거래소 라우팅·발굴 로그 모니터링 권장.
+
+---
+
 ## [2026-06-18] Telegram 알림 통화 인지화 — US 알림 "원"→"$" (통화 일관성 마무리) (v0.18.1)
 - 카테고리: enhancement
 - 변경 파일:
@@ -63,17 +79,6 @@
 - 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변. US_PRESENT_BALANCE_ENABLED=false로 비활성(보유합산 폴백), FX_USD_KRW로 폴백 환율 조정.
 
 ---
-
-## [2026-06-18] 읽기측 시장 격리 — US 리스크복구가 KRX 거래로 일일한도 채워 매매 차단되던 P0 (v0.16.3)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/db/repository.py: TradeRepository.get_trades_by_date(target_date, market=None) — market 필터 추가(None=전 시장 보존). PortfolioRepository.get_peak_prices(market=None) — 시장별 peak 시드.
-  - src/engine.py: _restore_risk_state_if_needed가 get_trades_by_date(today, market=self._market.market_code)로 호출(P0). _load_peak_prices가 시장별 시드. _load_today_trades(today, market=None) 추가 + 시장별 캘린더(_create_calendar_event) 격리. 결산 집계(post_market)는 daily_summary/daily_performances에 market 컬럼 부재로 market=None 유지(마이그 후속).
-  - tests: test_get_trades_by_date_filters_by_market·test_get_peak_prices_filters_by_market·test_restart_restore_passes_market_filter(신규 3).
-- 배경: P3c-4가 쓰기측 market 라우팅만 넣고 읽기측 집계 격리를 누락. US 엔진(MARKET=US)의 장중 재시작 복구가 공유 trades를 시장 무관 조회 → KRX 당일 체결을 US 리스크상태로 재생하고 _today_trade_count=len(trades)로 **US 일일 한도(5건)를 KRX 거래로 채워 US 매매를 차단**(6/18 라이브: US 실거래 0건인데 "당일매도 3건 재생 PnL=10670원" + 한도도달 사이클 스킵). #59(스크리닝)는 같은 부류의 일부였음.
-- 영향: US는 자기 시장 체결만 리스크/일일카운트에 반영 → US 매매 정상화. KRX는 market=None/기본값으로 동작 불변. peak·캘린더도 시장 격리. 결산(daily_summary)의 시장 분리는 market 컬럼 마이그가 필요해 후속(현재 KRX/US 합산 유지=무회귀).
-- 검증 결과: pytest 전체 **1199 passed**(신규 3) | mypy strict ✅(변경 2 files) | ruff ✅(변경분).
-- 비고: 운영자 액션 — main 머지 후 pull → `com.kis.autotrader.us` 재시작. DB/스키마/마이그 불변. KRX(`com.kis.autotrader`)는 무영향.
 
 ---
 

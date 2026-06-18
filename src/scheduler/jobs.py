@@ -362,13 +362,47 @@ class TradingScheduler:
         )
         logger.info("일일 요약 집계 등록: 평일 %02d:%02d (%s)", sum_h, sum_m, mc)
 
-        # API 할당량 시간대 전환 (Redis Rate Limiter) — 메인/스크리너 분할은 KRX 전용.
-        # US는 스크리너 워커가 없으므로(P3c-5 보류) 메인 100% 단일 할당.
+        # API 할당량 시간대 전환 (Redis Rate Limiter). KRX는 항상 메인/스크리너 분할.
+        # US는 SCREENING_US_ENABLED=true면 KRX 동형 분할, false면 메인 100%(워커 없음).
+        # NOTE(후속): 시작 시점 즉시 catch-up(현재 구간 쿼터 1회 적용) 미구현 — KRX/US
+        # 공통으로 첫 cron 트리거 전까지 default 쿼터 의존(재시작 직후 한정). 별도 개선.
         total = settings.rate_limit.per_second
 
-        if self._market.is_overseas:
+        if self._market.is_overseas and settings.screening.us_enabled:
+            # US 동적 스크리너 활성 → KRX 동형 분할(US 시각). 장전 스크리너 100% →
+            # 장중 메인 80%/스크리너 20% → 마감후 메인 100%.
+            def _us_quota_pre() -> None:
+                _run_async(_update_quota({"main": 0, "screener": total}))
+
+            def _us_quota_open() -> None:
+                main_q = int(total * 0.8)
+                _run_async(_update_quota({"main": main_q, "screener": total - main_q}))
+
+            def _us_quota_post() -> None:
+                _run_async(_update_quota({"main": total, "screener": 0}))
+
+            self._scheduler.add_job(
+                func=_us_quota_pre, trigger="cron", day_of_week="mon-fri",
+                hour=pre_h, minute=pre_m, id="quota_us_pre",
+                name="API 할당량: 스크리닝 전용(US)", replace_existing=True,
+            )
+            self._scheduler.add_job(
+                func=_us_quota_open, trigger="cron", day_of_week="mon-fri",
+                hour=open_h, minute=open_m, id="quota_us_open",
+                name="API 할당량: 장중 배분(US)", replace_existing=True,
+            )
+            self._scheduler.add_job(
+                func=_us_quota_post, trigger="cron", day_of_week="mon-fri",
+                hour=post_h, minute=post_m, id="quota_us_post",
+                name="API 할당량: 메인 전용(US)", replace_existing=True,
+            )
+            logger.info(
+                "API 할당량(US 동적): %02d:%02d(스크리닝)/%02d:%02d(장중)/%02d:%02d(마감후)",
+                pre_h, pre_m, open_h, open_m, post_h, post_m,
+            )
+        elif self._market.is_overseas:
             def _set_quota_us_main() -> None:
-                """US: 스크리너 없음 → 메인 100%."""
+                """US 정적(watchlist): 스크리너 없음 → 메인 100%."""
                 _run_async(_update_quota({"main": total, "screener": 0}))
 
             self._scheduler.add_job(
