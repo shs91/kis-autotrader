@@ -188,10 +188,12 @@ class TradingEngine:
                 max_position_ratio=_t.us_max_position_ratio,
                 daily_trade_limit=_t.us_daily_trade_limit,
                 max_loss_rate=_t.us_max_loss_rate,
+                tz=self._market.timezone,
             )
             self._max_daily_trades_per_stock = _t.us_max_daily_trades_per_stock
         else:
-            self._risk = RiskManager()
+            # KRX는 tz=Asia/Seoul(시스템 KST와 동일) — 마감 임박 판정 불변.
+            self._risk = RiskManager(tz=self._market.timezone)
             self._max_daily_trades_per_stock = (
                 settings.trading.max_daily_trades_per_stock
             )
