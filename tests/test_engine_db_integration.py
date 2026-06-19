@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import types
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -853,3 +855,93 @@ class TestDailyDataInsufficientMetric:
         assert detail["stock_code"] == "000660"
         assert detail["skip_reason"] == "daily_data_insufficient"
         assert detail["cycle"] == 3
+
+
+# ── M8 재시작 쿨다운·종목별 진입 한도 카운터 복원 테스트 ─────────
+
+
+def _make_trade(
+    trade_type: object,
+    stock_code: str,
+    traded_at: datetime,
+    profit_loss_amount: int | None = None,
+) -> object:
+    """테스트용 Trade 레코드 SimpleNamespace 생성."""
+    return types.SimpleNamespace(
+        trade_type=trade_type,
+        stock_code=stock_code,
+        traded_at=traded_at,
+        profit_loss_amount=profit_loss_amount,
+    )
+
+
+class TestRestoreRestartCooldownCounters:
+    """M8: 장중 재시작 시 _today_buys_per_stock·_last_sell_at 복원 검증."""
+
+    def _make_engine_with_trades(self, trades: list[object]) -> object:
+        """TradeRepository를 주어진 trades로 mock해 _restore_risk_state_if_needed()를 실행한다."""
+        engine = _make_engine()
+        engine._load_peak_prices = MagicMock(return_value={})  # type: ignore[method-assign]
+
+        repo = MagicMock()
+        repo.get_trades_by_date.return_value = trades
+
+        @contextmanager
+        def fake_session():
+            yield MagicMock()
+
+        with patch("src.engine.get_session", fake_session), \
+             patch("src.engine.TradeRepository", return_value=repo):
+            engine._restore_risk_state_if_needed()
+
+        return engine
+
+    def test_restores_buy_counts_and_last_sell_at(self) -> None:
+        """BUY×2(A), BUY×1(B), SELL×1(A) 체결에서 카운터와 쿨다운 시각이 복원된다.
+
+        실측 버그: 코칩 STOP_LOSS 4분 후 재매수 — _last_sell_at이 재시작으로 초기화되어
+        쿨다운이 우회됐다.
+        """
+        from src.db.models import TradeType
+
+        sell_at = datetime(2026, 6, 17, 10, 30, 0, tzinfo=UTC)
+        trades = [
+            _make_trade(TradeType.BUY, "A", datetime(2026, 6, 17, 9, 1, 0, tzinfo=UTC)),
+            _make_trade(TradeType.BUY, "A", datetime(2026, 6, 17, 9, 30, 0, tzinfo=UTC)),
+            _make_trade(TradeType.SELL, "A", sell_at, profit_loss_amount=-5000),
+            _make_trade(TradeType.BUY, "B", datetime(2026, 6, 17, 9, 45, 0, tzinfo=UTC)),
+        ]
+        engine = self._make_engine_with_trades(trades)
+
+        assert engine._today_buys_per_stock == {"A": 2, "B": 1}, (
+            "_today_buys_per_stock가 당일 BUY 체결 수로 복원되어야 한다"
+        )
+        assert engine._last_sell_at.get("A") == sell_at, (
+            "_last_sell_at['A']가 SELL 체결 시각으로 복원되어야 한다"
+        )
+        assert "B" not in engine._last_sell_at, (
+            "B는 매도 없음 — _last_sell_at에 없어야 한다"
+        )
+
+    def test_restores_buy_counts_even_with_no_sells(self) -> None:
+        """BUY만 있고 SELL이 없는 경우에도 _today_buys_per_stock이 정확히 복원된다.
+
+        과거 코드는 `if not sells: return`이 BUY 카운터 복원보다 앞에 있어
+        매도 없는 날(장 초반 재시작)에 _today_buys_per_stock이 항상 0으로 유지됐다.
+        이 경우 종목당 진입 한도(MAX_DAILY_TRADES_PER_STOCK)가 우회된다.
+        """
+        from src.db.models import TradeType
+
+        trades = [
+            _make_trade(TradeType.BUY, "C", datetime(2026, 6, 17, 9, 5, 0, tzinfo=UTC)),
+            _make_trade(TradeType.BUY, "C", datetime(2026, 6, 17, 9, 20, 0, tzinfo=UTC)),
+            _make_trade(TradeType.BUY, "D", datetime(2026, 6, 17, 9, 35, 0, tzinfo=UTC)),
+        ]
+        engine = self._make_engine_with_trades(trades)
+
+        assert engine._today_buys_per_stock == {"C": 2, "D": 1}, (
+            "SELL이 없어도 BUY 카운터가 복원되어야 한다 — 종목당 진입 한도 우회 방지"
+        )
+        assert engine._last_sell_at == {}, (
+            "SELL 체결이 없으면 _last_sell_at는 빈 dict여야 한다"
+        )
