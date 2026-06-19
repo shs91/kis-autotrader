@@ -1,13 +1,13 @@
 {
   "_meta": {
-    "updated_at": "2026-06-18",
-    "updated_by": "manual:enable-us-dynamic-screener"
+    "updated_at": "2026-06-19",
+    "updated_by": "proposal:2026-06-19_rsi-downtrend-churn-fix (1단계 SOLO만)"
   },
   "SCREENING_US_ENABLED": true,
   "MAX_LOSS_RATE": 0.03,
   "TRAILING_DRAWDOWN_RATIO": 0.03,
   "SCREENING_MULTISOURCE_ENABLED": true,
-  "STRATEGY_SOLO_BUY_MIN_CONFIDENCE": 0.45,
+  "STRATEGY_SOLO_BUY_MIN_CONFIDENCE": 0.60,
   "STRATEGY_MIN_CONFIDENCE": 0.05,
   "SCREENING_WEIGHT_VOLUME_RANK": 0.3,
   "SCREENING_WEIGHT_CHANGE_RATE": 0.2,
