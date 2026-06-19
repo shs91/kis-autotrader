@@ -521,3 +521,84 @@ def test_weighted_confidence_clamped_to_one() -> None:
     result = ensemble.analyze(EMPTY_DF)
     assert result.signal_type == SignalType.BUY
     assert result.confidence == 1.0
+
+
+# --- trend filter tests ---
+
+
+class TrendFollowingStrategy(FixedStrategy):
+    """추세추종 전략으로 표시된 테스트용 고정 시그널 전략."""
+
+    is_trend_following = True
+
+
+class MeanReversionStrategy(FixedStrategy):
+    """평균회귀 전략으로 표시된 테스트용 고정 시그널 전략 (기본값과 동일)."""
+
+    is_trend_following = False
+
+
+def test_trend_filter_suppresses_buy_when_no_trend_following() -> None:
+    """추세추종 전략 BUY 없이 평균회귀만 BUY → trend_filter_enabled=True 시 HOLD."""
+    ensemble = EnsembleStrategy(
+        [
+            MeanReversionStrategy(SignalType.BUY, 0.8),  # RSI 역할
+            MeanReversionStrategy(SignalType.BUY, 0.7),  # Bollinger 역할
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),  # MA 역할
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),  # MACD 역할
+        ],
+        method="weighted",
+        trend_filter_enabled=True,
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    assert "추세역행" in result.reason
+
+
+def test_trend_filter_allows_buy_when_trend_following_present() -> None:
+    """추세추종 전략이 BUY에 포함되면 → trend_filter 통과 후 BUY."""
+    ensemble = EnsembleStrategy(
+        [
+            MeanReversionStrategy(SignalType.BUY, 0.7),   # RSI BUY
+            TrendFollowingStrategy(SignalType.BUY, 0.6),  # MA BUY
+            TrendFollowingStrategy(SignalType.HOLD, 0.0), # MACD HOLD
+            MeanReversionStrategy(SignalType.HOLD, 0.0),  # Bollinger HOLD
+        ],
+        method="weighted",
+        trend_filter_enabled=True,
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+
+
+def test_trend_filter_disabled_by_default() -> None:
+    """trend_filter_enabled 기본값은 False → 추세추종 없는 BUY도 억제하지 않는다."""
+    ensemble = EnsembleStrategy(
+        [
+            MeanReversionStrategy(SignalType.BUY, 0.8),
+            MeanReversionStrategy(SignalType.BUY, 0.7),
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+        # trend_filter_enabled 기본값 = False
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    # 기본값 비활성이므로 가중투표 정상 동작 — BUY 2개@0.75 avg, HOLD 2개, n_win=2 → BUY
+    assert result.signal_type == SignalType.BUY
+
+
+def test_trend_filter_does_not_affect_sell() -> None:
+    """trend_filter는 BUY에만 적용 — SELL은 영향 없음."""
+    ensemble = EnsembleStrategy(
+        [
+            TrendFollowingStrategy(SignalType.SELL, 0.8),
+            TrendFollowingStrategy(SignalType.SELL, 0.7),
+            MeanReversionStrategy(SignalType.HOLD, 0.0),
+            MeanReversionStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+        trend_filter_enabled=True,
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.SELL

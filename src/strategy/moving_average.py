@@ -24,6 +24,9 @@ class MovingAverageStrategy(BaseStrategy):
     - 데드크로스 (단기 MA < 장기 MA 교차): 매도 시그널
     """
 
+    # 추세추종 전략으로 표시 — 앙상블 trend_filter BUY 가드의 면제 조건
+    is_trend_following = True
+
     def __init__(
         self,
         short_period: int | None = None,

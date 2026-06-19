@@ -398,6 +398,12 @@ class StrategyConfig:
         default_factory=lambda: _env_float("STRATEGY_SOLO_BUY_MIN_CONFIDENCE", 0.7)
     )
 
+    # 앙상블 추세역행 BUY 가드 (opt-in, 기본 off).
+    # True면 평균회귀 전략(RSI/볼린저)만 BUY이고 추세추종 전략(MA/MACD) BUY가 없을 때 HOLD로 억제.
+    trend_filter_enabled: bool = field(
+        default_factory=lambda: _env("STRATEGY_TREND_FILTER_ENABLED", "false").lower() == "true"
+    )
+
     # 트레일링 스톱: 활성화 여부 (off면 기존 take_profit_ratio 고정 익절 폴백)
     trailing_stop_enabled: bool = field(
         default_factory=lambda: _env("TRAILING_STOP_ENABLED", "true").lower() == "true"
