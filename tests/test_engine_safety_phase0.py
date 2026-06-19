@@ -154,6 +154,7 @@ async def test_no_orphan_fill_proceeds_to_cancel() -> None:
 def _sell(amount: int, second: int) -> object:
     from datetime import UTC, datetime
     return types.SimpleNamespace(
+        stock_code="005930",
         trade_type=TradeType.SELL,
         profit_loss_amount=amount,
         traded_at=datetime(2026, 6, 1, 1, 0, second, tzinfo=UTC),

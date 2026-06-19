@@ -707,6 +707,22 @@ class TradingEngine:
                 if t.trade_type == TradeType.SELL and t.profit_loss_amount is not None
             ]
             sells.sort(key=lambda t: t.traded_at)
+            # M8 복원: 재매수 쿨다운·종목별 진입한도 카운터를 당일 체결에서 재구성한다.
+            # 두 dict는 in-memory라 장중 재시작 시 비워져, 손절 직후 재매수(쿨다운 우회)·
+            # 종목당 한도 우회가 발생했다(실측: 코칩 STOP_LOSS 4분 후 재매수). trades의 BUY
+            # 행은 모두 체결분이라 그대로 카운트하고, _last_sell_at은 실제 매도 시각(traded_at)
+            # 기준이라 '재시작 now'가 아니라 매도시각으로 쿨다운이 정확히 계산된다.
+            self._today_buys_per_stock = {}
+            self._last_sell_at = {}
+            for t in trades:
+                if t.trade_type == TradeType.BUY:
+                    self._today_buys_per_stock[t.stock_code] = (
+                        self._today_buys_per_stock.get(t.stock_code, 0) + 1
+                    )
+                elif t.trade_type == TradeType.SELL:
+                    prev = self._last_sell_at.get(t.stock_code)
+                    if prev is None or t.traded_at > prev:
+                        self._last_sell_at[t.stock_code] = t.traded_at
             if not sells:
                 logger.info("장중 재시작 복구: 당일 매도 체결 없음 — 리스크 초기값 유지")
                 return

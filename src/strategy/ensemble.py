@@ -23,6 +23,7 @@ class EnsembleStrategy(BaseStrategy):
         method: str = MAJORITY,
         strategy_weights: dict[str, float] | None = None,
         solo_buy_min_confidence: float = 1.01,
+        trend_filter_enabled: bool = False,
     ) -> None:
         """앙상블 전략을 초기화한다.
 
@@ -31,6 +32,10 @@ class EnsembleStrategy(BaseStrategy):
             method: 투표 방식 ("majority", "weighted", "performance")
             strategy_weights: 전략별 가중치 (performance 모드 시).
                 키는 전략 name, 값은 0.0~1.0 승률. None이면 동일 가중치.
+            solo_buy_min_confidence: 단독 BUY 허용 최소 신뢰도 (1.01=비활성).
+            trend_filter_enabled: 추세역행 BUY 억제 가드 활성화 여부 (opt-in, 기본 off).
+                True면 추세추종 전략(is_trend_following=True) BUY 없이 평균회귀만 BUY 시
+                가중투표 결과를 HOLD로 변환한다.
 
         Raises:
             ValueError: strategies가 2개 미만이거나 method가 올바르지 않을 때
@@ -43,6 +48,7 @@ class EnsembleStrategy(BaseStrategy):
         self._method = method
         self._strategy_weights = strategy_weights or {}
         self._solo_buy_min_confidence = solo_buy_min_confidence
+        self._trend_filter_enabled = trend_filter_enabled
 
     @property
     def name(self) -> str:
@@ -184,6 +190,23 @@ class EnsembleStrategy(BaseStrategy):
             winner_type = SignalType.SELL
             winner_weight, loser_weight = sell_w, buy_w
             n_win = len(sell_sigs)
+
+        # 추세역행 BUY 억제 가드 (opt-in): 추세추종 전략의 BUY 없이 평균회귀 전략만 BUY라면
+        # 하락 추세의 데드캣/낙하 중 반등 오신호일 가능성이 높아 HOLD로 전환한다.
+        if (
+            self._trend_filter_enabled
+            and winner_type == SignalType.BUY
+            and not any(
+                strat.is_trend_following
+                for strat, sig in zip(self._strategies, signals)
+                if sig.signal_type == SignalType.BUY
+            )
+        ):
+            return Signal(
+                signal_type=SignalType.HOLD,
+                confidence=0.0,
+                reason="앙상블: 추세역행 BUY 억제 (추세전략 BUY 없음)",
+            )
 
         # 단독표 억제: 승자 방향 동의가 2개 미만이면 매매 전환하지 않는다.
         # 단, BUY는 종합 신뢰도가 임계 이상이면 단독이라도 진입 허용한다(신중 재개).

@@ -53,6 +53,10 @@ class BaseStrategy(ABC):
     매매 시그널을 반환한다.
     """
 
+    # 추세추종 전략 여부 — True이면 EnsembleStrategy trend_filter가 BUY 가드를 면제한다.
+    # MA, MACD처럼 추세를 확인하는 전략은 True, RSI/볼린저처럼 평균회귀 전략은 False(기본값).
+    is_trend_following: bool = False
+
     @abstractmethod
     def analyze(self, market_data: pd.DataFrame) -> Signal:
         """시장 데이터를 분석하여 매매 시그널을 생성한다.

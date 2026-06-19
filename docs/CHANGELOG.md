@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-06-20] 앙상블 추세역행 BUY 가드(C1) + 재시작 쿨다운 복원(C2) — churn 손실 교정 (v0.22.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/strategy/base.py: BaseStrategy.is_trend_following 클래스 속성(기본 False). moving_average.py·macd.py에 =True(RSI·볼린저는 평균회귀형 False).
+  - src/strategy/ensemble.py + config.py + registry.py: **(C1)** `_weighted_vote`에 추세역행 BUY 가드 — BUY 승자인데 추세형(MA·MACD) BUY 표가 없으면(평균회귀 RSI/볼린저만 BUY) HOLD로 억제(단독·합의 둘 다). `STRATEGY_TREND_FILTER_ENABLED`(기본 false, opt-in) 게이트.
+  - src/engine.py: **(C2)** `_restore_risk_state_if_needed`가 당일 trades에서 `_today_buys_per_stock`·`_last_sell_at`를 재구성(매도 없어도 BUY 카운트 복원). 장중 재시작 시 두 dict가 비어 손절 직후 재매수(쿨다운 우회)·종목당 한도 초과가 발생하던 M8 버그 수정. 쿨다운=실제 매도시각 기준.
+  - tests: 추세역행 억제/허용/기본off·재시작 카운터 복원(매도없는 케이스 포함) 회귀 6건.
+- 배경: 이번주 KRX 분석 → churn 손실 범인이 RSI(9) 역추세 dip-buy(아주IB −9,909, MA·MACD·볼린저 HOLD인데 RSI만 과매도 BUY). 코칩은 재시작이 쿨다운 초기화해 손절 4분 후 재매수(실측). 제안서 docs/proposals/2026-06-19_rsi-downtrend-churn-fix.md(3축 적대검증).
+- 영향: **C1은 opt-in 기본 off라 켜기 전 KRX/US 불변**. **C2는 KRX/US 공통**(재시작 안전장치 복원, 운영자 승인) — 정상일(pre_market 실행) 불변, 장중 재시작 시에만 복원. 별도로 config_overrides SOLO_BUY_MIN_CONFIDENCE 0.45→0.60 적용(제안서 1단계).
+- 검증 결과: pytest 전체 **1268 passed**(신규 6) | mypy strict ✅ | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → KRX·US 재시작(C2). **C1 활성화는 config_overrides에 `STRATEGY_TREND_FILTER_ENABLED: "true"` + 재시작**(회귀 관측하며 opt-in 권장). DB/마이그 불변.
+
+---
+
 ## [2026-06-19] 보유종목 실시간 가격 vs 매수가 비교 차트 (v0.21.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -59,16 +73,3 @@
 - 영향: 계좌 충전(통합증거금) 후 평가/손익을 실값으로 표시하되 사이징은 us_cash_budget 캡 유지(실주문은 _get_buyable_qty가 별도 캡). KRX 무관. US 매수 블로커는 계좌 매수여력 $0(통합증거금 미활성)이라 본 수정과 별개(코드는 준비됨).
 - 검증 결과: pytest 전체 **1229 passed**(신규 회귀) | mypy strict ✅ | ruff ✅ | 라이브 진단 실측 필드 확인.
 - 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 반영. DB/마이그 불변. 통합증거금 활성 후 평가/손익 정확표시.
-
----
-
-## [2026-06-18] 마감 임박 매수가드 타임존 — US가 개장 직후에도 매수 전면차단되던 라이브 블로커 (v0.19.2)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/strategy/risk.py: RiskManager(tz=) + is_near_market_close가 now 미지정 시 datetime.now(시장 타임존)로 판정. 기존엔 datetime.now()(시스템 KST)로 컷오프(14:30)와 비교.
-  - src/engine.py: RiskManager 생성 시 tz=self._market.timezone(KRX=Asia/Seoul, US=America/New_York).
-  - tests: 마감가드 시장 타임존 회귀 3건(tz저장·ET컷오프·default now가 시장tz 사용).
-- 배경: US 동적 스크리너가 발굴+BUY 신호 생성했으나(6/18 라이브, PBR/A 0.78 등 BUY 10) 전부 BUY_REJECT(MARKET_CLOSE_GUARD). 원인: is_near_market_close가 시스템 KST 시각(22:54)을 US 마감 컷오프(14:30 KRX용)와 비교 → 22>14로 항상 "마감 임박" → US 세션(KST 22:30~05:00) 내내 신규 매수 차단. US 배포 후 잠복(BUY 신호가 처음 나서 노출). settlement date.today() KST 이슈와 동류.
-- 영향: US는 ET 기준으로 마감 컷오프 판정 → 개장~14:30 ET 매수 허용, 14:30 ET 이후 차단(1.5h 전). **KRX는 tz=Asia/Seoul(시스템 KST 동일)·.hour 동일로 동작 불변**(전체 1228 통과). 마감 청산 게이트·익절 하향(같은 메서드)도 US에서 정합화.
-- 검증 결과: pytest 전체 **1228 passed**(신규 3) | mypy strict ✅ | ruff ✅ | 라이브 발현 확인(BUY_REJECT=MARKET_CLOSE_GUARD).
-- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 매수 정상화. DB/마이그 불변. US 라이브 활성 중이라 조기 배포 권장. 컷오프 14:30은 KRX/US 공유(US=close 1.5h 전) — 필요 시 US 전용 컷오프 별도.

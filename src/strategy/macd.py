@@ -22,6 +22,9 @@ class MACDStrategy(BaseStrategy):
     - 히스토그램 크기로 신뢰도 산출
     """
 
+    # 추세추종 전략으로 표시 — 앙상블 trend_filter BUY 가드의 면제 조건
+    is_trend_following = True
+
     def __init__(
         self,
         fast_period: int | None = None,
