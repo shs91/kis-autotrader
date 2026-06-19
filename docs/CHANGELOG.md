@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-06-20] 스크리닝 모니터링 유니버스 회전 — 동결 해소 (v0.23.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/engine.py: `_screen_stocks`가 **회전**하도록 변경. 기존엔 `_screened_codes`(동적 매수후보 셋)가 cap 차면 early-return + 추가만(제거 없음)이라 장 초반 차면 종일 동결 → 하락전환 종목 고착 dip-buy(REBUY_COOLDOWN 79%의 구조원인). 이제 매 스크리닝(15사이클)마다: ①종목별 최신 screened_at 집계 ②최근(fresh_window 10분)·converted 후보만 fresh로 ③fresh 아닌 발굴종목 제거(stale) ④fresh를 랭크순 cap까지 추가. fresh가 비면(스크리닝 공백) 제거 스킵(유니버스 붕괴 방지). 보유종목은 monitor union(held∪watchlist∪screened)이 별도로 챙겨 매도 모니터링 유지.
+  - tests: 회전 추가/제거/붕괴방지/cap 회귀 4건 + 기존 screen_stocks 테스트 screened_at 보강.
+- 배경: 6/18 실증 — _screened_codes가 09시에 20 차고 10~15시 내내 20 고정(동결). 스크리너는 50~87 distinct/일 발굴하는데 엔진은 처음 N개만 종일 모니터링. C1(추세필터)·SOLO와 상보적(C1=나쁜 매수 차단, A=고착 해소+fresh 노출). 별도로 일일 API 캡 비구속화(500K)+MAX_SCREENED 20→60(KIS는 초당 20건 외 일일 제한 없음, 60종목도 간격 10초 유지).
+- 영향: KRX/US 공통(동적 스크리닝 경로). 동결 해소로 fresh 발굴 반영·stale 고착 차단. 전체 1272 통과. 신규 테이블/마이그 없음.
+- 검증 결과: pytest 전체 **1272 passed**(신규 4) | mypy strict ✅(102 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → KRX·US 재시작. config(API_DAILY_CALL_LIMIT 500K·MAX_SCREENED_STOCKS 60·SOLO 0.60·TREND_FILTER true)는 이미 라이브 적용됨. DB/마이그 불변.
+
+---
+
 ## [2026-06-20] 앙상블 추세역행 BUY 가드(C1) + 재시작 쿨다운 복원(C2) — churn 손실 교정 (v0.22.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -60,16 +72,3 @@
 - 영향: 통합증거금 활성 US 계좌가 실제 매수여력(현금+원화담보 환산)으로 주문 수량 산정 → 동적 매수 실행 가능. 실주문은 여전히 min(risk_qty, buyable)·us_cash_budget 사이징 캡 적용(과대주문 없음). KRX 무관(해외 전용 psamount). 현금 필드 폴백 유지로 통합증거금 미활성 계좌도 동작.
 - 검증 결과: pytest 전체 통과(통합증거금 우선 신규 회귀) | mypy strict ✅ | ruff ✅.
 - 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 매수여력 정상 인식. DB/마이그 불변. #68(present-balance)에 누락됐던 분리 수정(force-push 차단으로 amend 미반영) — 이 PR로 본 블로커 해소.
-
----
-
-## [2026-06-18] present-balance output3 파싱 + 통합증거금 과대주문 방지 (v0.19.3)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/api/overseas_account.py: get_present_balance가 output3(실측 필드: frcr_use_psbl_amt 매수여력·tot_dncl_amt 예수금·frcr_evlu_tota 평가·tot_evlu_pfls_amt 손익·evlu_erng_rt1 수익률)에서 파싱. 기존엔 output2(부재)에서 찾아 valid=False였음.
-  - src/engine.py: _fetch_overseas_balance가 deposit(사이징 기준)을 us_cash_budget 캡으로 유지 — pb.deposit(통합증거금 매수여력, 클 수 있음)으로 덮지 않음(과대주문 방지). 평가/손익/환율만 present-balance 실값 반영 + 매수여력 로깅.
-  - tests: present-balance output3 파싱·환율 output2 폴백·deposit 캡 유지 회귀.
-- 배경: US 라이브 진단 결과 present-balance(CTRP6504R) 데이터가 output2 아닌 output3에 있어 #61 파싱이 항상 valid=False→us_cash_budget 폴백. 우연히 안전(보수 사이징)했으나 표시 부정확. 또한 통합증거금 활성 시 매수여력(원화담보 환산, 클 수 있음)을 deposit으로 쓰면 사이징 과대 → us_cash_budget($1000) 캡 명시.
-- 영향: 계좌 충전(통합증거금) 후 평가/손익을 실값으로 표시하되 사이징은 us_cash_budget 캡 유지(실주문은 _get_buyable_qty가 별도 캡). KRX 무관. US 매수 블로커는 계좌 매수여력 $0(통합증거금 미활성)이라 본 수정과 별개(코드는 준비됨).
-- 검증 결과: pytest 전체 **1229 passed**(신규 회귀) | mypy strict ✅ | ruff ✅ | 라이브 진단 실측 필드 확인.
-- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 반영. DB/마이그 불변. 통합증거금 활성 후 평가/손익 정확표시.
