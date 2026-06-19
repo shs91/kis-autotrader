@@ -1137,8 +1137,6 @@ class TradingEngine:
         종목까지 모니터링되던 문제 대응)
         """
         scfg = self._screener.config
-        if len(self._screened_codes) >= scfg.max_screened:
-            return
 
         try:
             today = self._today()
@@ -1152,51 +1150,69 @@ class TradingEngine:
                     tz=self._market.timezone,
                 )
 
-            new_codes: list[str] = []
-            name_map: dict[str, str] = {}
-            seen: set[str] = set()
+            now = datetime.now(self._tz)
+            fresh_window = timedelta(minutes=10)  # 최근 스크리닝 통과분만 fresh로 간주
             watchlist_set = set(self._get_watchlist_codes())
+
+            # 종목별 최신 screened_at (results는 rank 오름차순이라 freshness는 별도 집계)
+            latest_at: dict[str, datetime] = {}
             converted_count = 0
             for r in results:
                 if r.converted_to_trade:
                     converted_count += 1
+                prev = latest_at.get(r.stock_code)
+                if prev is None or r.screened_at > prev:
+                    latest_at[r.stock_code] = r.screened_at
+
+            # fresh 후보: 최근(fresh_window 내)·converted·관심종목 아님, 랭크순 dedupe
+            name_map: dict[str, str] = {}
+            fresh_codes: list[str] = []
+            fresh_set: set[str] = set()
+            seen: set[str] = set()
+            for r in results:  # screening_rank 오름차순
                 if r.stock_code in seen:
                     continue
                 seen.add(r.stock_code)
                 if r.stock_name and r.stock_name != r.stock_code:
                     name_map[r.stock_code] = r.stock_name
-                # Worker가 가격/등락률/ETF/위험 필터를 통과시켜 선정한 종목만 모니터링.
-                # 필터 전 원본 랭킹 종목(정리매매·페니·ETF 등)이 평가 대상에 새는 것을 막는다.
                 if not r.converted_to_trade:
-                    continue
-                if r.stock_code in self._screened_codes:
                     continue
                 if r.stock_code in watchlist_set:
                     continue
-                new_codes.append(r.stock_code)
+                if latest_at[r.stock_code] < now - fresh_window:
+                    continue  # stale: 최근 스크리닝에 없음
+                fresh_set.add(r.stock_code)
+                fresh_codes.append(r.stock_code)
 
-            remaining = scfg.max_screened - len(self._screened_codes)
-            added = new_codes[:remaining]
+            # 회전 (1): 더는 fresh 아닌 발굴종목 제거. 단 fresh가 비면(스크리닝 공백)
+            # 유니버스 붕괴 방지로 제거하지 않는다. 보유종목은 monitor union이 별도로
+            # 챙기므로 여기서 빠져도 매도 모니터링은 유지된다.
+            removed: list[str] = []
+            if fresh_codes:
+                stale = [c for c in self._screened_codes if c not in fresh_set]
+                for c in stale:
+                    self._screened_codes.discard(c)
+                removed = stale
+
+            # 회전 (2): fresh를 랭크순으로 cap까지 추가
+            added: list[str] = []
+            for code in fresh_codes:
+                if len(self._screened_codes) >= scfg.max_screened:
+                    break
+                if code in self._screened_codes:
+                    continue
+                self._screened_codes.add(code)
+                added.append(code)
 
             if results:
-                unique_count = len(seen)
                 logger.info(
                     "스크리닝 DB 조회: %d건 (고유 %d종목, converted %d건)",
-                    len(results), unique_count, converted_count,
+                    len(results), len(seen), converted_count,
                 )
-
-            if added:
-                self._screened_codes.update(added)
+            if added or removed:
                 logger.info(
-                    "스크리닝 결과 반영: 신규 %d종목 (누적 %d/%d)",
-                    len(added),
-                    len(self._screened_codes),
-                    scfg.max_screened,
-                )
-            elif results and not added:
-                logger.info(
-                    "스크리닝 결과 반영 0종목 (이미 등록 %d, 관심종목 제외)",
-                    len(self._screened_codes),
+                    "스크리닝 유니버스 회전: +%d종목 -%d종목 (현재 %d/%d)",
+                    len(added), len(removed), len(self._screened_codes), scfg.max_screened,
                 )
 
             # screening_results에 있는 종목명을 stocks 테이블에 upsert
