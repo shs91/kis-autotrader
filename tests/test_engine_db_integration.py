@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import types
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -681,6 +682,7 @@ class TestSignalSummaryMetric:
             r.stock_name = name
             r.converted_to_trade = converted
             r.screening_rank = i + 1
+            r.screened_at = datetime.now(UTC)  # 회전 로직의 freshness 판정에 필요
             mock_results.append(r)
 
         mock_repo = MagicMock()
@@ -710,6 +712,7 @@ class TestSignalSummaryMetric:
             r.stock_name = "테스트A"
             r.converted_to_trade = True
             r.screening_rank = 1
+            r.screened_at = datetime.now(UTC)  # 회전 로직의 freshness 판정에 필요
             mock_results.append(r)
 
         mock_repo = MagicMock()
@@ -739,8 +742,136 @@ class TestSignalSummaryMetric:
             r.stock_name = f"종목{i}"
             r.converted_to_trade = True
             r.screening_rank = i + 1
+            r.screened_at = datetime.now(UTC)  # 회전 로직의 freshness 판정에 필요
             mock_results.append(r)
 
+        mock_repo = MagicMock()
+        mock_repo.get_by_date.return_value = mock_results
+
+        with patch("src.engine.get_session") as mock_session, \
+             patch("src.engine.ScreeningResultRepository", return_value=mock_repo):
+            mock_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+            await engine._screen_stocks()
+
+        assert len(engine._screened_codes) == 2
+
+    # ── 유니버스 회전 테스트 ────────────────────────────────
+
+    def _make_fresh_result(
+        self,
+        code: str,
+        name: str,
+        rank: int,
+        tz: ZoneInfo,
+        age_minutes: float = 0.0,
+        converted: bool = True,
+    ) -> MagicMock:
+        """screened_at이 있는 ScreeningResult mock을 생성한다."""
+        r = MagicMock()
+        r.stock_code = code
+        r.stock_name = name
+        r.converted_to_trade = converted
+        r.screening_rank = rank
+        r.screened_at = datetime.now(tz) - timedelta(minutes=age_minutes)
+        return r
+
+    @pytest.mark.asyncio
+    async def test_rotation_adds_fresh_converted(self) -> None:
+        """_screened_codes가 비어있을 때 fresh+converted 3종목이 모두 추가된다."""
+        engine = _make_engine()
+        engine._screened_codes = set()
+        engine._watchlist_codes = []
+        tz = ZoneInfo("Asia/Seoul")
+        engine._tz = tz
+
+        mock_results = [
+            self._make_fresh_result("R001", "종목A", 1, tz),
+            self._make_fresh_result("R002", "종목B", 2, tz),
+            self._make_fresh_result("R003", "종목C", 3, tz),
+        ]
+        mock_repo = MagicMock()
+        mock_repo.get_by_date.return_value = mock_results
+
+        with patch("src.engine.get_session") as mock_session, \
+             patch("src.engine.ScreeningResultRepository", return_value=mock_repo):
+            mock_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+            await engine._screen_stocks()
+
+        assert engine._screened_codes == {"R001", "R002", "R003"}
+
+    @pytest.mark.asyncio
+    async def test_rotation_removes_stale(self) -> None:
+        """_screened_codes={A,B}이고 fresh가 {A,C}(B는 fresh_window 밖)이면
+        결과가 {A,C}가 된다(B 제거·C 추가)."""
+        engine = _make_engine()
+        engine._watchlist_codes = []
+        tz = ZoneInfo("Asia/Seoul")
+        engine._tz = tz
+        engine._screened_codes = {"R_A", "R_B"}
+
+        mock_results = [
+            # A: fresh (0분 경과)
+            self._make_fresh_result("R_A", "종목A", 1, tz, age_minutes=0),
+            # C: fresh (0분 경과)
+            self._make_fresh_result("R_C", "종목C", 2, tz, age_minutes=0),
+            # B: stale (fresh_window=10분 초과, 15분 경과)
+            self._make_fresh_result("R_B", "종목B", 3, tz, age_minutes=15),
+        ]
+        mock_repo = MagicMock()
+        mock_repo.get_by_date.return_value = mock_results
+
+        with patch("src.engine.get_session") as mock_session, \
+             patch("src.engine.ScreeningResultRepository", return_value=mock_repo):
+            mock_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+            await engine._screen_stocks()
+
+        assert engine._screened_codes == {"R_A", "R_C"}
+
+    @pytest.mark.asyncio
+    async def test_rotation_no_remove_when_fresh_empty(self) -> None:
+        """fresh_codes가 비면(전부 stale/미converted) 제거하지 않고 유니버스를 보존한다."""
+        engine = _make_engine()
+        engine._watchlist_codes = []
+        tz = ZoneInfo("Asia/Seoul")
+        engine._tz = tz
+        engine._screened_codes = {"R_A", "R_B"}
+
+        # 전부 stale(15분 경과) → fresh_codes 비어있음
+        mock_results = [
+            self._make_fresh_result("R_A", "종목A", 1, tz, age_minutes=15),
+            self._make_fresh_result("R_B", "종목B", 2, tz, age_minutes=15),
+        ]
+        mock_repo = MagicMock()
+        mock_repo.get_by_date.return_value = mock_results
+
+        with patch("src.engine.get_session") as mock_session, \
+             patch("src.engine.ScreeningResultRepository", return_value=mock_repo):
+            mock_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_session.return_value.__exit__ = MagicMock(return_value=False)
+            await engine._screen_stocks()
+
+        # 붕괴 방지: 제거 안 함
+        assert engine._screened_codes == {"R_A", "R_B"}
+
+    @pytest.mark.asyncio
+    async def test_rotation_respects_cap(self) -> None:
+        """max_screened=2일 때 fresh 3종목이 있어도 2개만 추가된다."""
+        engine = _make_engine()
+        engine._screened_codes = set()
+        engine._watchlist_codes = []
+        engine._screener._config = MagicMock()
+        engine._screener._config.max_screened = 2
+        tz = ZoneInfo("Asia/Seoul")
+        engine._tz = tz
+
+        mock_results = [
+            self._make_fresh_result("R001", "종목A", 1, tz),
+            self._make_fresh_result("R002", "종목B", 2, tz),
+            self._make_fresh_result("R003", "종목C", 3, tz),
+        ]
         mock_repo = MagicMock()
         mock_repo.get_by_date.return_value = mock_results
 
