@@ -1,12 +1,11 @@
-"""하네스 사이클 KPI 대시보드 페이지 — Phase 4."""
+"""하네스 사이클 KPI — 자동구현 파이프라인 관측(매매와 분리된 시스템 섹션)."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-# Streamlit이 pages/*.py를 별도 컨텍스트로 실행 — sys.path[0]은 이 파일의
-# 디렉토리. src.* import를 위해 프로젝트 루트를 path에 추가.
+# views/*.py 에서 src.* import를 위해 프로젝트 루트를 path에 추가 (views → dashboard → root)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -30,8 +29,7 @@ from src.db.models import (  # noqa: E402
 )
 from src.db.session import get_session  # noqa: E402
 
-st.set_page_config(page_title="Pipeline KPI", layout="wide")
-st.title("🛠 하네스 사이클 KPI")
+st.title("\U0001f6e0 하네스 사이클 KPI")
 
 with get_session() as session:
     # ── Section 1: 사이클 성공률 (30일)

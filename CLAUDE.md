@@ -94,13 +94,24 @@ kis-autotrader/
 │   ├── generate_daily_report.py   # 일일 리포트 생성
 │   ├── backup_db.sh               # DB 백업 (pg_dump + gzip, 7일 롤링)
 │   └── docker-entrypoint.sh       # Docker 엔트리포인트
-├── dashboard/                     # Streamlit 웹 대시보드
-│   ├── app.py                     # 메인 대시보드
-│   └── pages/
-│       ├── trades.py              # 매매 분석
+├── dashboard/                     # Streamlit 웹 대시보드 (KR/US 시장 인지)
+│   ├── app.py                     # 엔트리포인트 (st.navigation + 전역 시장 선택)
+│   ├── positions_data.py          # positions 차트 데이터 구성 (순수 함수, 테스트 대상)
+│   ├── lib/                       # 공용 라이브러리
+│   │   ├── db.py                  # DB URL 단일소스 해석·엔진·쿼리 헬퍼
+│   │   ├── market.py              # 전역 시장 선택(전체/한국/미국)·SQL 필터
+│   │   ├── fmt.py                 # 시장별 통화/수치/수익률 포맷 (네이티브 통화)
+│   │   ├── charts.py              # Altair 시맨틱 손익 차트 (부호별 색상)
+│   │   ├── reasons.py             # 매수/매도 사유 라벨·앙상블 투표(vote_meta) 파싱
+│   │   └── tables.py              # 체결/보유 표 표시용 변환
+│   └── views/                     # 페이지 (st.Page로 등록)
+│       ├── overview.py            # 개요 (상태·당일요약·보유·최근체결)
+│       ├── positions.py           # 보유 상세 (가격 vs 매수가, 기준선·체결마커)
+│       ├── trades.py              # 매매 분석 (구체화된 사유)
+│       ├── signals.py             # 신호 분석 + 앙상블 투표 탐색기
+│       ├── risk.py                # 리스크 분석 (MDD, Sharpe, 연패)
 │       ├── performance.py         # 성과 분석
-│       ├── signals.py             # 시그널 분석
-│       └── risk.py                # 리스크 분석 (MDD, Sharpe, 연패)
+│       └── pipeline.py            # 하네스 사이클 KPI (시스템 그룹)
 ├── docs/
 │   ├── BRIDGE_SPEC.md             # Cowork ↔ Claude Code 브릿지 규격
 │   ├── CHANGELOG.md               # 자동 구현 변경 이력 (최근 5건 rolling, 전체는 DB)
