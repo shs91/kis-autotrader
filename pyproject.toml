@@ -67,6 +67,8 @@ select = ["E", "F", "I", "N", "W", "UP", "DTZ", "B", "S"]
 "src/worker/screener.py" = ["DTZ011"]
 "main.py" = ["DTZ001", "DTZ011"]
 "tests/**" = ["S101", "S105", "S106", "DTZ"]
+# 대시보드는 KST 로컬 '오늘' 경계가 의도적(서버 tz=KST) — DTZ011 허용(src 컨벤션과 동일)
+"dashboard/views/*.py" = ["DTZ011"]
 
 [tool.mypy]
 python_version = "3.12"
