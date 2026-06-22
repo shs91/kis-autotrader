@@ -1,7 +1,7 @@
 {
   "_meta": {
     "updated_at": "2026-06-22",
-    "updated_by": "manual:fresh-window-30 (모니터링 유니버스 회전창 10→30분, 60종목 분산 실현)"
+    "updated_by": "manual:min-score-0.07 (전환공급 구조적 빈약—open후 종일 0~1/h, 모니터링 깔때기 입구 완화; BUY게이트 C1/SOLO/0.2 유지)"
   },
   "API_DAILY_CALL_LIMIT": 500000,
   "SCREENING_US_ENABLED": true,
@@ -14,7 +14,7 @@
   "SCREENING_WEIGHT_VOLUME_RANK": 0.3,
   "SCREENING_WEIGHT_CHANGE_RATE": 0.2,
   "SCREENING_WEIGHT_STRATEGY": 0.5,
-  "SCREENING_MIN_SCORE": 0.1,
+  "SCREENING_MIN_SCORE": 0.07,
   "SCREENING_TOP_N": 60,
   "MAX_SCREENED_STOCKS": 60,
   "SCREENING_INTERVAL_CYCLES": 15,
