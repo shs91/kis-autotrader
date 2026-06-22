@@ -466,6 +466,12 @@ class ScreeningConfig:
     max_screened: int = field(
         default_factory=lambda: _env_int("MAX_SCREENED_STOCKS", 15)
     )
+    # 엔진 모니터링 유니버스 회전 창(분): 최근 이 시간 내 스크리닝 통과분만 fresh로
+    # 간주해 모니터링 유지, 초과분은 회전 제거(engine._screen_stocks). 짧을수록
+    # 신선(anti-churn)·유니버스 좁음, 길수록 누적 배치로 유니버스 넓어짐.
+    fresh_window_min: int = field(
+        default_factory=lambda: _env_int("SCREENING_FRESH_WINDOW_MIN", 10)
+    )
 
     # 사전 필터
     min_price: int = field(

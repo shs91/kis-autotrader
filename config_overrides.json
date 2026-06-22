@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "updated_at": "2026-06-20",
-    "updated_by": "manual:lower-position-ratio-0.2 (60종목 유니버스 분산 강화, 실측 동시보유 5종목 정합)"
+    "updated_at": "2026-06-22",
+    "updated_by": "manual:fresh-window-30 (모니터링 유니버스 회전창 10→30분, 60종목 분산 실현)"
   },
   "API_DAILY_CALL_LIMIT": 500000,
   "SCREENING_US_ENABLED": true,
@@ -18,6 +18,7 @@
   "SCREENING_TOP_N": 60,
   "MAX_SCREENED_STOCKS": 60,
   "SCREENING_INTERVAL_CYCLES": 15,
+  "SCREENING_FRESH_WINDOW_MIN": 30,
   "SCREENING_CHANGE_RATE_MAX": 8.0,
   "SCREENING_CHANGE_RATE_MIN": -8.0,
   "SCREENING_MAX_PRICE": 150000,

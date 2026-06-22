@@ -734,6 +734,7 @@ class TestSignalSummaryMetric:
         engine._watchlist_codes = []
         engine._screener._config = MagicMock()
         engine._screener._config.max_screened = 2
+        engine._screener._config.fresh_window_min = 10
 
         mock_results = []
         for i, code in enumerate(["999001", "999002", "999003"]):
@@ -816,8 +817,8 @@ class TestSignalSummaryMetric:
             self._make_fresh_result("R_A", "종목A", 1, tz, age_minutes=0),
             # C: fresh (0분 경과)
             self._make_fresh_result("R_C", "종목C", 2, tz, age_minutes=0),
-            # B: stale (fresh_window=10분 초과, 15분 경과)
-            self._make_fresh_result("R_B", "종목B", 3, tz, age_minutes=15),
+            # B: stale (fresh_window 밖 — 60분 경과, 회전창 10/30분 무관 stale)
+            self._make_fresh_result("R_B", "종목B", 3, tz, age_minutes=60),
         ]
         mock_repo = MagicMock()
         mock_repo.get_by_date.return_value = mock_results
@@ -839,10 +840,10 @@ class TestSignalSummaryMetric:
         engine._tz = tz
         engine._screened_codes = {"R_A", "R_B"}
 
-        # 전부 stale(15분 경과) → fresh_codes 비어있음
+        # 전부 stale(60분 경과 — 회전창 10/30분 무관) → fresh_codes 비어있음
         mock_results = [
-            self._make_fresh_result("R_A", "종목A", 1, tz, age_minutes=15),
-            self._make_fresh_result("R_B", "종목B", 2, tz, age_minutes=15),
+            self._make_fresh_result("R_A", "종목A", 1, tz, age_minutes=60),
+            self._make_fresh_result("R_B", "종목B", 2, tz, age_minutes=60),
         ]
         mock_repo = MagicMock()
         mock_repo.get_by_date.return_value = mock_results
@@ -864,6 +865,7 @@ class TestSignalSummaryMetric:
         engine._watchlist_codes = []
         engine._screener._config = MagicMock()
         engine._screener._config.max_screened = 2
+        engine._screener._config.fresh_window_min = 10
         tz = ZoneInfo("Asia/Seoul")
         engine._tz = tz
 

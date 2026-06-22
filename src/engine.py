@@ -1151,7 +1151,8 @@ class TradingEngine:
                 )
 
             now = datetime.now(self._tz)
-            fresh_window = timedelta(minutes=10)  # 최근 스크리닝 통과분만 fresh로 간주
+            # 최근 통과분만 fresh로 간주 (SCREENING_FRESH_WINDOW_MIN, 기본 10분)
+            fresh_window = timedelta(minutes=scfg.fresh_window_min)
             watchlist_set = set(self._get_watchlist_codes())
 
             # 종목별 최신 screened_at (results는 rank 오름차순이라 freshness는 별도 집계)
