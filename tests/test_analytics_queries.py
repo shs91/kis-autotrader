@@ -213,8 +213,38 @@ class TestDailyAnalytics:
         """당일 스크리닝 결과와 전환율을 반환한다."""
         result = get_daily_screening(seeded_session, DAY1_DATE)
         assert result["total_screened"] == 2
+        assert result["distinct_screened"] == 2
         assert result["converted_count"] == 1
+        assert result["distinct_converted"] == 1
         assert result["conversion_rate"] == 50.0
+
+    def test_get_daily_screening_market_filter(self, seeded_session: Session) -> None:
+        """KRX/US가 같은 날 공존해도 market으로 격리된다 (시드는 전부 KRX)."""
+        # 동일 DAY1에 US 발굴 1건 추가 → 교차시장 분리 검증
+        ScreeningResultRepository(seeded_session).record_screening(
+            stock_code="AAPL", stock_name="Apple", screening_rank=1,
+            volume=1000, price_change_pct=1.5, screened_at=DAY1,
+            cycle_number=1, converted_to_trade=True, market="US",
+        )
+        krx = get_daily_screening(seeded_session, DAY1_DATE, market="KRX")
+        assert krx["total_screened"] == 2  # US 행 불포함
+        assert krx["converted_count"] == 1
+        us = get_daily_screening(seeded_session, DAY1_DATE, market="US")
+        assert us["total_screened"] == 1
+        assert us["converted_count"] == 1
+        # 미지정(전 시장) = KRX 2 + US 1 = 3
+        assert get_daily_screening(seeded_session, DAY1_DATE)["total_screened"] == 3
+
+    def test_get_daily_trades_market_filter(self, seeded_session: Session) -> None:
+        """KRX/US 체결이 공존해도 market으로 격리된다 (시드는 전부 KRX)."""
+        TradeRepository(seeded_session).record_trade(
+            stock_code="AAPL", stock_name="Apple",
+            trade_type=TradeType.BUY, quantity=1, price=190.0,
+            total_amount=190.0, traded_at=DAY1, cycle_number=1, market="US",
+        )
+        assert len(get_daily_trades(seeded_session, DAY1_DATE, market="KRX")) == 4
+        assert len(get_daily_trades(seeded_session, DAY1_DATE, market="US")) == 1
+        assert len(get_daily_trades(seeded_session, DAY1_DATE)) == 5
 
     def test_get_daily_errors(self, seeded_session: Session) -> None:
         """당일 에러를 집계한다."""

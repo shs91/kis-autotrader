@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import case as sa_case
 from sqlalchemy import func as sa_func
@@ -167,11 +167,12 @@ def _register_bot_commands(
     async def cmd_today(_args: str) -> str:
         """당일 매매 요약을 반환한다 (DB 기반)."""
         try:
-            today = date.today()
+            today = datetime.now(engine._tz).date()
+            market = engine._market.market_code
             with get_session() as session:
-                trades = get_daily_trades(session, today)
+                trades = get_daily_trades(session, today, market=market)
                 errors = get_daily_errors(session, today)
-                screening = get_daily_screening(session, today)
+                screening = get_daily_screening(session, today, market=market)
 
             buys = [t for t in trades if t["trade_type"] == "BUY"]
             sells = [t for t in trades if t["trade_type"] == "SELL"]
@@ -437,20 +438,25 @@ def _register_bot_commands(
     async def cmd_screen(_args: str) -> str:
         """스크리닝 현황을 반환한다."""
         try:
+            market = engine._market.market_code
+            today = datetime.now(engine._tz).date()
             with get_session() as session:
-                today_data = get_daily_screening(session, date.today())
+                today_data = get_daily_screening(session, today, market=market)
+                trades = get_daily_trades(session, today, market=market)
 
             total = today_data["total_screened"]
+            distinct = today_data["distinct_screened"]
             converted = today_data["converted_count"]
             rate = today_data["conversion_rate"]
+            buys_today = sum(1 for t in trades if t["trade_type"] == "BUY")
 
-            # 최근 7일 평균
+            # 최근 7일 평균 — 동일 시장으로 격리(중지/타 시장 혼입 방지)
             with get_session() as session:
                 week_total = 0
                 week_converted = 0
                 for i in range(7):
-                    d = date.today() - timedelta(days=i)
-                    day_data = get_daily_screening(session, d)
+                    d = today - timedelta(days=i)
+                    day_data = get_daily_screening(session, d, market=market)
                     week_total += day_data["total_screened"]
                     week_converted += day_data["converted_count"]
 
@@ -459,10 +465,10 @@ def _register_bot_commands(
             ) if week_total > 0 else 0
 
             lines = [
-                f"<b>[스크리닝]</b> {date.today()}",
-                f"스캔: {total}종목,"
-                f" 발굴→매매: {converted}종목"
-                f" ({rate:.1f}%)",
+                f"<b>[스크리닝]</b> {today} ({market})",
+                f"스크리닝: {total}건 (고유 {distinct}종목)",
+                f"발굴(후보): {converted}건 ({rate:.1f}%)"
+                f" → 실제 체결: {buys_today}건",
                 f"최근 7일 평균 전환율: {week_rate:.1f}%"
                 f" ({week_converted}/{week_total})",
             ]

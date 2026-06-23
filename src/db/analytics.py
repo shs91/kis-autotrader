@@ -45,22 +45,24 @@ def _week_range(year: int, week: int) -> tuple[date, date]:
 # ── 일일 분석 ─────────────────────────────────────────────
 
 
-def get_daily_trades(session: Session, target_date: date) -> list[dict[str, Any]]:
+def get_daily_trades(
+    session: Session, target_date: date, market: str | None = None
+) -> list[dict[str, Any]]:
     """해당일 전체 체결 내역을 반환한다.
 
     Args:
         session: DB 세션
         target_date: 조회 날짜
+        market: 시장 코드("KRX"|"US")로 필터. None이면 전 시장(하위 호환).
 
     Returns:
         체결 내역 딕셔너리 리스트
     """
     start, end = _day_range(target_date)
-    rows = session.execute(
-        select(Trade)
-        .where(Trade.traded_at >= start, Trade.traded_at < end)
-        .order_by(Trade.traded_at)
-    ).scalars().all()
+    stmt = select(Trade).where(Trade.traded_at >= start, Trade.traded_at < end)
+    if market is not None:
+        stmt = stmt.where(Trade.market == market)
+    rows = session.execute(stmt.order_by(Trade.traded_at)).scalars().all()
 
     return [
         {
@@ -114,29 +116,39 @@ def get_daily_signals(session: Session, target_date: date) -> list[dict[str, Any
     ]
 
 
-def get_daily_screening(session: Session, target_date: date) -> dict[str, Any]:
+def get_daily_screening(
+    session: Session, target_date: date, market: str | None = None
+) -> dict[str, Any]:
     """해당일 스크리닝 결과��� 전환율을 반환한다.
 
     Args:
         session: DB 세션
         target_date: 조회 날짜
+        market: 시장 코드("KRX"|"US")로 필터. None이면 전 시장(하위 호환).
 
     Returns:
         스크리닝 요약 + 상세 목록
     """
     start, end = _day_range(target_date)
+    stmt = select(ScreeningResult).where(
+        ScreeningResult.screened_at >= start, ScreeningResult.screened_at < end
+    )
+    if market is not None:
+        stmt = stmt.where(ScreeningResult.market == market)
     rows = session.execute(
-        select(ScreeningResult)
-        .where(ScreeningResult.screened_at >= start, ScreeningResult.screened_at < end)
-        .order_by(ScreeningResult.screened_at, ScreeningResult.screening_rank)
+        stmt.order_by(ScreeningResult.screened_at, ScreeningResult.screening_rank)
     ).scalars().all()
 
     total = len(rows)
     converted = sum(1 for r in rows if r.converted_to_trade)
+    distinct_screened = len({r.stock_code for r in rows})
+    distinct_converted = len({r.stock_code for r in rows if r.converted_to_trade})
 
     return {
         "total_screened": total,
+        "distinct_screened": distinct_screened,
         "converted_count": converted,
+        "distinct_converted": distinct_converted,
         "conversion_rate": (converted / total * 100) if total > 0 else 0.0,
         "items": [
             {
