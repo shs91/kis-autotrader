@@ -244,6 +244,9 @@ class TradingEngine:
         self._last_signal_by_stock: dict[str, tuple[SignalType, float, datetime]] = {}
         # 재매수 쿨다운 — 종목별 마지막 매도 확정 시각(휩쏘 차단)
         self._last_sell_at: dict[str, datetime] = {}
+        # 후보 스냅샷 throttle — 종목당 최소 적재 간격(매 사이클 적재 ~6배 억제)
+        self._last_candidate_snapshot_at: dict[str, datetime] = {}
+        self._candidate_snapshot_min_interval = timedelta(seconds=60)
         # 보유 시작 시각(정체 청산용) — 종목별 최초 보유 관측 시각(KST)
         self._held_since: dict[str, datetime] = {}
 
@@ -1345,6 +1348,11 @@ class TradingEngine:
                 stock_name=current.stock_name,
             )
             return
+
+        # 미보유 후보종목 (현재가+앙상블 결정)을 shadow 검증용 시계열로 적재(매매 무영향).
+        self._enqueue_candidate_snapshot(
+            stock_code, self._market.market_code, current.current_price, signal,
+        )
 
         # 5. 미보유 종목 — 시그널 처리
         if signal.signal_type == SignalType.HOLD:
@@ -3003,6 +3011,37 @@ class TradingEngine:
                 "market": self._market.market_code,
                 "currency": self._market.currency,
                 "price": self._norm_price(price),
+            },
+            priority=0,  # 최저 우선순위 — 매매 태스크에 양보
+        )
+
+    def _enqueue_candidate_snapshot(
+        self, stock_code: str, market: str, price: float, signal: Signal
+    ) -> None:
+        """미보유 후보종목 (현재가+앙상블 결정)을 candidate_snapshots에 적재한다.
+
+        막힌 BUY 후보의 사후 손익(이후 스냅샷 / 진입시점 스냅샷)을 나중에 계산해
+        "게이트를 풀었으면 수익이었나"를 검증하기 위한 순수 관측(shadow). 추가 API
+        호출 없이 매매 사이클이 이미 조회한 현재가를 재사용한다. enqueue는 자체적으로
+        실패를 삼키고 None을 반환하므로(TaskQueueService) 별도 가드가 불필요하다.
+
+        볼륨 억제: 종목당 최소 적재 간격(_candidate_snapshot_min_interval, 60초)을
+        둬 매 사이클(~10초) 적재를 ~6배 줄인다. forward 손익 검증엔 분 단위면 충분.
+        """
+        now = datetime.now(self._tz)
+        last = self._last_candidate_snapshot_at.get(stock_code)
+        if last is not None and now - last < self._candidate_snapshot_min_interval:
+            return  # throttle: 종목당 최소 간격 내 중복 적재 생략
+        self._last_candidate_snapshot_at[stock_code] = now
+        self._task_queue.enqueue(
+            task_type="candidate_snapshot",
+            payload={
+                "stock_code": stock_code,
+                "market": market,
+                "price": self._norm_price(price),
+                "ensemble_action": signal.signal_type.value,
+                "ensemble_confidence": signal.confidence,
+                "ensemble_reason": getattr(signal, "reason", None) or None,
             },
             priority=0,  # 최저 우선순위 — 매매 태스크에 양보
         )

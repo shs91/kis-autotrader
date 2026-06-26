@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from src.db.models import (
     BuyReason,
+    CandidateSnapshot,
     DailyPerformance,
     DailySummary,
     EventLevel,
@@ -1663,6 +1664,57 @@ class PriceSnapshotRepository:
         """cutoff 이전 스냅샷을 삭제하고 삭제 행 수를 반환한다(7일 롤링 정리)."""
         result = self._session.execute(
             delete(PriceSnapshot).where(PriceSnapshot.captured_at < cutoff)
+        )
+        rowcount: int = result.rowcount  # type: ignore[attr-defined]
+        return rowcount if rowcount >= 0 else 0
+
+
+class CandidateSnapshotRepository:
+    """미보유 후보종목 (현재가+앙상블 결정) 스냅샷 CRUD — shadow 검증용."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record(
+        self,
+        stock_code: str,
+        market: str,
+        price: float,
+        ensemble_action: str,
+        ensemble_confidence: float,
+        ensemble_reason: str | None = None,
+        captured_at: datetime | None = None,
+    ) -> CandidateSnapshot:
+        """후보 스냅샷 1건을 적재한다."""
+        snap = CandidateSnapshot(
+            stock_code=stock_code,
+            market=market,
+            price=price,
+            ensemble_action=ensemble_action,
+            ensemble_confidence=ensemble_confidence,
+            ensemble_reason=ensemble_reason,
+            captured_at=captured_at or datetime.now(UTC),
+        )
+        self._session.add(snap)
+        self._session.flush()
+        return snap
+
+    def get_recent(self, stock_code: str, since: datetime) -> list[CandidateSnapshot]:
+        """종목의 since 이후 스냅샷을 captured_at 오름차순으로 반환한다."""
+        stmt = (
+            select(CandidateSnapshot)
+            .where(
+                CandidateSnapshot.stock_code == stock_code,
+                CandidateSnapshot.captured_at >= since,
+            )
+            .order_by(CandidateSnapshot.captured_at)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def delete_older_than(self, cutoff: datetime) -> int:
+        """cutoff 이전 스냅샷을 삭제하고 삭제 행 수를 반환한다(7일 롤링 정리)."""
+        result = self._session.execute(
+            delete(CandidateSnapshot).where(CandidateSnapshot.captured_at < cutoff)
         )
         rowcount: int = result.rowcount  # type: ignore[attr-defined]
         return rowcount if rowcount >= 0 else 0

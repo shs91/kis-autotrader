@@ -234,19 +234,29 @@ class TradingScheduler:
             logger.exception("일일 요약 집계 실패 (매매에 영향 없음)")
 
     def cleanup_price_snapshots_job(self) -> None:
-        """7일 초과 가격 스냅샷을 삭제한다(롤링 정리). 시장 무관(공유 테이블)."""
+        """7일 초과 가격/후보 스냅샷을 삭제한다(롤링 정리). 시장 무관(공유 테이블)."""
         try:
             from datetime import UTC, timedelta
 
-            from src.db.repository import PriceSnapshotRepository
+            from src.db.repository import (
+                CandidateSnapshotRepository,
+                PriceSnapshotRepository,
+            )
             from src.db.session import get_session
 
             cutoff = datetime.now(UTC) - timedelta(days=7)
             with get_session() as session:
                 deleted = PriceSnapshotRepository(session).delete_older_than(cutoff)
-            logger.info("가격 스냅샷 정리: %d행 삭제 (7일 초과)", deleted)
+                deleted_cand = CandidateSnapshotRepository(session).delete_older_than(
+                    cutoff
+                )
+            logger.info(
+                "스냅샷 정리: 가격 %d행 / 후보 %d행 삭제 (7일 초과)",
+                deleted,
+                deleted_cand,
+            )
         except Exception:
-            logger.exception("가격 스냅샷 정리 실패 (매매에 영향 없음)")
+            logger.exception("스냅샷 정리 실패 (매매에 영향 없음)")
 
     @staticmethod
     def _heartbeat() -> None:

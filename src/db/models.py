@@ -436,6 +436,44 @@ class PriceSnapshot(Base):
         )
 
 
+class CandidateSnapshot(Base):
+    """미보유 후보종목 (현재가 + 앙상블 결정) 시계열 스냅샷 — shadow 검증용.
+
+    모니터링 중이나 매수 게이트에 막혀 진입하지 못한 후보의 현재가와 앙상블 결정을
+    시계열로 적재한다. 사후에 (이후 스냅샷 / 진입시점 스냅샷)으로 손익을 계산해
+    "게이트를 풀었으면 수익이었나"를 검증하기 위한 순수 관측 테이블이다.
+    매매 로직과 무관하며 비동기(워커 큐)로만 적재된다.
+    """
+
+    __tablename__ = "candidate_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stock_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    market: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="KRX"
+    )
+    price: Mapped[float] = mapped_column(Numeric(18, 4, asdecimal=False), nullable=False)
+    ensemble_action: Mapped[str] = mapped_column(String(8), nullable=False)
+    ensemble_confidence: Mapped[float] = mapped_column(
+        Numeric(6, 4, asdecimal=False), nullable=False
+    )
+    ensemble_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_candidate_snapshots_code_time", "stock_code", "captured_at"),
+        Index("ix_candidate_snapshots_captured_at", "captured_at"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CandidateSnapshot(id={self.id}, {self.stock_code} {self.price} "
+            f"{self.ensemble_action} @{self.captured_at})>"
+        )
+
+
 class SystemMetric(Base):
     """시스템 상태 메트릭 테이블."""
 

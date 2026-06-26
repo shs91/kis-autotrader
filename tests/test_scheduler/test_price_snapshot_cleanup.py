@@ -19,7 +19,9 @@ def test_cleanup_job_deletes_old() -> None:
     with (
         patch("src.db.session.get_session", return_value=fake_session),
         patch("src.db.repository.PriceSnapshotRepository", return_value=fake_repo),
+        patch("src.db.repository.CandidateSnapshotRepository", return_value=fake_repo),
     ):
         jobs.cleanup_price_snapshots_job()
 
-    fake_repo.delete_older_than.assert_called_once()
+    # 가격·후보 두 repo의 delete_older_than이 호출된다(동일 fake_repo이므로 2회).
+    assert fake_repo.delete_older_than.call_count == 2

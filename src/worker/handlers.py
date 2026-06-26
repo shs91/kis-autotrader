@@ -327,3 +327,30 @@ class PriceSnapshotHandler(TaskHandler):
                 price=payload["price"],
             )
             logger.info("가격 스냅샷 기록: %s %s", payload["stock_code"], payload["price"])
+
+
+class CandidateSnapshotHandler(TaskHandler):
+    """미보유 후보종목 (현재가+앙상블 결정) 스냅샷 INSERT 핸들러 — shadow 검증용."""
+
+    async def execute(self, payload: dict[str, Any]) -> None:
+        """payload: stock_code, market, price, ensemble_action,
+        ensemble_confidence, ensemble_reason.
+        """
+        from src.db.repository import CandidateSnapshotRepository
+        from src.db.session import get_session
+
+        with get_session() as session:
+            CandidateSnapshotRepository(session).record(
+                stock_code=payload["stock_code"],
+                market=payload.get("market", "KRX"),
+                price=payload["price"],
+                ensemble_action=payload["ensemble_action"],
+                ensemble_confidence=payload["ensemble_confidence"],
+                ensemble_reason=payload.get("ensemble_reason"),
+            )
+            logger.info(
+                "후보 스냅샷 기록: %s %s %s",
+                payload["stock_code"],
+                payload["price"],
+                payload["ensemble_action"],
+            )
