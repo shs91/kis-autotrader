@@ -234,7 +234,12 @@ class TradingScheduler:
             logger.exception("일일 요약 집계 실패 (매매에 영향 없음)")
 
     def cleanup_price_snapshots_job(self) -> None:
-        """7일 초과 가격/후보 스냅샷을 삭제한다(롤링 정리). 시장 무관(공유 테이블)."""
+        """오래된 가격/후보 스냅샷을 삭제한다(롤링 정리). 시장 무관(공유 테이블).
+
+        가격 스냅샷(대시보드용)은 7일, 후보 스냅샷(candidate_snapshots, shadow
+        검증용)은 30일 보존 — 상승·약세 레짐을 한 윈도우에서 비교하려면 후보는
+        7일 롤링으로는 짧다(레짐 비교 전에 삭제됨). throttle 덕에 30일도 소량.
+        """
         try:
             from datetime import UTC, timedelta
 
@@ -244,14 +249,18 @@ class TradingScheduler:
             )
             from src.db.session import get_session
 
-            cutoff = datetime.now(UTC) - timedelta(days=7)
+            now = datetime.now(UTC)
+            price_cutoff = now - timedelta(days=7)
+            cand_cutoff = now - timedelta(days=30)
             with get_session() as session:
-                deleted = PriceSnapshotRepository(session).delete_older_than(cutoff)
+                deleted = PriceSnapshotRepository(session).delete_older_than(
+                    price_cutoff
+                )
                 deleted_cand = CandidateSnapshotRepository(session).delete_older_than(
-                    cutoff
+                    cand_cutoff
                 )
             logger.info(
-                "스냅샷 정리: 가격 %d행 / 후보 %d행 삭제 (7일 초과)",
+                "스냅샷 정리: 가격 %d행(7일↑) / 후보 %d행(30일↑) 삭제",
                 deleted,
                 deleted_cand,
             )
