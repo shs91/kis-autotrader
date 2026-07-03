@@ -539,11 +539,15 @@ class MeanReversionStrategy(FixedStrategy):
 
 
 def test_trend_filter_suppresses_buy_when_no_trend_following() -> None:
-    """추세추종 전략 BUY 없이 평균회귀만 BUY → trend_filter_enabled=True 시 HOLD."""
+    """추세추종 전략 BUY 없이 '단독' 평균회귀 BUY → trend_filter_enabled=True 시 HOLD.
+
+    (2026-07-03) 필터 적용 범위가 단독(n_win<2)으로 좁혀짐 — 합의(n_win>=2)
+    케이스는 test_trend_filter_allows_consensus_buy_without_trend_following 참조.
+    """
     ensemble = EnsembleStrategy(
         [
-            MeanReversionStrategy(SignalType.BUY, 0.8),  # RSI 역할
-            MeanReversionStrategy(SignalType.BUY, 0.7),  # Bollinger 역할
+            MeanReversionStrategy(SignalType.BUY, 0.8),  # RSI 역할 (단독 BUY)
+            MeanReversionStrategy(SignalType.HOLD, 0.0),  # Bollinger 역할
             TrendFollowingStrategy(SignalType.HOLD, 0.0),  # MA 역할
             TrendFollowingStrategy(SignalType.HOLD, 0.0),  # MACD 역할
         ],
@@ -602,3 +606,46 @@ def test_trend_filter_does_not_affect_sell() -> None:
     )
     result = ensemble.analyze(EMPTY_DF)
     assert result.signal_type == SignalType.SELL
+
+
+def test_trend_filter_allows_consensus_buy_without_trend_following() -> None:
+    """합의(n_win>=2) BUY는 추세전략 미동반이어도 필터를 통과한다.
+
+    2026-07-03 감사: 필터가 합의 BUY까지 차단해 6/22~ RSI BUY 표 16,912건이
+    100% 사멸, 9거래일 매수 3건으로 유량 붕괴. 필터의 표적(단독 dip-buy churn)은
+    n_win<2에만 적용하고 합의는 통과시킨다.
+    """
+    ensemble = EnsembleStrategy(
+        [
+            MeanReversionStrategy(SignalType.BUY, 0.8),   # RSI 역할
+            MeanReversionStrategy(SignalType.BUY, 0.7),   # Bollinger 역할
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),  # MA 역할
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),  # MACD 역할
+        ],
+        method="weighted",
+        trend_filter_enabled=True,
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.BUY
+
+
+def test_trend_filter_still_suppresses_solo_buy_over_solo_threshold() -> None:
+    """단독(n_win=1) 평균회귀 BUY는 solo 임계를 넘어도 필터가 먼저 차단한다.
+
+    6월 중순 churn의 실체(단독 RSI dip-buy 연쇄 손절)에 대한 방어선은 유지 —
+    필터 완화가 합의 BUY에만 한정됨을 못 박는다.
+    """
+    ensemble = EnsembleStrategy(
+        [
+            MeanReversionStrategy(SignalType.BUY, 0.8),    # RSI 단독 BUY
+            MeanReversionStrategy(SignalType.HOLD, 0.0),
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),
+            TrendFollowingStrategy(SignalType.HOLD, 0.0),
+        ],
+        method="weighted",
+        trend_filter_enabled=True,
+        solo_buy_min_confidence=0.6,  # 필터 없으면 solo_conf 0.8로 BUY 허용될 케이스
+    )
+    result = ensemble.analyze(EMPTY_DF)
+    assert result.signal_type == SignalType.HOLD
+    assert "추세역행" in result.reason

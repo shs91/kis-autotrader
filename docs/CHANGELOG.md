@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-07-03] 6월 전수 감사 후속 6종 — 매수 유량 복원 + 리스크 공백 보강 (v0.24.0)
+- 카테고리: enhancement
+- 변경 파일:
+  - src/worker/screener.py: **(A1)** `_load_existing_screened_codes` 배제를 '당일 converted 전체'→'fresh window 내 converted'로 축소. 당일 전체 배제가 재발굴을 막아 엔진 회전의 latest_at이 발굴 시각에 동결→모든 후보가 30분 후 영구 제거되던 유니버스 기아(체류 median 29.7분, 상시 ~3종목/캡 60) 해소. 계속 순위권 종목은 재발굴로 잔류, 순위 탈락만 자연 회전 제거(v0.23.0 원설계 의도 복원).
+  - src/strategy/ensemble.py: **(A2)** 추세역행 필터를 단독(n_win<2) BUY에만 적용 — 합의(n_win≥2) BUY까지 차단해 6/22~ RSI BUY 표 16,912건 100% 사멸·9거래일 매수 3건이던 유량 붕괴 해소. 단독 dip-buy churn 방어는 유지.
+  - src/strategy/risk.py + config.py: **(B3)** `MAX_DAILY_LOSS_ABS`(0=비활성) — MDD 가드가 이익 피크(>0) 전제라 straight-loss day 영구 비무장이던 공백(6/16 -20,890원 무발동)을 절대 하한으로 보강. **(B4)** `MARKET_CLOSE_LOSS_CUT_RATE`(0=비활성) — 마감청산 이익 한정 비대칭으로 오버나잇 5건 전패(-25,460원, 갭 손절한도 초과 3건)하던 공백을 깊은 손실 컷으로 보강(sell_reason=MARKET_CLOSE 공유·부호 구분).
+  - src/engine.py: **(B5)** `LOSS_REBUY_BLOCK_SAME_DAY`(opt-in) — 손실 청산 종목 당일 재매수 차단(재진입 19건 -18,553원 vs 첫진입 +34,351원). 기록은 _record_trade_to_db 단일 관문(고아 체결 포함), M8 재시작 복구에 복원 포함.
+  - docker-compose.yml: **(C7)** config_overrides.json ro 마운트 — 컨테이너 배포 시 튜닝 24키 전량 기본값 회귀하던 지뢰 제거(GCP 배포 선결).
+  - config_overrides.json: MAX_DAILY_LOSS_ABS=30000·MARKET_CLOSE_LOSS_CUT_RATE=0.015·LOSS_REBUY_BLOCK_SAME_DAY=true 활성화.
+- 배경: 2026-07-03 6월 실전 데이터 전수 감사(6축 37에이전트) — 승률 33%·본전(+15,798원), 매수 붕괴 2대 원인=트렌드필터 합의차단+유니버스 회전 기아. SOLO 0.6·MIN_CONFIDENCE·손절 0.03·트레일링 0.03은 감사 결론대로 동결.
+- 영향: KRX/US 공통(가드 3종은 config로 KRX 활성). 매수 유량 3~5배 회복 예상(0.33건/일→1건+/일), candidate_snapshots로 1~2주 섀도 검증. `src/__version__.py` 0.16.1 드리프트를 pyproject와 0.24.0으로 동기화.
+- 검증 결과: pytest 전체 **1311 passed**(신규 15; 실패 1건은 사전존재 test_us_jobs_use_et_hours, 미접촉 영역) | mypy strict ✅(102 files) | ruff ✅(변경분).
+- 비고: 운영자 액션 — main 머지 후 pull → KRX 재시작(US는 중지 상태 유지). BRIDGE_SPEC 파라미터 표 재동기·신규 3키 등재는 후속.
+
+---
+
 ## [2026-06-20] 스크리닝 모니터링 유니버스 회전 — 동결 해소 (v0.23.0)
 - 카테고리: enhancement
 - 변경 파일:
@@ -62,13 +78,3 @@
 - 비고: 운영자 액션 — main 머지 후 pull → **`com.kis.autotrader`(KRX)·`com.kis.autotrader.us`(US) 둘 다 재시작**(B2·중복주문이 KRX에도 적용되므로). DB/마이그 불변. 남은 감사 medium 4·low 6(결산진단 시장필터·마감컷오프 US전용·재시작 카운터복원 등)은 후속.
 
 ---
-
-## [2026-06-18] 매수가능 통합증거금 필드 우선 파싱 — US 동적매수 buyable=0 라이브 블로커 (v0.19.4)
-- 카테고리: bug_fix
-- 변경 파일:
-  - src/api/overseas_account.py: get_buyable_amount이 psamount 응답에서 통합증거금 반영 필드(ovrs_max_ord_psbl_qty 해외최대주문가능수량·frcr_ord_psbl_amt1 외화주문가능금액)를 **우선** 파싱. 기존엔 ord_psbl_qty/ord_psbl_frcr_amt(외화 **현금 한정**)만 읽어 통합증거금(원화담보 환산) 매수여력을 0으로 보고 → 전 종목 buyable=0. 각 후보 중 첫 양수값 채택(_first_pos_int/_first_pos_dec, 0은 건너뜀 — _get 부재 시 "0" 반환이라 단순 or 부적합).
-  - tests: 통합증거금 필드 우선(ord_psbl_qty=0이어도 ovrs_max_ord_psbl_qty=124 채택)·현금 폴백 회귀.
-- 배경: US 라이브 매수가 마감가드(#67)·발굴(#66) 해소 후에도 전부 미체결. 진단 결과 psamount(TTTS3007R)의 ord_psbl_qty는 외화 현금만 반영 → 통합증거금 활성 계좌도 0. 실측 통합증거금 매수여력 $620.11(=itgr_ord_psbl_amt=frcr_ord_psbl_amt1, ovrs_max_ord_psbl_qty=124=620/5). KIS 앱 매수가 정상인 것과 모순돼 필드 추적 → 통합증거금은 ovrs_max_ord_psbl_qty/frcr_ord_psbl_amt1에 반영됨 확인(docs Excel "해외증거금 통화별조회" TTTC2101R itgr_ord_psbl_amt와 일치).
-- 영향: 통합증거금 활성 US 계좌가 실제 매수여력(현금+원화담보 환산)으로 주문 수량 산정 → 동적 매수 실행 가능. 실주문은 여전히 min(risk_qty, buyable)·us_cash_budget 사이징 캡 적용(과대주문 없음). KRX 무관(해외 전용 psamount). 현금 필드 폴백 유지로 통합증거금 미활성 계좌도 동작.
-- 검증 결과: pytest 전체 통과(통합증거금 우선 신규 회귀) | mypy strict ✅ | ruff ✅.
-- 비고: 운영자 액션 — main 머지 후 pull → US 재시작 시 매수여력 정상 인식. DB/마이그 불변. #68(present-balance)에 누락됐던 분리 수정(force-push 차단으로 amend 미반영) — 이 PR로 본 블로커 해소.

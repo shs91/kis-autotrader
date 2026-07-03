@@ -240,6 +240,13 @@ class TradingConfig:
     buy_cooldown_after_sell_min: int = field(
         default_factory=lambda: _env_int("BUY_COOLDOWN_AFTER_SELL_MIN", 120)
     )
+    # 손실 청산 당일 재매수 차단(opt-in) — 손실 확정 종목의 같은 거래일 저가 재진입
+    # churn(2026-07-03 감사: 재진입 19건 -18,553원 vs 첫진입 +34,351원) 차단.
+    # 시간 쿨다운(위 120분)과 별개로 당일 종료까지 차단하며, 이익/본전 청산은 무관.
+    loss_rebuy_block_same_day: bool = field(
+        default_factory=lambda: _env("LOSS_REBUY_BLOCK_SAME_DAY", "false").lower()
+        == "true"
+    )
     # 공시 기반 매수 리스크 게이트 — 최근 N일 내 치명 공시(상장폐지/정리매매 등) 종목 매수 차단.
     # KIS 종목마스터(market_actions) sync 사각지대를 DART 공시로 보완(모델 미사용).
     news_risk_gate_enabled: bool = field(
@@ -337,6 +344,13 @@ class TradingConfig:
     max_consecutive_losses: int = field(
         default_factory=lambda: _env_int("MAX_CONSECUTIVE_LOSSES", 5)
     )
+    # 일일 절대 손실 하한(프로세스 통화 단위 절대금액, 0=비활성). MDD 가드는 당일
+    # 이익 피크(>0)가 전제라 첫 매도부터 손실인 날은 발동 불가한 구조 공백을 메운다
+    # (2026-07-03 감사: 최악일 6/16 -20,890원에 가드 무발동). KRX=원, US=달러
+    # 스케일이 그대로 적용되는 공유 설정이므로 US 전용 한도는 필요 시 별도 키로.
+    max_daily_loss_abs: float = field(
+        default_factory=lambda: _env_float("MAX_DAILY_LOSS_ABS", 0.0)
+    )
     market_close_cutoff_hour: int = field(
         default_factory=lambda: _env_int("MARKET_CLOSE_CUTOFF_HOUR", 14)
     )
@@ -427,6 +441,13 @@ class StrategyConfig:
     # 마감 청산 게이트: 이 수익률 이상이면 마감 임박 시 강제 실현
     min_profitable_close: float = field(
         default_factory=lambda: _env_float("MIN_PROFITABLE_CLOSE", 0.015)
+    )
+    # 마감 손실 컷: 마감 임박 시 이 손실률 이하(깊은 손실) 포지션을 강제 청산(0=비활성).
+    # 이익 한정 마감청산의 비대칭으로 손실 포지션이 오버나잇 갭다운 시 손절 한도(-3%)를
+    # 초과 체결하던 공백 보완(2026-07-03 감사: 오버나잇 5건 전패, 갭 초과 3건).
+    # sell_reason은 MARKET_CLOSE 공유(손익 부호로 구분 — 별도 enum은 DB 마이그 필요).
+    market_close_loss_cut_rate: float = field(
+        default_factory=lambda: _env_float("MARKET_CLOSE_LOSS_CUT_RATE", 0.0)
     )
     # 미체결 주문 타임아웃(사이클): 이 사이클 수 이상 미체결이면 취소(중복 억제·잔류 정리)
     order_pending_timeout_cycles: int = field(

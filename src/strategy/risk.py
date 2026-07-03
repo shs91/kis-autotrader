@@ -34,6 +34,8 @@ class RiskManager:
         breakeven_activation_ratio: float | None = None,
         stagnation_hours: float | None = None,
         min_profitable_close: float | None = None,
+        market_close_loss_cut_rate: float | None = None,
+        max_daily_loss_abs: float | None = None,
         min_confidence: float | None = None,
         tz: str | None = None,
     ) -> None:
@@ -98,6 +100,11 @@ class RiskManager:
             if min_profitable_close is not None
             else settings.strategy.min_profitable_close
         )
+        self._market_close_loss_cut_rate = (
+            market_close_loss_cut_rate
+            if market_close_loss_cut_rate is not None
+            else settings.strategy.market_close_loss_cut_rate
+        )
         self._min_confidence = (
             min_confidence
             if min_confidence is not None
@@ -107,6 +114,11 @@ class RiskManager:
         # 포트폴리오 리스크 추적
         self._max_daily_drawdown = settings.trading.max_daily_drawdown
         self._max_consecutive_losses = settings.trading.max_consecutive_losses
+        self._max_daily_loss_abs = (
+            max_daily_loss_abs
+            if max_daily_loss_abs is not None
+            else settings.trading.max_daily_loss_abs
+        )
         # US는 센트 단위 손익(float)을 누적한다(int 절단 시 1달러 미만 손익이
         # 소실돼 연패/MDD 추적이 약화). KRX 프로세스는 정수 손익만 흐르고, 프로덕션
         # 에선 첫 기록 전 reset_daily_risk()가 int 0으로 시드(+ int 누적)하므로
@@ -156,6 +168,22 @@ class RiskManager:
                     self._daily_peak_pnl,
                     self._daily_cumulative_pnl,
                 )
+
+        # 일일 절대 손실 하한(0=비활성) — MDD 가드는 이익 피크(>0)가 전제라 첫
+        # 매도부터 손실인 날은 영구 비무장이던 공백을 메운다(straight-loss day의
+        # 손절→쿨다운→재매수 연쇄 차단). 매도(보호 청산)는 기존 halt 의미대로 계속.
+        if (
+            self._max_daily_loss_abs > 0
+            and self._daily_cumulative_pnl <= -self._max_daily_loss_abs
+        ):
+            self._portfolio_halted = True
+            if self._halt_reason is None:
+                self._halt_reason = "MAX_DAILY_LOSS_ABS"
+            logger.warning(
+                "일일 절대 손실 한도 도달: 누적 %.0f <= -%.0f",
+                self._daily_cumulative_pnl,
+                self._max_daily_loss_abs,
+            )
 
         # 연패 체크
         if self._consecutive_losses >= self._max_consecutive_losses:
@@ -487,10 +515,14 @@ class RiskManager:
         avg_price: float,
         now: datetime | None = None,
     ) -> bool:
-        """마감 임박 강제 청산 게이트 — 이익 포지션 한정.
+        """마감 임박 강제 청산 게이트 — 이익 실현 + (옵션) 깊은 손실 컷.
 
-        트레일링과 독립된 별도 규칙. 시간 의존은 이 게이트의 발동 조건뿐이며,
-        손실 포지션(수익률 < min_profitable_close)은 대상에서 제외한다.
+        트레일링과 독립된 별도 규칙. 시간 의존은 이 게이트의 발동 조건뿐이다.
+        기본은 이익 포지션(수익률 >= min_profitable_close)만 청산하며,
+        market_close_loss_cut_rate > 0이면 깊은 손실(수익률 <= -rate)도 청산한다
+        — 손실 포지션 오버나잇 방치가 익일 갭다운으로 손절 한도(-3%)를 초과
+        체결하던 비대칭 공백 보완(2026-07-03 감사: 오버나잇 5건 전패 -25,460원).
+        얕은 손실(-rate 초과 ~ min_profitable_close 미만)은 기존대로 보유 유지.
 
         Args:
             current_price: 현재가
@@ -498,7 +530,7 @@ class RiskManager:
             now: 판정 기준 시각 (None이면 현재 시각)
 
         Returns:
-            True이면 마감 임박 + 최소 수익률 충족으로 청산
+            True이면 마감 임박 + (최소 수익률 충족 또는 깊은 손실)로 청산
         """
         if avg_price <= 0:
             return False
@@ -506,13 +538,22 @@ class RiskManager:
             return False
 
         profit = (current_price - avg_price) / avg_price
-        should = profit >= self._min_profitable_close
-        if should:
+        if profit >= self._min_profitable_close:
             logger.info(
                 "마감 청산 게이트: 수익률 %.2f%% >= %.2f%% (마감 임박)",
                 profit * 100, self._min_profitable_close * 100,
             )
-        return should
+            return True
+        if (
+            self._market_close_loss_cut_rate > 0
+            and profit <= -self._market_close_loss_cut_rate
+        ):
+            logger.info(
+                "마감 손실 컷: 수익률 %.2f%% <= -%.2f%% (마감 임박, 갭 리스크 컷)",
+                profit * 100, self._market_close_loss_cut_rate * 100,
+            )
+            return True
+        return False
 
     # ── 매수 게이트 진단 (proposal 2026-05-18 + 사유 코드 정밀화) ──
     #
@@ -553,6 +594,7 @@ class RiskManager:
 
             - ``"MAX_CONSECUTIVE_LOSSES"`` : 연패 한도 도달로 halt
             - ``"MAX_DAILY_DRAWDOWN"``     : MDD 한도 도달로 halt
+            - ``"MAX_DAILY_LOSS_ABS"``     : 일일 절대 손실 하한 도달로 halt
             - ``"MARKET_CLOSE_GUARD"``     : 장 마감 임박 (신규 매수 차단)
             - ``"INSUFFICIENT_CASH"``      : 잔고 부족
             - ``"LOW_CONFIDENCE"``         : 시그널 신뢰도 미달

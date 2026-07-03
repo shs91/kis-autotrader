@@ -332,6 +332,9 @@ async def test_process_stock_market_close_guard_records_buy_reject() -> None:
 async def test_process_stock_max_consecutive_losses_records_buy_reject() -> None:
     """연패 한도 도달 시 BUY_REJECT(MAX_CONSECUTIVE_LOSSES) 기록 (RISK_GATE 분할)."""
     engine = _make_engine()
+    # 절대 손실 하한을 끔 — config_overrides 활성값(30k)이 연패(5×-10k=-50k)보다
+    # 먼저 트립해 사유가 MAX_DAILY_LOSS_ABS로 바뀌는 환경 의존 제거.
+    engine._risk._max_daily_loss_abs = 0
     for _ in range(engine._risk._max_consecutive_losses):
         engine._risk.record_trade_result(-10_000)
     assert engine._risk.is_portfolio_halted is True

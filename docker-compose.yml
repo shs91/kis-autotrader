@@ -65,6 +65,10 @@ services:
       - ./credentials.json:/app/credentials.json:ro
       - ./token.json:/app/token.json
       - ./holidays.json:/app/holidays.json:ro
+      # 런타임 튜닝 오버라이드 — 미마운트 시 컨테이너가 코드 기본값으로 조용히
+      # 회귀해 라이브 튜닝(SOLO/TRAILING/MIN_SCORE 등 24키)이 전량 증발한다
+      # (2026-07-03 감사). 파일은 repo tracked라 clone 직후에도 존재.
+      - ./config_overrides.json:/app/config_overrides.json:ro
     ports:
       - "${HEALTH_PORT:-18923}:18923"
     logging:

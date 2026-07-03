@@ -1056,6 +1056,36 @@ class TestRestoreRestartCooldownCounters:
             "B는 매도 없음 — _last_sell_at에 없어야 한다"
         )
 
+    def test_restores_loss_sell_dates(self) -> None:
+        """손실 매도(A)는 _loss_sell_dates에 오늘 날짜로 복원, 이익 매도(B)는 제외.
+
+        LOSS_REBUY_BLOCK_SAME_DAY 게이트가 재시작으로 무력화되지 않아야 한다
+        (M8과 동일 메커니즘 — 코칩 6/19 재시작 후 쿨다운 우회 실측 대응).
+        """
+        from src.db.models import TradeType
+
+        trades = [
+            _make_trade(
+                TradeType.SELL, "A",
+                datetime(2026, 6, 17, 10, 30, 0, tzinfo=UTC),
+                profit_loss_amount=-5000,
+            ),
+            _make_trade(
+                TradeType.SELL, "B",
+                datetime(2026, 6, 17, 11, 0, 0, tzinfo=UTC),
+                profit_loss_amount=+8000,
+            ),
+        ]
+        engine = self._make_engine_with_trades(trades)
+
+        today = datetime.now(engine._tz).date()
+        assert engine._loss_sell_dates.get("A") == today, (
+            "손실 매도 종목은 _loss_sell_dates에 당일 날짜로 복원되어야 한다"
+        )
+        assert "B" not in engine._loss_sell_dates, (
+            "이익 매도 종목은 손실 재매수 차단 대상이 아니다"
+        )
+
     def test_restores_buy_counts_even_with_no_sells(self) -> None:
         """BUY만 있고 SELL이 없는 경우에도 _today_buys_per_stock이 정확히 복원된다.
 

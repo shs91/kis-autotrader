@@ -425,7 +425,9 @@ class TestCheckBuyGates:
 
     def test_consecutive_losses_halt_returns_specific_code(self) -> None:
         """연패 누적으로 halt된 경우 'MAX_CONSECUTIVE_LOSSES'를 반환한다."""
-        rm = RiskManager()
+        # 절대 손실 하한을 명시적으로 끔 — config_overrides 활성값(30k)이 연패보다
+        # 먼저 트립해 사유가 바뀌는 환경 의존 제거(연패 경로 단독 검증 목적).
+        rm = RiskManager(max_daily_loss_abs=0)
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
         assert rm.is_portfolio_halted is True
@@ -461,7 +463,7 @@ class TestCheckBuyGates:
 
     def test_halt_takes_priority_over_other_gates(self) -> None:
         """포트폴리오 halt가 최우선 게이트로 반환된다."""
-        rm = RiskManager()
+        rm = RiskManager(max_daily_loss_abs=0)  # 연패 사유 고정(환경 의존 제거)
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
         # 낮은 신뢰도 + 0 잔고이지만 halt가 먼저 트립
@@ -552,7 +554,11 @@ class TestShouldCloseForMarketEnd:
     """마감 임박 강제 청산 게이트 (이익 포지션 한정)."""
 
     def setup_method(self) -> None:
-        self.rm = RiskManager(min_profitable_close=0.015)
+        # 손실 컷을 명시적으로 끔 — 이 클래스는 '이익 한정' 기본 경로를 검증한다
+        # (손실 컷 활성 동작은 TestMarketCloseLossCut에서 별도 검증).
+        self.rm = RiskManager(
+            min_profitable_close=0.015, market_close_loss_cut_rate=0,
+        )
 
     def test_not_near_close_returns_false(self) -> None:
         self.rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
@@ -603,8 +609,99 @@ class TestDailyDrawdownNetLossGuard:
 
     def test_consecutive_loss_halt_unaffected(self) -> None:
         """연패 한도 halt 경로는 순손실 가드의 영향을 받지 않는다."""
-        rm = RiskManager()
+        rm = RiskManager(max_daily_loss_abs=0)  # 연패 사유 고정(환경 의존 제거)
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
         assert rm.is_portfolio_halted is True
         assert rm._halt_reason == "MAX_CONSECUTIVE_LOSSES"
+
+
+class TestMaxDailyLossAbs:
+    """일일 절대 손실 하한 — 이익 피크 없는 straight-loss day 가드.
+
+    MDD 가드는 ``daily_peak_pnl > 0``이 전제라 첫 매도부터 손실인 날은 영구
+    비무장이었다(2026-07-03 감사: 최악일 6/16 -20,890원 9패에 halt 발동 0건).
+    피크와 무관한 절대 하한(MAX_DAILY_LOSS_ABS, 0=비활성)으로 공백을 메운다.
+    """
+
+    def test_halts_on_absolute_loss_without_profit_peak(self) -> None:
+        """이익 피크가 없어도 누적 손실이 절대 하한 도달 시 halt된다."""
+        rm = RiskManager(max_daily_loss_abs=30_000)
+        rm.record_trade_result(-15_000)
+        assert rm.is_portfolio_halted is False  # -30k 미도달
+        rm.record_trade_result(-16_000)  # 누적 -31k (피크는 여전히 0)
+        assert rm.is_portfolio_halted is True
+        signal = Signal(
+            signal_type=SignalType.BUY, confidence=0.8, target_price=50_000.0,
+        )
+        assert (
+            rm.check_buy_gates(signal, balance=1_000_000.0) == "MAX_DAILY_LOSS_ABS"
+        )
+
+    def test_disabled_when_zero(self) -> None:
+        """0(코드 기본값)이면 절대 하한 가드는 비활성이다(기존 동작 보존).
+
+        settings 기본값 직접 단언은 하지 않는다 — config_overrides가 활성값을
+        주입하는 환경에선 싱글톤이 이미 30k라 환경 의존이 된다(명시 주입 관례).
+        """
+        rm = RiskManager(max_daily_loss_abs=0)
+        rm.record_trade_result(-1_000_000)  # 연패 1, 피크 0 → 기존 가드 미발동
+        assert rm.is_portfolio_halted is False
+
+    def test_snapshot_restore_preserves_halt(self) -> None:
+        """절대 하한 halt 상태가 snapshot/restore로 복원된다(재시작 무력화 방지)."""
+        rm = RiskManager(max_daily_loss_abs=30_000)
+        rm.record_trade_result(-31_000)
+        assert rm.is_portfolio_halted is True
+
+        rm2 = RiskManager(max_daily_loss_abs=30_000)
+        rm2.restore(rm.snapshot())
+        assert rm2.is_portfolio_halted is True
+        signal = Signal(
+            signal_type=SignalType.BUY, confidence=0.8, target_price=50_000.0,
+        )
+        assert (
+            rm2.check_buy_gates(signal, balance=1_000_000.0) == "MAX_DAILY_LOSS_ABS"
+        )
+
+
+class TestMarketCloseLossCut:
+    """마감 손실 컷 — 이익 한정 마감청산의 비대칭 보완.
+
+    마감청산이 이익 포지션 한정이라 손실 포지션이 오버나잇으로 넘어가 전패
+    (5건 -25,460원)하고, 그중 3건이 익일 갭다운으로 -3% 스톱 한도를 초과
+    체결하던 공백(2026-07-03 감사). 마감 임박 시 깊은 손실(-rate 이하)만
+    강제 청산한다(0=비활성, sell_reason은 MARKET_CLOSE 공유·부호로 구분).
+    """
+
+    def _rm(self, rate: float) -> RiskManager:
+        rm = RiskManager(
+            min_profitable_close=0.015, market_close_loss_cut_rate=rate,
+        )
+        rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+        return rm
+
+    def test_deep_loss_closed_when_enabled(self) -> None:
+        """-2.0% <= -1.5% → 마감 전 청산(갭 리스크 컷)."""
+        assert self._rm(0.015).should_close_for_market_end(9_800, 10_000) is True
+
+    def test_shallow_loss_not_closed(self) -> None:
+        """-1.0% > -1.5% → 얕은 손실은 기존처럼 보유 유지."""
+        assert self._rm(0.015).should_close_for_market_end(9_900, 10_000) is False
+
+    def test_profit_path_unchanged(self) -> None:
+        """이익 경로(+1.5% 이상 청산)는 손실 컷 활성화와 무관하게 동일."""
+        rm = self._rm(0.015)
+        assert rm.should_close_for_market_end(10_150, 10_000) is True
+        assert rm.should_close_for_market_end(10_100, 10_000) is False
+
+    def test_disabled_when_zero(self) -> None:
+        """0(코드 기본값)이면 깊은 손실도 기존 동작대로 청산하지 않는다."""
+        rm = self._rm(0)
+        assert rm.should_close_for_market_end(9_500, 10_000) is False
+
+    def test_not_near_close_returns_false(self) -> None:
+        """마감 임박이 아니면 손실 컷도 발동하지 않는다."""
+        rm = self._rm(0.015)
+        rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
+        assert rm.should_close_for_market_end(9_800, 10_000) is False

@@ -1,9 +1,12 @@
 {
   "_meta": {
-    "updated_at": "2026-06-22",
-    "updated_by": "manual:min-score-0.07 (전환공급 구조적 빈약—open후 종일 0~1/h, 모니터링 깔때기 입구 완화; BUY게이트 C1/SOLO/0.2 유지)"
+    "updated_at": "2026-07-03",
+    "updated_by": "manual:202606-audit (일일절대손실 30k·마감손실컷 1.5%·손실재매수 당일차단 활성화; 트렌드필터 합의우회·유니버스 재발굴은 코드 변경으로 적용)"
   },
   "API_DAILY_CALL_LIMIT": 500000,
+  "MAX_DAILY_LOSS_ABS": 30000,
+  "MARKET_CLOSE_LOSS_CUT_RATE": 0.015,
+  "LOSS_REBUY_BLOCK_SAME_DAY": true,
   "SCREENING_US_ENABLED": true,
   "MAX_LOSS_RATE": 0.03,
   "TRAILING_DRAWDOWN_RATIO": 0.03,
