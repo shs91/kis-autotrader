@@ -306,3 +306,78 @@ class TestRiskBlockedCodes:
         exclude_arg = worker._screener.filter_candidates.call_args.args[1]
         assert "230980" in exclude_arg
         rec.assert_called_once()
+
+
+class TestLoadExistingScreenedCodes:
+    """`_load_existing_screened_codes` — 배제 목록의 fresh window 스코프.
+
+    '당일 converted 전체' 배제는 재발굴을 막아 엔진 회전의 latest_at이 발굴
+    시각에 동결 → fresh window 경과 시 모든 후보가 영구 제거되던 문제(모니터링
+    유니버스 기아, 2026-07-03 감사). 배제는 fresh window 내 converted로 한정한다.
+    """
+
+    def test_excludes_only_converted_within_fresh_window(self):
+        """fresh window 밖 converted 종목은 재발굴 가능하도록 배제하지 않는다."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.config import settings
+
+        worker = _make_worker()
+        window = settings.screening.fresh_window_min
+        now = datetime.now(UTC)
+
+        def _row(code: str, converted: bool, age_min: float) -> MagicMock:
+            r = MagicMock()
+            r.stock_code = code
+            r.converted_to_trade = converted
+            r.screened_at = now - timedelta(minutes=age_min)
+            return r
+
+        rows = [
+            _row("000001", True, 1),            # fresh converted → 배제 유지
+            _row("000002", True, window + 5),   # stale converted → 재발굴 허용
+            _row("000003", False, 1),           # 미전환 → 배제 대상 아님
+        ]
+        repo = MagicMock()
+        repo.get_by_date.return_value = rows
+
+        with patch("src.worker.screener.get_session", return_value=_session_ctx()), \
+             patch(
+                 "src.worker.screener.ScreeningResultRepository",
+                 return_value=repo,
+             ):
+            out = worker._load_existing_screened_codes()
+
+        assert out == {"000001"}
+
+    def test_same_code_fresh_and_stale_rows_still_excluded(self):
+        """같은 종목의 stale 행이 있어도 fresh 행이 있으면 배제가 유지된다."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.config import settings
+
+        worker = _make_worker()
+        window = settings.screening.fresh_window_min
+        now = datetime.now(UTC)
+
+        def _row(code: str, age_min: float) -> MagicMock:
+            r = MagicMock()
+            r.stock_code = code
+            r.converted_to_trade = True
+            r.screened_at = now - timedelta(minutes=age_min)
+            return r
+
+        repo = MagicMock()
+        repo.get_by_date.return_value = [
+            _row("000001", window + 20),  # 아침 발굴분(stale)
+            _row("000001", 2),            # 방금 재발굴분(fresh)
+        ]
+
+        with patch("src.worker.screener.get_session", return_value=_session_ctx()), \
+             patch(
+                 "src.worker.screener.ScreeningResultRepository",
+                 return_value=repo,
+             ):
+            out = worker._load_existing_screened_codes()
+
+        assert out == {"000001"}

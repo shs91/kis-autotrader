@@ -513,16 +513,28 @@ class ScreeningWorker:
         return score
 
     def _load_existing_screened_codes(self) -> set[str]:
-        """오늘(시장 타임존) 이미 스크리닝된 종목코드를 시장별로 조회한다."""
-        today = datetime.now(self._tz).date()
+        """fresh window 내 converted 종목코드를 시장별로 조회한다(재발굴 배제 목록).
+
+        배제를 '당일 converted 전체'로 잡으면 재발굴이 불가능해져 엔진 회전의
+        latest_at이 발굴 시각에 동결되고, 모든 후보가 fresh window 경과 시 영구
+        제거된다(모니터링 유니버스 기아 — 2026-07-03 감사: 체류 median 29.7분,
+        상시 ~3종목). fresh window 내로 좁히면 계속 순위권인 종목은 재발굴·재기록돼
+        latest_at이 갱신되고, 순위 탈락 종목만 자연 회전으로 제거된다.
+        """
+        now = datetime.now(self._tz)
+        cutoff = now - timedelta(minutes=settings.screening.fresh_window_min)
         with get_session() as session:
             repo = ScreeningResultRepository(session)
             results = repo.get_by_date(
-                today,
+                now.date(),
                 market=self._market.market_code,
                 tz=self._market.timezone,
             )
-            return {r.stock_code for r in results if r.converted_to_trade}
+            return {
+                r.stock_code
+                for r in results
+                if r.converted_to_trade and r.screened_at >= cutoff
+            }
 
     def _load_risk_blocked_codes(self, codes: set[str]) -> dict[str, str]:
         """후보 중 매수 위험종목(시장조치 차단 OR 치명 공시)을 ``{code: 사유}``로 반환.
