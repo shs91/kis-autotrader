@@ -193,9 +193,13 @@ class EnsembleStrategy(BaseStrategy):
 
         # 추세역행 BUY 억제 가드 (opt-in): 추세추종 전략의 BUY 없이 평균회귀 전략만 BUY라면
         # 하락 추세의 데드캣/낙하 중 반등 오신호일 가능성이 높아 HOLD로 전환한다.
+        # 단독(n_win<2) BUY에만 적용한다 — 합의(n_win>=2)까지 차단하면 매수 유량이
+        # 붕괴하고(2026-07-03 감사: 6/22~ RSI BUY 표 전량 사멸, 9거래일 매수 3건),
+        # 6월 churn의 실체였던 단독 dip-buy 연쇄는 아래 조건으로 계속 차단된다.
         if (
             self._trend_filter_enabled
             and winner_type == SignalType.BUY
+            and n_win < 2
             and not any(
                 strat.is_trend_following
                 for strat, sig in zip(self._strategies, signals)
