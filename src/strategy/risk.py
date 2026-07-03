@@ -107,6 +107,7 @@ class RiskManager:
         # 포트폴리오 리스크 추적
         self._max_daily_drawdown = settings.trading.max_daily_drawdown
         self._max_consecutive_losses = settings.trading.max_consecutive_losses
+        self._max_daily_loss_abs = settings.trading.max_daily_loss_abs
         # US는 센트 단위 손익(float)을 누적한다(int 절단 시 1달러 미만 손익이
         # 소실돼 연패/MDD 추적이 약화). KRX 프로세스는 정수 손익만 흐르고, 프로덕션
         # 에선 첫 기록 전 reset_daily_risk()가 int 0으로 시드(+ int 누적)하므로
@@ -156,6 +157,22 @@ class RiskManager:
                     self._daily_peak_pnl,
                     self._daily_cumulative_pnl,
                 )
+
+        # 일일 절대 손실 하한(0=비활성) — MDD 가드는 이익 피크(>0)가 전제라 첫
+        # 매도부터 손실인 날은 영구 비무장이던 공백을 메운다(straight-loss day의
+        # 손절→쿨다운→재매수 연쇄 차단). 매도(보호 청산)는 기존 halt 의미대로 계속.
+        if (
+            self._max_daily_loss_abs > 0
+            and self._daily_cumulative_pnl <= -self._max_daily_loss_abs
+        ):
+            self._portfolio_halted = True
+            if self._halt_reason is None:
+                self._halt_reason = "MAX_DAILY_LOSS_ABS"
+            logger.warning(
+                "일일 절대 손실 한도 도달: 누적 %.0f <= -%.0f",
+                self._daily_cumulative_pnl,
+                self._max_daily_loss_abs,
+            )
 
         # 연패 체크
         if self._consecutive_losses >= self._max_consecutive_losses:
@@ -553,6 +570,7 @@ class RiskManager:
 
             - ``"MAX_CONSECUTIVE_LOSSES"`` : 연패 한도 도달로 halt
             - ``"MAX_DAILY_DRAWDOWN"``     : MDD 한도 도달로 halt
+            - ``"MAX_DAILY_LOSS_ABS"``     : 일일 절대 손실 하한 도달로 halt
             - ``"MARKET_CLOSE_GUARD"``     : 장 마감 임박 (신규 매수 차단)
             - ``"INSUFFICIENT_CASH"``      : 잔고 부족
             - ``"LOW_CONFIDENCE"``         : 시그널 신뢰도 미달

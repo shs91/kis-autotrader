@@ -337,6 +337,13 @@ class TradingConfig:
     max_consecutive_losses: int = field(
         default_factory=lambda: _env_int("MAX_CONSECUTIVE_LOSSES", 5)
     )
+    # 일일 절대 손실 하한(프로세스 통화 단위 절대금액, 0=비활성). MDD 가드는 당일
+    # 이익 피크(>0)가 전제라 첫 매도부터 손실인 날은 발동 불가한 구조 공백을 메운다
+    # (2026-07-03 감사: 최악일 6/16 -20,890원에 가드 무발동). KRX=원, US=달러
+    # 스케일이 그대로 적용되는 공유 설정이므로 US 전용 한도는 필요 시 별도 키로.
+    max_daily_loss_abs: float = field(
+        default_factory=lambda: _env_float("MAX_DAILY_LOSS_ABS", 0.0)
+    )
     market_close_cutoff_hour: int = field(
         default_factory=lambda: _env_int("MARKET_CLOSE_CUTOFF_HOUR", 14)
     )

@@ -608,3 +608,51 @@ class TestDailyDrawdownNetLossGuard:
             rm.record_trade_result(-10_000)
         assert rm.is_portfolio_halted is True
         assert rm._halt_reason == "MAX_CONSECUTIVE_LOSSES"
+
+
+class TestMaxDailyLossAbs:
+    """일일 절대 손실 하한 — 이익 피크 없는 straight-loss day 가드.
+
+    MDD 가드는 ``daily_peak_pnl > 0``이 전제라 첫 매도부터 손실인 날은 영구
+    비무장이었다(2026-07-03 감사: 최악일 6/16 -20,890원 9패에 halt 발동 0건).
+    피크와 무관한 절대 하한(MAX_DAILY_LOSS_ABS, 0=비활성)으로 공백을 메운다.
+    """
+
+    def test_halts_on_absolute_loss_without_profit_peak(self) -> None:
+        """이익 피크가 없어도 누적 손실이 절대 하한 도달 시 halt된다."""
+        rm = RiskManager()
+        rm._max_daily_loss_abs = 30_000
+        rm.record_trade_result(-15_000)
+        assert rm.is_portfolio_halted is False  # -30k 미도달
+        rm.record_trade_result(-16_000)  # 누적 -31k (피크는 여전히 0)
+        assert rm.is_portfolio_halted is True
+        signal = Signal(
+            signal_type=SignalType.BUY, confidence=0.8, target_price=50_000.0,
+        )
+        assert (
+            rm.check_buy_gates(signal, balance=1_000_000.0) == "MAX_DAILY_LOSS_ABS"
+        )
+
+    def test_disabled_by_default_zero(self) -> None:
+        """기본값 0이면 절대 하한 가드는 비활성이다(기존 동작 보존)."""
+        rm = RiskManager()
+        assert rm._max_daily_loss_abs == 0
+        rm.record_trade_result(-1_000_000)  # 연패 1, 피크 0 → 기존 가드 미발동
+        assert rm.is_portfolio_halted is False
+
+    def test_snapshot_restore_preserves_halt(self) -> None:
+        """절대 하한 halt 상태가 snapshot/restore로 복원된다(재시작 무력화 방지)."""
+        rm = RiskManager()
+        rm._max_daily_loss_abs = 30_000
+        rm.record_trade_result(-31_000)
+        assert rm.is_portfolio_halted is True
+
+        rm2 = RiskManager()
+        rm2.restore(rm.snapshot())
+        assert rm2.is_portfolio_halted is True
+        signal = Signal(
+            signal_type=SignalType.BUY, confidence=0.8, target_price=50_000.0,
+        )
+        assert (
+            rm2.check_buy_gates(signal, balance=1_000_000.0) == "MAX_DAILY_LOSS_ABS"
+        )
