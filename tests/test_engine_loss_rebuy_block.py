@@ -30,11 +30,6 @@ def _flag(value: bool) -> Iterator[None]:
         object.__setattr__(settings.trading, "loss_rebuy_block_same_day", original)
 
 
-def test_flag_default_false() -> None:
-    """기본값은 비활성(false) — 기존 동작 보존, config_overrides로 opt-in."""
-    assert settings.trading.loss_rebuy_block_same_day is False
-
-
 class TestLossSellRecording:
     """매도 기록 관문(_record_trade_to_db)에서 손실 청산 날짜가 기록된다.
 

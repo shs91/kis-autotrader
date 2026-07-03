@@ -425,7 +425,9 @@ class TestCheckBuyGates:
 
     def test_consecutive_losses_halt_returns_specific_code(self) -> None:
         """연패 누적으로 halt된 경우 'MAX_CONSECUTIVE_LOSSES'를 반환한다."""
-        rm = RiskManager()
+        # 절대 손실 하한을 명시적으로 끔 — config_overrides 활성값(30k)이 연패보다
+        # 먼저 트립해 사유가 바뀌는 환경 의존 제거(연패 경로 단독 검증 목적).
+        rm = RiskManager(max_daily_loss_abs=0)
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
         assert rm.is_portfolio_halted is True
@@ -461,7 +463,7 @@ class TestCheckBuyGates:
 
     def test_halt_takes_priority_over_other_gates(self) -> None:
         """포트폴리오 halt가 최우선 게이트로 반환된다."""
-        rm = RiskManager()
+        rm = RiskManager(max_daily_loss_abs=0)  # 연패 사유 고정(환경 의존 제거)
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
         # 낮은 신뢰도 + 0 잔고이지만 halt가 먼저 트립
@@ -552,7 +554,11 @@ class TestShouldCloseForMarketEnd:
     """마감 임박 강제 청산 게이트 (이익 포지션 한정)."""
 
     def setup_method(self) -> None:
-        self.rm = RiskManager(min_profitable_close=0.015)
+        # 손실 컷을 명시적으로 끔 — 이 클래스는 '이익 한정' 기본 경로를 검증한다
+        # (손실 컷 활성 동작은 TestMarketCloseLossCut에서 별도 검증).
+        self.rm = RiskManager(
+            min_profitable_close=0.015, market_close_loss_cut_rate=0,
+        )
 
     def test_not_near_close_returns_false(self) -> None:
         self.rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
@@ -603,7 +609,7 @@ class TestDailyDrawdownNetLossGuard:
 
     def test_consecutive_loss_halt_unaffected(self) -> None:
         """연패 한도 halt 경로는 순손실 가드의 영향을 받지 않는다."""
-        rm = RiskManager()
+        rm = RiskManager(max_daily_loss_abs=0)  # 연패 사유 고정(환경 의존 제거)
         for _ in range(rm._max_consecutive_losses):
             rm.record_trade_result(-10_000)
         assert rm.is_portfolio_halted is True
@@ -620,8 +626,7 @@ class TestMaxDailyLossAbs:
 
     def test_halts_on_absolute_loss_without_profit_peak(self) -> None:
         """이익 피크가 없어도 누적 손실이 절대 하한 도달 시 halt된다."""
-        rm = RiskManager()
-        rm._max_daily_loss_abs = 30_000
+        rm = RiskManager(max_daily_loss_abs=30_000)
         rm.record_trade_result(-15_000)
         assert rm.is_portfolio_halted is False  # -30k 미도달
         rm.record_trade_result(-16_000)  # 누적 -31k (피크는 여전히 0)
@@ -633,21 +638,23 @@ class TestMaxDailyLossAbs:
             rm.check_buy_gates(signal, balance=1_000_000.0) == "MAX_DAILY_LOSS_ABS"
         )
 
-    def test_disabled_by_default_zero(self) -> None:
-        """기본값 0이면 절대 하한 가드는 비활성이다(기존 동작 보존)."""
-        rm = RiskManager()
-        assert rm._max_daily_loss_abs == 0
+    def test_disabled_when_zero(self) -> None:
+        """0(코드 기본값)이면 절대 하한 가드는 비활성이다(기존 동작 보존).
+
+        settings 기본값 직접 단언은 하지 않는다 — config_overrides가 활성값을
+        주입하는 환경에선 싱글톤이 이미 30k라 환경 의존이 된다(명시 주입 관례).
+        """
+        rm = RiskManager(max_daily_loss_abs=0)
         rm.record_trade_result(-1_000_000)  # 연패 1, 피크 0 → 기존 가드 미발동
         assert rm.is_portfolio_halted is False
 
     def test_snapshot_restore_preserves_halt(self) -> None:
         """절대 하한 halt 상태가 snapshot/restore로 복원된다(재시작 무력화 방지)."""
-        rm = RiskManager()
-        rm._max_daily_loss_abs = 30_000
+        rm = RiskManager(max_daily_loss_abs=30_000)
         rm.record_trade_result(-31_000)
         assert rm.is_portfolio_halted is True
 
-        rm2 = RiskManager()
+        rm2 = RiskManager(max_daily_loss_abs=30_000)
         rm2.restore(rm.snapshot())
         assert rm2.is_portfolio_halted is True
         signal = Signal(
@@ -688,10 +695,9 @@ class TestMarketCloseLossCut:
         assert rm.should_close_for_market_end(10_150, 10_000) is True
         assert rm.should_close_for_market_end(10_100, 10_000) is False
 
-    def test_disabled_by_default(self) -> None:
-        """기본 0(비활성) → 깊은 손실도 기존 동작대로 청산하지 않는다."""
-        rm = RiskManager(min_profitable_close=0.015)
-        rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+    def test_disabled_when_zero(self) -> None:
+        """0(코드 기본값)이면 깊은 손실도 기존 동작대로 청산하지 않는다."""
+        rm = self._rm(0)
         assert rm.should_close_for_market_end(9_500, 10_000) is False
 
     def test_not_near_close_returns_false(self) -> None:

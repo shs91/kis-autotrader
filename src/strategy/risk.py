@@ -35,6 +35,7 @@ class RiskManager:
         stagnation_hours: float | None = None,
         min_profitable_close: float | None = None,
         market_close_loss_cut_rate: float | None = None,
+        max_daily_loss_abs: float | None = None,
         min_confidence: float | None = None,
         tz: str | None = None,
     ) -> None:
@@ -113,7 +114,11 @@ class RiskManager:
         # 포트폴리오 리스크 추적
         self._max_daily_drawdown = settings.trading.max_daily_drawdown
         self._max_consecutive_losses = settings.trading.max_consecutive_losses
-        self._max_daily_loss_abs = settings.trading.max_daily_loss_abs
+        self._max_daily_loss_abs = (
+            max_daily_loss_abs
+            if max_daily_loss_abs is not None
+            else settings.trading.max_daily_loss_abs
+        )
         # US는 센트 단위 손익(float)을 누적한다(int 절단 시 1달러 미만 손익이
         # 소실돼 연패/MDD 추적이 약화). KRX 프로세스는 정수 손익만 흐르고, 프로덕션
         # 에선 첫 기록 전 reset_daily_risk()가 int 0으로 시드(+ int 누적)하므로
