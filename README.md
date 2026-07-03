@@ -6,7 +6,7 @@
 ## 주요 기능
 
 - **자동 매매** — 이동평균 교차, RSI, MACD, 볼린저밴드, 앙상블 전략 기반 자동 매수/매도
-- **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 종목별 당일 진입 제한, 손절/트레일링 스톱(고점 대비 되돌림)/마감 청산 게이트 자동 판단, 당일 MDD/연패 감시, 매매불가 종목 당일 블랙리스트(반복 거부 차단), 공시 기반 매수 차단(상장폐지/정리매매 등 치명 공시 종목)
+- **리스크 관리** — 최대 손실률 제한, 포지션 사이징, 일일 매매 횟수 제한, 종목별 당일 진입 제한, 손절/트레일링 스톱(고점 대비 되돌림)/마감 청산 게이트(이익 실현 + 옵션 깊은 손실 컷) 자동 판단, 당일 MDD/연패/절대 손실 하한 감시, 손실 청산 종목 당일 재매수 차단(opt-in), 매매불가 종목 당일 블랙리스트(반복 거부 차단), 공시 기반 매수 차단(상장폐지/정리매매 등 치명 공시 종목)
 - **실시간 시세** — 웹소켓 기반 실시간 호가/체결 수신 (상태 머신 + 자동 재연결)
 - **API 안전장치** — Token Bucket Rate Limiter, Redis 분산 Rate Limiter, Circuit Breaker, exponential backoff 재시도
 - **Worker 비동기 처리** — PostgreSQL Outbox 패턴으로 외부 I/O(Calendar, Telegram, DB 기록)를 별도 Worker에서 처리. 네트워크 장애 시 자동 재시도
@@ -492,6 +492,8 @@ MAX_LOSS_RATE=0.03                 # 최대 손실률 (3%, 손절선)
 MAX_POSITION_RATIO=0.2             # 최대 포지션 비율 (20%)
 DAILY_TRADE_LIMIT=10               # 일일 매매 횟수 제한 (전체)
 MAX_DAILY_TRADES_PER_STOCK=2       # 종목별 당일 최대 진입(매수) 횟수 — 동일 종목 다중 진입 차단
+# MAX_DAILY_LOSS_ABS=0             # 일일 절대 손실 하한(통화 절대금액, 0=비활성) — MDD와 별개로 이익 피크 없는 날도 신규 매수 halt
+# LOSS_REBUY_BLOCK_SAME_DAY=false  # 손실 청산 종목 당일 재매수 차단(시간 쿨다운과 별개, churn 방지)
 # NEWS_RISK_GATE_ENABLED=true      # 공시 기반 매수 차단 (상장폐지/정리매매 등 치명 공시 종목)
 # NEWS_RISK_LOOKBACK_DAYS=30       # 치명 공시 조회 기간(일)
 # SIGNAL_REVERSAL_WINDOW_SECONDS=600 # 단기 신호 반전 관측 윈도(초) — 동일 종목 BUY↔SELL 반전을 SIGNAL_REVERSAL 메트릭으로 계량(관측 전용, 매매 무영향)
@@ -501,6 +503,7 @@ TRAILING_STOP_ENABLED=true         # 트레일링 스톱 사용 (false면 +5% �
 TRAILING_ACTIVATION_RATIO=0.05     # 무장 임계 (평균단가 대비 +5% 도달 시 추격 시작)
 TRAILING_DRAWDOWN_RATIO=0.05       # 매도폭 (고점 대비 -5% 되돌림 시 청산)
 MIN_PROFITABLE_CLOSE=0.015         # 마감 임박 시 이 수익률(+1.5%) 이상이면 강제 실현
+# MARKET_CLOSE_LOSS_CUT_RATE=0     # 마감 손실 컷(0=비활성) — 마감 임박 시 -x% 이하 깊은 손실 강제 청산(오버나잇 갭 방지)
 
 # Telegram (선택)
 TELEGRAM_BOT_TOKEN=봇_토큰          # BotFather에서 발급
