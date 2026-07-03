@@ -34,6 +34,7 @@ class RiskManager:
         breakeven_activation_ratio: float | None = None,
         stagnation_hours: float | None = None,
         min_profitable_close: float | None = None,
+        market_close_loss_cut_rate: float | None = None,
         min_confidence: float | None = None,
         tz: str | None = None,
     ) -> None:
@@ -97,6 +98,11 @@ class RiskManager:
             min_profitable_close
             if min_profitable_close is not None
             else settings.strategy.min_profitable_close
+        )
+        self._market_close_loss_cut_rate = (
+            market_close_loss_cut_rate
+            if market_close_loss_cut_rate is not None
+            else settings.strategy.market_close_loss_cut_rate
         )
         self._min_confidence = (
             min_confidence
@@ -504,10 +510,14 @@ class RiskManager:
         avg_price: float,
         now: datetime | None = None,
     ) -> bool:
-        """마감 임박 강제 청산 게이트 — 이익 포지션 한정.
+        """마감 임박 강제 청산 게이트 — 이익 실현 + (옵션) 깊은 손실 컷.
 
-        트레일링과 독립된 별도 규칙. 시간 의존은 이 게이트의 발동 조건뿐이며,
-        손실 포지션(수익률 < min_profitable_close)은 대상에서 제외한다.
+        트레일링과 독립된 별도 규칙. 시간 의존은 이 게이트의 발동 조건뿐이다.
+        기본은 이익 포지션(수익률 >= min_profitable_close)만 청산하며,
+        market_close_loss_cut_rate > 0이면 깊은 손실(수익률 <= -rate)도 청산한다
+        — 손실 포지션 오버나잇 방치가 익일 갭다운으로 손절 한도(-3%)를 초과
+        체결하던 비대칭 공백 보완(2026-07-03 감사: 오버나잇 5건 전패 -25,460원).
+        얕은 손실(-rate 초과 ~ min_profitable_close 미만)은 기존대로 보유 유지.
 
         Args:
             current_price: 현재가
@@ -515,7 +525,7 @@ class RiskManager:
             now: 판정 기준 시각 (None이면 현재 시각)
 
         Returns:
-            True이면 마감 임박 + 최소 수익률 충족으로 청산
+            True이면 마감 임박 + (최소 수익률 충족 또는 깊은 손실)로 청산
         """
         if avg_price <= 0:
             return False
@@ -523,13 +533,22 @@ class RiskManager:
             return False
 
         profit = (current_price - avg_price) / avg_price
-        should = profit >= self._min_profitable_close
-        if should:
+        if profit >= self._min_profitable_close:
             logger.info(
                 "마감 청산 게이트: 수익률 %.2f%% >= %.2f%% (마감 임박)",
                 profit * 100, self._min_profitable_close * 100,
             )
-        return should
+            return True
+        if (
+            self._market_close_loss_cut_rate > 0
+            and profit <= -self._market_close_loss_cut_rate
+        ):
+            logger.info(
+                "마감 손실 컷: 수익률 %.2f%% <= -%.2f%% (마감 임박, 갭 리스크 컷)",
+                profit * 100, self._market_close_loss_cut_rate * 100,
+            )
+            return True
+        return False
 
     # ── 매수 게이트 진단 (proposal 2026-05-18 + 사유 코드 정밀화) ──
     #

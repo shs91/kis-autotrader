@@ -656,3 +656,46 @@ class TestMaxDailyLossAbs:
         assert (
             rm2.check_buy_gates(signal, balance=1_000_000.0) == "MAX_DAILY_LOSS_ABS"
         )
+
+
+class TestMarketCloseLossCut:
+    """마감 손실 컷 — 이익 한정 마감청산의 비대칭 보완.
+
+    마감청산이 이익 포지션 한정이라 손실 포지션이 오버나잇으로 넘어가 전패
+    (5건 -25,460원)하고, 그중 3건이 익일 갭다운으로 -3% 스톱 한도를 초과
+    체결하던 공백(2026-07-03 감사). 마감 임박 시 깊은 손실(-rate 이하)만
+    강제 청산한다(0=비활성, sell_reason은 MARKET_CLOSE 공유·부호로 구분).
+    """
+
+    def _rm(self, rate: float) -> RiskManager:
+        rm = RiskManager(
+            min_profitable_close=0.015, market_close_loss_cut_rate=rate,
+        )
+        rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+        return rm
+
+    def test_deep_loss_closed_when_enabled(self) -> None:
+        """-2.0% <= -1.5% → 마감 전 청산(갭 리스크 컷)."""
+        assert self._rm(0.015).should_close_for_market_end(9_800, 10_000) is True
+
+    def test_shallow_loss_not_closed(self) -> None:
+        """-1.0% > -1.5% → 얕은 손실은 기존처럼 보유 유지."""
+        assert self._rm(0.015).should_close_for_market_end(9_900, 10_000) is False
+
+    def test_profit_path_unchanged(self) -> None:
+        """이익 경로(+1.5% 이상 청산)는 손실 컷 활성화와 무관하게 동일."""
+        rm = self._rm(0.015)
+        assert rm.should_close_for_market_end(10_150, 10_000) is True
+        assert rm.should_close_for_market_end(10_100, 10_000) is False
+
+    def test_disabled_by_default(self) -> None:
+        """기본 0(비활성) → 깊은 손실도 기존 동작대로 청산하지 않는다."""
+        rm = RiskManager(min_profitable_close=0.015)
+        rm.is_near_market_close = lambda *a, **kw: True  # type: ignore[method-assign]
+        assert rm.should_close_for_market_end(9_500, 10_000) is False
+
+    def test_not_near_close_returns_false(self) -> None:
+        """마감 임박이 아니면 손실 컷도 발동하지 않는다."""
+        rm = self._rm(0.015)
+        rm.is_near_market_close = lambda *a, **kw: False  # type: ignore[method-assign]
+        assert rm.should_close_for_market_end(9_800, 10_000) is False

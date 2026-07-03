@@ -435,6 +435,13 @@ class StrategyConfig:
     min_profitable_close: float = field(
         default_factory=lambda: _env_float("MIN_PROFITABLE_CLOSE", 0.015)
     )
+    # 마감 손실 컷: 마감 임박 시 이 손실률 이하(깊은 손실) 포지션을 강제 청산(0=비활성).
+    # 이익 한정 마감청산의 비대칭으로 손실 포지션이 오버나잇 갭다운 시 손절 한도(-3%)를
+    # 초과 체결하던 공백 보완(2026-07-03 감사: 오버나잇 5건 전패, 갭 초과 3건).
+    # sell_reason은 MARKET_CLOSE 공유(손익 부호로 구분 — 별도 enum은 DB 마이그 필요).
+    market_close_loss_cut_rate: float = field(
+        default_factory=lambda: _env_float("MARKET_CLOSE_LOSS_CUT_RATE", 0.0)
+    )
     # 미체결 주문 타임아웃(사이클): 이 사이클 수 이상 미체결이면 취소(중복 억제·잔류 정리)
     order_pending_timeout_cycles: int = field(
         default_factory=lambda: _env_int("ORDER_PENDING_TIMEOUT_CYCLES", 3)
