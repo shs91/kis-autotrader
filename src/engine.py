@@ -244,6 +244,9 @@ class TradingEngine:
         self._last_signal_by_stock: dict[str, tuple[SignalType, float, datetime]] = {}
         # 재매수 쿨다운 — 종목별 마지막 매도 확정 시각(휩쏘 차단)
         self._last_sell_at: dict[str, datetime] = {}
+        # 손실 청산 당일 재매수 차단 — 종목별 마지막 손실 매도 일자(시장 tz).
+        # LOSS_REBUY_BLOCK_SAME_DAY 활성 시 같은 거래일 재진입을 차단한다.
+        self._loss_sell_dates: dict[str, date] = {}
         # 후보 스냅샷 throttle — 종목당 최소 적재 간격(매 사이클 적재 ~6배 억제)
         self._last_candidate_snapshot_at: dict[str, datetime] = {}
         self._candidate_snapshot_min_interval = timedelta(seconds=60)
@@ -717,6 +720,7 @@ class TradingEngine:
             # 기준이라 '재시작 now'가 아니라 매도시각으로 쿨다운이 정확히 계산된다.
             self._today_buys_per_stock = {}
             self._last_sell_at = {}
+            self._loss_sell_dates = {}
             for t in trades:
                 if t.trade_type == TradeType.BUY:
                     self._today_buys_per_stock[t.stock_code] = (
@@ -726,6 +730,13 @@ class TradingEngine:
                     prev = self._last_sell_at.get(t.stock_code)
                     if prev is None or t.traded_at > prev:
                         self._last_sell_at[t.stock_code] = t.traded_at
+                    # 손실 청산 당일 재매수 차단 상태 복원 — trades는 당일분이므로
+                    # 손실 매도 존재 자체가 '오늘 손실 청산'을 의미한다.
+                    if (
+                        t.profit_loss_amount is not None
+                        and t.profit_loss_amount < 0
+                    ):
+                        self._loss_sell_dates[t.stock_code] = today
             if not sells:
                 logger.info("장중 재시작 복구: 당일 매도 체결 없음 — 리스크 초기값 유지")
                 return
@@ -776,6 +787,7 @@ class TradingEngine:
         self._pending_orders.clear()
         self._last_signal_by_stock.clear()
         self._last_sell_at.clear()
+        self._loss_sell_dates.clear()
         self._held_since.clear()
 
         try:
@@ -1421,6 +1433,26 @@ class TradingEngine:
                         "elapsed_min": round(elapsed_min, 1),
                         "cooldown_min": cooldown_min,
                     },
+                )
+                self._record_signal_to_db(
+                    stock_code, current.stock_name, signal, action_taken=False,
+                    skip_reason=skip_reason,
+                )
+                return
+
+        # BUY 시그널 — 손실 청산 당일 재매수 차단(opt-in). 손실 확정 종목을 같은
+        # 거래일에 더 낮은 가격으로 재진입하는 churn(2026-07-03 감사: 재진입 19건
+        # -18,553원 vs 첫진입 +34,351원, 손실 청산 직후 재매수 13건)을 시간
+        # 쿨다운(120분)과 별개로 당일 종료까지 차단한다. 이익/본전 청산은 무관.
+        if settings.trading.loss_rebuy_block_same_day:
+            loss_date = self._loss_sell_dates.get(stock_code)
+            if loss_date == datetime.now(self._tz).date():
+                skip_reason = "loss_rebuy_blocked"
+                self._record_buy_reject(
+                    stock_code=stock_code,
+                    reason="LOSS_REBUY_BLOCKED",
+                    confidence=signal.confidence,
+                    context={"loss_sell_date": loss_date.isoformat()},
                 )
                 self._record_signal_to_db(
                     stock_code, current.stock_name, signal, action_taken=False,
@@ -2438,6 +2470,12 @@ class TradingEngine:
                     # 카운터에서 소실돼 서킷이 약화되므로 절단하지 않고 전달한다.
                     profit_loss_amount = self._norm_price((price - avg_price) * quantity)
                     self._risk.record_trade_result(profit_loss_amount)
+                    # 손실 청산 당일 재매수 차단 — 매도 기록의 단일 관문이라
+                    # 일반 매도·고아 체결 정산 경로 모두 여기서 커버된다.
+                    if profit_loss_amount < 0:
+                        self._loss_sell_dates[stock_code] = (
+                            datetime.now(self._tz).date()
+                        )
                     sell_reason = self._reconcile_sell_reason(
                         sell_reason, profit_loss_pct, stock_code,
                     )

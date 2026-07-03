@@ -240,6 +240,13 @@ class TradingConfig:
     buy_cooldown_after_sell_min: int = field(
         default_factory=lambda: _env_int("BUY_COOLDOWN_AFTER_SELL_MIN", 120)
     )
+    # 손실 청산 당일 재매수 차단(opt-in) — 손실 확정 종목의 같은 거래일 저가 재진입
+    # churn(2026-07-03 감사: 재진입 19건 -18,553원 vs 첫진입 +34,351원) 차단.
+    # 시간 쿨다운(위 120분)과 별개로 당일 종료까지 차단하며, 이익/본전 청산은 무관.
+    loss_rebuy_block_same_day: bool = field(
+        default_factory=lambda: _env("LOSS_REBUY_BLOCK_SAME_DAY", "false").lower()
+        == "true"
+    )
     # 공시 기반 매수 리스크 게이트 — 최근 N일 내 치명 공시(상장폐지/정리매매 등) 종목 매수 차단.
     # KIS 종목마스터(market_actions) sync 사각지대를 DART 공시로 보완(모델 미사용).
     news_risk_gate_enabled: bool = field(
